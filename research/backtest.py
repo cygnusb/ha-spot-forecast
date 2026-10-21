@@ -22,21 +22,24 @@ import numpy as np
 import pandas as pd
 from sklearn.ensemble import HistGradientBoostingRegressor
 
-from fetch import OFFSETS, POINTS, RAW, WEATHER_VARS
+from fetch import NEIGHBOR_POINTS, NEIGHBOR_VARS, NEIGHBOR_ZONES, OFFSETS, POINTS, RAW, WEATHER_VARS
 
 TZ = "Europe/Berlin"
 HORIZONS = range(1, 7)
 WIND_POINTS = ["north_sea", "baltic", "schleswig", "ostfriesland", "uckermark", "sachsen_anhalt"]
 SOLAR_POINTS = ["sachsen_anhalt", "nrw", "hessen", "bawue", "bayern", "uckermark"]
+NB_WIND = ["nb_nl", "nb_be", "nb_dk_west", "nb_pl_north", "nb_se_south"]
+NB_HYDRO = ["nb_alps_ch", "nb_alps_at", "nb_no_south", "nb_se_north"]
+NB_NORDIC = ["nb_no_south", "nb_se_north", "nb_fi"]
 OUT = Path(__file__).parent / "data"
 
 
 # ---------------------------------------------------------------- loading
 
 
-def load_prices() -> pd.Series:
+def load_prices(zone: str = "DE-LU") -> pd.Series:
     parts = []
-    for f in sorted((RAW / "prices").glob("*.json")):
+    for f in sorted((RAW / "prices" / zone).glob("*.json")):
         d = json.loads(f.read_text())
         parts.append(pd.Series(d["price"], index=pd.to_datetime(d["unix_seconds"], unit="s", utc=True)))
     s = pd.concat(parts).sort_index()
@@ -48,14 +51,15 @@ def load_prices() -> pd.Series:
 def load_weather() -> dict[int, pd.DataFrame]:
     """offset -> DataFrame(index=UTC hour, columns=f'{point}__{var}')"""
     frames: dict[int, list[pd.DataFrame]] = {o: [] for o in OFFSETS}
-    for name in POINTS:
+    point_vars = {**{p: WEATHER_VARS for p in POINTS}, **{p: NEIGHBOR_VARS for p in NEIGHBOR_POINTS}}
+    for name, variables in point_vars.items():
         per_point = []
         for f in sorted((RAW / "weather").glob(f"{name}_*.json")):
             h = json.loads(f.read_text())["hourly"]
             per_point.append(pd.DataFrame(h).assign(time=lambda x: pd.to_datetime(x["time"], utc=True)))
         df = pd.concat(per_point).drop_duplicates("time").set_index("time").sort_index()
         for o in OFFSETS:
-            cols = {f"{v}_previous_day{o}": f"{name}__{v}" for v in WEATHER_VARS}
+            cols = {f"{v}_previous_day{o}": f"{name}__{v}" for v in variables}
             frames[o].append(df[list(cols)].rename(columns=cols))
     return {o: pd.concat(fs, axis=1) for o, fs in frames.items()}
 
@@ -88,14 +92,38 @@ def weather_features(w: pd.DataFrame) -> pd.DataFrame:
     f["solar_mean"] = sum(w[f"{p}__shortwave_radiation"] for p in SOLAR_POINTS) / len(SOLAR_POINTS)
     f["temp_mean"] = sum(w[f"{p}__temperature_2m"] for p in POINTS) / len(POINTS)
     f["cloud_mean"] = sum(w[f"{p}__cloud_cover"] for p in POINTS) / len(POINTS)
+    # neighbours (prefix nb_ so they can be ablated with --drop nb_)
+    f["nb_wind_power_idx"] = sum(pw(ws(p)) for p in NB_WIND) / len(NB_WIND)
+    f["nb_temp_fr"] = (w["nb_fr_north__temperature_2m"] + w["nb_fr_south__temperature_2m"]) / 2
+    f["nb_temp_nordic"] = sum(w[f"{p}__temperature_2m"] for p in NB_NORDIC) / len(NB_NORDIC)
+    f["nb_precip_hydro"] = sum(w[f"{p}__precipitation"] for p in NB_HYDRO)
+    f["nb_solar_fr"] = (w["nb_fr_north__shortwave_radiation"] + w["nb_fr_south__shortwave_radiation"]) / 2
     # daily aggregates over the local target day
     day = f.index.tz_convert(TZ).date
-    for c in ["wind_power_idx", "solar_mean", "temp_mean"]:
+    for c in ["wind_power_idx", "solar_mean", "temp_mean", "nb_wind_power_idx", "nb_temp_fr", "nb_temp_nordic"]:
         f[f"{c}_day"] = f.groupby(day)[c].transform("mean")
-    return f
+    f["nb_precip_hydro_day"] = f.groupby(day)["nb_precip_hydro"].transform("sum")
+    # neighbour raw point columns add nothing over the aggregates (ablation 2026-10-21)
+    return f.drop(columns=[c for c in w.columns if c.startswith("nb_")])
 
 
-def build_samples(prices: pd.Series, weather: dict[int, pd.DataFrame], cap: pd.DataFrame) -> pd.DataFrame:
+def neighbor_price_daily(nb_prices: dict[str, pd.Series]) -> pd.DataFrame:
+    """Per local date: daily mean and 7-day mean of each neighbour zone (prefix nbp_)."""
+    cols = {}
+    for zone, s in nb_prices.items():
+        daily = s.groupby(s.index.tz_convert(TZ).date).mean()
+        daily.index = pd.to_datetime(daily.index)
+        cols[f"nbp_{zone}_Dmean"] = daily
+        cols[f"nbp_{zone}_mean7"] = daily.rolling(7).mean()
+    return pd.DataFrame(cols)
+
+
+def build_samples(
+    prices: pd.Series,
+    weather: dict[int, pd.DataFrame],
+    cap: pd.DataFrame,
+    nb_prices: dict[str, pd.Series],
+) -> pd.DataFrame:
     local = prices.index.tz_convert(TZ)
     pdf = pd.DataFrame({"price": prices.values, "date": local.date}, index=prices.index)
     daily = pdf.groupby("date")["price"].agg(["mean", "min", "max", "std"])
@@ -106,6 +134,7 @@ def build_samples(prices: pd.Series, weather: dict[int, pd.DataFrame], cap: pd.D
     daily["min7"] = daily["min"].rolling(7).min()
     daily["max7"] = daily["max"].rolling(7).max()
     daily = daily.add_prefix("D_")
+    nb_daily = neighbor_price_daily(nb_prices)
 
     de_holidays = holidays.Germany(years=range(2023, 2028))
     out = []
@@ -130,7 +159,10 @@ def build_samples(prices: pd.Series, weather: dict[int, pd.DataFrame], cap: pd.D
         lag_w = t - pd.Timedelta(days=7)  # same hour one week before target (<= D since h <= 6)
         s["p_lastday"] = prices.reindex(lag_d).values
         s["p_lastweek"] = prices.reindex(lag_w).values
+        for zone, zs in nb_prices.items():
+            s[f"nbp_{zone}_lastday"] = zs.reindex(lag_d).values
         s = s.join(daily, on="issue_date")
+        s = s.join(nb_daily, on="issue_date")
         s = s.join(w)
         per = issue_date.to_period("M")
         s[cap.columns] = cap.reindex(per).values
@@ -215,14 +247,16 @@ def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--test-start", default="2025-04-01")
     ap.add_argument("--loss", default="absolute_error")
-    ap.add_argument("--drop", nargs="*", default=[], help="drop feature columns containing these substrings")
+    # neighbour prices (nbp_) did not improve MAE in the ablation, so they are off by default
+    ap.add_argument("--drop", nargs="*", default=["nbp_"], help="drop feature columns containing these substrings")
     ap.add_argument("--tag", default="")
     args = ap.parse_args()
 
     prices = load_prices()
     weather = load_weather()
     cap = load_installed()
-    df = build_samples(prices, weather, cap)
+    nb_prices = {z: load_prices(z) for z in NEIGHBOR_ZONES}
+    df = build_samples(prices, weather, cap, nb_prices)
     print(f"samples: {len(df)}  issue days {df.issue_date.min().date()}..{df.issue_date.max().date()}")
     p = walk_forward(df, args.test_start, args.loss, args.drop)
     tag = args.tag or args.loss

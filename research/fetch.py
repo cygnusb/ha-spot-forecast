@@ -35,6 +35,24 @@ POINTS = {
     "bayern": (48.4, 11.8),
 }
 WEATHER_VARS = ["wind_speed_100m", "shortwave_radiation", "temperature_2m", "cloud_cover"]
+
+# Coupled neighbours: wind (NL/DK/PL/SE), heating load and nuclear (FR), hydro (Alps, Nordics).
+NEIGHBOR_POINTS = {
+    "nb_nl": (52.6, 4.6),
+    "nb_be": (50.8, 4.4),
+    "nb_fr_north": (49.0, 2.4),
+    "nb_fr_south": (45.5, 4.8),
+    "nb_dk_west": (56.0, 8.5),
+    "nb_pl_north": (54.2, 17.5),
+    "nb_alps_ch": (46.6, 8.0),
+    "nb_alps_at": (47.3, 12.5),
+    "nb_no_south": (59.5, 7.5),
+    "nb_se_south": (56.5, 14.5),
+    "nb_se_north": (63.5, 16.0),
+    "nb_fi": (61.0, 25.0),
+}
+NEIGHBOR_VARS = ["wind_speed_100m", "shortwave_radiation", "temperature_2m", "precipitation"]
+NEIGHBOR_ZONES = ["FR", "NL", "BE", "AT", "CH", "PL", "CZ", "DK1", "DK2", "NO2", "SE4"]
 # Lead offsets in days. Target day D+h is forecast with offset h+1 so that every
 # value comes from a model run that was available at the 06:00 issue time on day D.
 OFFSETS = range(2, 8)
@@ -68,18 +86,18 @@ def _is_complete(path: Path, chunk_end: dt.date) -> bool:
     return path.exists() and chunk_end < END - dt.timedelta(days=3)
 
 
-def fetch_prices() -> None:
-    out = RAW / "prices"
+def fetch_prices(zone: str = "DE-LU") -> None:
+    out = RAW / "prices" / zone
     out.mkdir(parents=True, exist_ok=True)
     # Energy-Charts rate-limits aggressively: few large requests with pauses.
     for a, b in month_chunks(START - dt.timedelta(days=40), END, months=6):
         path = out / f"{a:%Y-%m}_6m.json"
         if _is_complete(path, b):
             continue
-        print(f"prices {a}..{b}")
+        print(f"prices {zone} {a}..{b}")
         data = _get(
             "https://api.energy-charts.info/price",
-            {"bzn": "DE-LU", "start": f"{a}T00:00Z", "end": f"{b + dt.timedelta(days=1)}T00:00Z"},
+            {"bzn": zone, "start": f"{a}T00:00Z", "end": f"{b + dt.timedelta(days=1)}T00:00Z"},
         )
         path.write_text(json.dumps(data))
         time.sleep(15)
@@ -94,11 +112,11 @@ def fetch_installed() -> None:
     (RAW / "installed_power.json").write_text(json.dumps(data))
 
 
-def fetch_weather() -> None:
+def fetch_weather(points: dict = POINTS, variables: list[str] = WEATHER_VARS) -> None:
     out = RAW / "weather"
     out.mkdir(parents=True, exist_ok=True)
-    hourly = [f"{v}_previous_day{o}" for v in WEATHER_VARS for o in OFFSETS]
-    for name, (lat, lon) in POINTS.items():
+    hourly = [f"{v}_previous_day{o}" for v in variables for o in OFFSETS]
+    for name, (lat, lon) in points.items():
         for a, b in month_chunks(START, END):
             path = out / f"{name}_{a:%Y-%m}.json"
             if _is_complete(path, b):
@@ -124,3 +142,6 @@ if __name__ == "__main__":
     fetch_installed()
     fetch_prices()
     fetch_weather()
+    fetch_weather(NEIGHBOR_POINTS, NEIGHBOR_VARS)
+    for zone in NEIGHBOR_ZONES:
+        fetch_prices(zone)
