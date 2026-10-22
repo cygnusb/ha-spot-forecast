@@ -1,0 +1,4 @@
+training/data/
+dist/
+__pycache__/
+.venv/
