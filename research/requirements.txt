@@ -4,3 +4,4 @@ pyarrow
 requests
 holidays
 scikit-learn
+matplotlib

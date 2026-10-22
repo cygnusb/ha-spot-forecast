@@ -32,6 +32,9 @@ NB_WIND = ["nb_nl", "nb_be", "nb_dk_west", "nb_pl_north", "nb_se_south"]
 NB_HYDRO = ["nb_alps_ch", "nb_alps_at", "nb_no_south", "nb_se_north"]
 NB_NORDIC = ["nb_no_south", "nb_se_north", "nb_fi"]
 OUT = Path(__file__).parent / "data"
+# Open-Meteo previous-runs radiation at lead offsets >= 6 days is wrong before this date
+# (shifted/scaled by 0.5-1.6x; ECMWF switches to coarser output steps at 144 h). Masked.
+RADIATION_BROKEN = {6: "2025-07-01", 7: "2025-07-01"}
 
 
 # ---------------------------------------------------------------- loading
@@ -58,6 +61,8 @@ def load_weather() -> dict[int, pd.DataFrame]:
             h = json.loads(f.read_text())["hourly"]
             per_point.append(pd.DataFrame(h).assign(time=lambda x: pd.to_datetime(x["time"], utc=True)))
         df = pd.concat(per_point).drop_duplicates("time").set_index("time").sort_index()
+        for o, until in RADIATION_BROKEN.items():
+            df.loc[df.index < pd.Timestamp(until, tz="UTC"), f"shortwave_radiation_previous_day{o}"] = np.nan
         for o in OFFSETS:
             cols = {f"{v}_previous_day{o}": f"{name}__{v}" for v in variables}
             frames[o].append(df[list(cols)].rename(columns=cols))
@@ -82,8 +87,24 @@ def load_installed() -> pd.DataFrame:
 # ---------------------------------------------------------------- features
 
 
+def clear_sky_ghi(t: pd.DatetimeIndex, lat: float, lon: float) -> np.ndarray:
+    """Haurwitz clear-sky irradiance (W/m2), averaged-hour midpoint (Open-Meteo labels the end)."""
+    tm = t - pd.Timedelta(minutes=30)
+    doy = tm.dayofyear.values
+    decl = np.radians(23.44) * np.sin(2 * np.pi * (284 + doy) / 365)
+    hour_angle = np.radians(15 * (tm.hour.values + tm.minute.values / 60 + lon / 15 - 12))
+    phi = np.radians(lat)
+    cosz = np.sin(phi) * np.sin(decl) + np.cos(phi) * np.cos(decl) * np.cos(hour_angle)
+    cosz = np.clip(cosz, 0, None)
+    with np.errstate(divide="ignore"):
+        return np.where(cosz > 0, 1098 * cosz * np.exp(-0.057 / np.maximum(cosz, 1e-6)), 0.0)
+
+
 def weather_features(w: pd.DataFrame) -> pd.DataFrame:
     f = w.copy()
+    # cloud-based irradiance estimate: always available, unlike the masked radiation
+    est = lambda p: clear_sky_ghi(w.index, *POINTS[p]) * (1 - 0.75 * (w[f"{p}__cloud_cover"] / 100) ** 3.4)  # noqa: E731
+    f["solar_est_mean"] = sum(est(p) for p in SOLAR_POINTS) / len(SOLAR_POINTS)
     ws = lambda p: w[f"{p}__wind_speed_100m"] / 3.6  # noqa: E731  m/s
     # crude power curve: cubic between cut-in 3 m/s and rated 12 m/s
     pw = lambda v: (np.clip(v, 3, 12) - 3) ** 3 / 9**3  # noqa: E731
@@ -100,7 +121,8 @@ def weather_features(w: pd.DataFrame) -> pd.DataFrame:
     f["nb_solar_fr"] = (w["nb_fr_north__shortwave_radiation"] + w["nb_fr_south__shortwave_radiation"]) / 2
     # daily aggregates over the local target day
     day = f.index.tz_convert(TZ).date
-    for c in ["wind_power_idx", "solar_mean", "temp_mean", "nb_wind_power_idx", "nb_temp_fr", "nb_temp_nordic"]:
+    for c in ["wind_power_idx", "solar_mean", "solar_est_mean", "temp_mean", "nb_wind_power_idx", "nb_temp_fr",
+              "nb_temp_nordic"]:
         f[f"{c}_day"] = f.groupby(day)[c].transform("mean")
     f["nb_precip_hydro_day"] = f.groupby(day)["nb_precip_hydro"].transform("sum")
     # neighbour raw point columns add nothing over the aggregates (ablation 2026-10-21)
