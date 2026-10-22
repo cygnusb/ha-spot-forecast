@@ -254,7 +254,7 @@
   2. Choose the anchor.
   3. Fetch the weather forecast.
   4. `run_forecast`, then `ledger.add_run`.
-  5. Write `ledger.finalize()` rows through `statistics.async_write`.
+  5. Write `ledger.finalize(tz, zone_id=…, default_p90=model.p90_offsets, default_p10=model.p10_offsets)` rows through `statistics.async_write` (finalization is tracked per (day, series), so runs added later still produce their rows; run `finalize` in the executor if it is slow).
   6. Save the store.
   7. Build `SpotData`.
   - A source error (`SourceError`) or a data error (`InsufficientHistory`, which covers `IncompleteAnchorDay`) keeps the previous `SpotData`, with `stale` set by `is_stale`. On startup the previous `SpotData` is rebuilt from the Store. It raises `UpdateFailed` only when there is neither a stored nor a fresh result.
@@ -300,7 +300,8 @@
 - `backfill.py`: `async run_backfill(hass, coordinator, days: int) -> BackfillResult` with fields `imported`, `recomputed` and `finalized_days`.
   1. Import the bundled backfill runs (`runs_from_backfill_file`) for target days in [today − days, model.train_cutoff).
   2. Recompute the rest of the window, [max(train_cutoff, today − days), today), with `fetch_previous_runs` and `fetch_prices`. For each anchor X it calls `run_forecast(model, X, prices_through_X, weather_by_h)`, with `backfill=True`.
-  3. Call `ledger.finalize()` and write the statistics.
+  3. Call `ledger.finalize(...)` with the model's default offsets (as in Task 6) and write the statistics.
+  - Extend `Ledger.add_run` (core/ledger.py) so a `backfill=True` run never replaces a stored non-backfill run for the same anchor (what the user saw wins). Test: `test_backfill_never_replaces_live_run` in `tests/core/test_ledger.py`.
   - It runs as a background task (`entry.async_create_background_task`). The Store records `backfill_done_days` so it runs again only when the option grows.
 - `diagnostics.py`: `async_get_config_entry_diagnostics` returns the options, model version and cutoff, `last_success`, `stale`, the anchor, the ledger sizes (runs, finalized days), the backfill result, accuracy and the first 48 `entries`.
 - Repairs: `ir.async_create_issue(hass, DOMAIN, "model_outdated", is_fixable=False, severity=WARNING, translation_key="model_outdated", translation_placeholders={"version", "cutoff"})`. The issue is deleted when the condition clears and on unload.
