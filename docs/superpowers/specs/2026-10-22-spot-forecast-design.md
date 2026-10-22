@@ -63,8 +63,8 @@ hours above 21 ct at the cost of false alarms.
   already adds its own `price_offset`.
 - 15-minute forecast resolution. Known prices keep their native resolution;
   forecast slots are hourly.
-- Training on the device. Models are trained offline and shipped with
-  releases.
+- Training on the device. Models are trained monthly in GitHub Actions and
+  delivered through the model channel.
 - A bundled custom Lovelace card. The cards are Plotly Graph Card YAML
   examples, as in `ha-netze-bw`.
 - ENTSO-E data (outages, load forecast). It needs a token; a later optional
@@ -97,8 +97,8 @@ hours above 21 ct at the cost of false alarms.
   Home Assistant core; no other runtime requirement (`manifest.json`
   `requirements: []`).
 - **Home Assistant:** minimum version 2024.11.0, as SBP.
-- **Training:** offline on the owner's machines (servers or a Mac Mini); the
-  pipeline must also run on a plain Linux box with Python 3.12.
+- **Training:** monthly in GitHub Actions (Ubuntu runner, Python 3.12, CPU
+  only); the same pipeline runs locally on the owner's machines.
 - **Licence:** MIT.
 
 ## Identity
@@ -239,8 +239,8 @@ made, which is what the offset has to reflect. *(My call.)*
   successful run the forecast part is dropped and only known prices remain.
 - Known prices come from Energy-Charts. A key-free fallback for known DE-LU
   prices (for example aWATTar's public API) is the builder's call.
-- Repairs issue if the model file is older than 90 days ("update the
-  integration for a newer model").
+- Repairs issue if the active model's training cutoff is more than 60 days
+  old (see "Releases and the model").
 
 ## Entities
 
@@ -371,16 +371,88 @@ tests/          fast tests without HA, plus tests_ha/ against real HA
 
 ## Releases and the model
 
-- A new model ships as a new integration release (the owner's preference).
-  Retraining monthly matches the backtest; the model also works for a while
-  without it, since the target is relative to the recent price level.
-- `training/` produces the model file plus a report (MAE per horizon, peak
-  MAE, P90 exceedance) for the release notes. A release whose backtest MAE is
-  worse than the previous model's by more than 0.1 ct is not shipped without
-  a look.
+The model must be retrained regularly. A frozen model holds for 6–9 months in a
+stable market. After the 2026 gas price shift it fell to the naive baseline
+within two quarters and then below it (`research/README.md`, "How long does a
+model last"). Most HACS users update rarely, so new models reach them
+**separately from integration releases**. The owner decided on monthly
+training in GitHub Actions.
+
+### Model channel
+
+- A rolling GitHub release with the tag `models` holds the current model
+  files and a manifest at a stable URL:
+  `https://github.com/cygnusb/ha-spot-forecast/releases/download/models/manifest.json`.
+- Manifest per zone: model version (`de_lu-2026-11`), file URL, SHA-256,
+  `feature_schema` (integer), training cutoff, creation time, and the
+  report's headline metrics. The out-of-sample backfill predictions for that
+  model (see "Backfill on install") are listed alongside, with their own
+  SHA-256.
+- Older model files stay attached so a user can see which model produced
+  their forecasts. The diagnostics name the version.
+
+### In the integration
+
+- **Bundled model:** each integration release contains the latest published
+  model and its backfill file. It works right after install and without
+  access to GitHub.
+- **Automatic update:** once a day, at a random minute, the integration reads
+  the manifest. It downloads a newer model only if three checks pass:
+  `feature_schema` equals the integration's own, the SHA-256 matches, and the
+  file parses and predicts on a built-in sample. Downloaded models are stored
+  under the HA config directory (`.storage/spot_forecast/`), not in
+  `custom_components/`, which HACS overwrites on update. The next forecast run
+  uses the new model.
+- Fallback order: the newest valid downloaded model, then the bundled model.
+  A failed download or check keeps the current model and is logged once.
+- Option "Update models automatically", on by default.
+- The model file is data only: tree arrays and numbers. The integration never
+  executes downloaded code.
+- A diagnostic sensor shows the model version, source (bundled or downloaded)
+  and training cutoff. A repairs issue appears when the active model's cutoff
+  is more than 60 days old.
+- `feature_schema` is bumped whenever `features.py` changes in a way that
+  changes model inputs. A new schema needs an integration release. Until a
+  user installs it, their integration keeps using the last model for its
+  schema.
+
+### Training workflow (`train.yml`)
+
+- Runs monthly on a schedule (3rd of the month, night) and on manual
+  dispatch.
+- **Data:**
+  - restore the raw-data archive;
+  - fetch only what is new (incremental, with the 429 backoff of
+    `research/fetch.py`);
+  - store the archive again.
+
+  The GitHub Actions cache evicts entries unused for 7 days, so a monthly job
+  cannot rely on it. Keep the archive as an asset of a separate
+  `training-data` release, or on a data branch *(builder's call)*.
+- **Train:** the median and P90 models on all data through the end of the
+  last month, then export, with the same code as `training/` locally.
+- **Quality gate**, out of sample on both sides: retrain with data up to the
+  month before last and evaluate on last month. Compare it with the
+  previously published model on the same month. Publish only if the MAE is
+  no more than 0.1 ct worse than the previous model and the skill against the
+  naive baseline is positive. If the gate fails, the job opens a GitHub issue
+  with the report and publishes nothing.
+- **Publish:** upload the model, the backfill predictions and the report
+  (Markdown, MAE per horizon, peak MAE, P90 exceedance, trailing 3 months)
+  to the `models` release. Then update the manifest and append the report to
+  the release notes.
+- The training also runs locally (`training/` CLI) for development and for
+  the bundled model of an integration release.
+
+### Integration releases
+
 - GitHub workflows as in SBP: `validate.yml` (hassfest, HACS action, pytest,
   HA test matrix at the minimum version and latest), `release.yml` (ZIP
-  asset, `zip_release` in `hacs.json`), `pages.yml` (site and docs).
+  asset, `zip_release` in `hacs.json`), `pages.yml` (site and docs) and
+  `train.yml`.
+- `release.yml` copies the current published model and backfill file into
+  the ZIP, so the bundled model is never older than the last training run
+  before the release.
 
 ## README, website, discoverability
 
@@ -464,3 +536,6 @@ points and models come from the zone definition.
 - Day-level sensors included but disabled by default.
 - Website in German and English only.
 - Target scaled by the recent evening price level; no gas price feed in v1.
+- Model files in a rolling `models` release with a manifest; daily check, schema +
+  SHA-256 + sample-prediction checks; downloaded models live in `.storage/`.
+- Model older than 60 days → repairs issue.
