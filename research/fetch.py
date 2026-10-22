@@ -103,6 +103,23 @@ def fetch_prices(zone: str = "DE-LU") -> None:
         time.sleep(15)
 
 
+def fetch_public_power(country: str = "de") -> None:
+    """Actual load and generation by source (15-min). Only usable as lags/training targets."""
+    out = RAW / "public_power" / country
+    out.mkdir(parents=True, exist_ok=True)
+    for a, b in month_chunks(START - dt.timedelta(days=40), END, months=2):
+        path = out / f"{a:%Y-%m}_2m.json"
+        if _is_complete(path, b):
+            continue
+        print(f"public_power {country} {a}..{b}")
+        data = _get(
+            "https://api.energy-charts.info/public_power",
+            {"country": country, "start": f"{a}T00:00Z", "end": f"{b + dt.timedelta(days=1)}T00:00Z"},
+        )
+        path.write_text(json.dumps(data))
+        time.sleep(15)
+
+
 def fetch_installed() -> None:
     RAW.mkdir(parents=True, exist_ok=True)
     data = _get(
@@ -145,3 +162,4 @@ if __name__ == "__main__":
     fetch_weather(NEIGHBOR_POINTS, NEIGHBOR_VARS)
     for zone in NEIGHBOR_ZONES:
         fetch_prices(zone)
+    fetch_public_power("de")

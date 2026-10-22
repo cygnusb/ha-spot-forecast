@@ -62,3 +62,21 @@ not help and are off by default (`--drop nbp_`).
 
 Known gaps: no gas/CO2 prices (only absorbed via recent price level), no hydro/reservoir
 data, issue time before the day-ahead auction only.
+
+## Peaks (top 3 % of hours, > 21 ct/kWh)
+
+The mean MAE hides the peaks: they are 3 % of the hours but 12 % of the absolute error.
+
+| variant | MAE all | peak MAE D+1 | peak bias D+1 |
+|---|---|---|---|
+| default (absolute-error loss → median) | 2.18 | 7.6 | ≈ −7 |
+| squared-error loss | 2.29 | 6.2 | −4.8 |
+| squared-error + **oracle** actual load/wind/solar of the target hour (diagnostic, `--oracle`) | 1.77 | 5.7 | −3.7 |
+
+Even perfect knowledge of German load and renewables leaves peaks ~4 ct too low, so part of
+the peak height is not explained by DE residual load (imports, outages, scarcity bidding).
+
+A P90 quantile model (`--quantile 0.9`) works as a peak warning: "P90 > 21 ct" flags
+65 % (D+1) … 45 % (D+6) of peak hours with 46 … 30 % precision; the median forecast flags only
+27 … 17 %. P90 is under-dispersed out of sample (25 % of hours exceed it instead of 10 %)
+and needs recalibration.

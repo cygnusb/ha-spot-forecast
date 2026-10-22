@@ -69,6 +69,25 @@ def load_weather() -> dict[int, pd.DataFrame]:
     return {o: pd.concat(fs, axis=1) for o, fs in frames.items()}
 
 
+def load_public_power(country: str = "de") -> pd.DataFrame:
+    """Actual hourly load and generation (MW). Realised values - never a feature for the target hour."""
+    parts = []
+    for f in sorted((RAW / "public_power" / country).glob("*.json")):
+        d = json.loads(f.read_text())
+        idx = pd.to_datetime(d["unix_seconds"], unit="s", utc=True)
+        parts.append(pd.DataFrame({p["name"]: p["data"] for p in d["production_types"]}, index=idx))
+    g = pd.concat(parts).sort_index()
+    g = g[~g.index.duplicated()].resample("h").mean()
+    return pd.DataFrame(
+        {
+            "load": g["Load"],
+            "wind": g["Wind onshore"] + g["Wind offshore"],
+            "solar": g["Solar"],
+            "residual": g["Residual load"],
+        }
+    )
+
+
 def load_installed() -> pd.DataFrame:
     d = json.loads((RAW / "installed_power.json").read_text())
     idx = pd.PeriodIndex([pd.Period(f"{t[3:]}-{t[:2]}", "M") for t in d["time"]])
@@ -199,7 +218,9 @@ def build_samples(
 NON_FEATURES = {"price", "target_date", "issue_date", "y"}
 
 
-def walk_forward(df: pd.DataFrame, test_start: str, loss: str, drop: list[str] | None = None) -> pd.DataFrame:
+def walk_forward(
+    df: pd.DataFrame, test_start: str, loss: str, drop: list[str] | None = None, quantile: float | None = None
+) -> pd.DataFrame:
     df = df.copy()
     df["y"] = df["price"] - df["D_mean7"]
     features = [c for c in df.columns if c not in NON_FEATURES and not any(d in c for d in drop or [])]
@@ -212,7 +233,8 @@ def walk_forward(df: pd.DataFrame, test_start: str, loss: str, drop: list[str] |
         if test.empty:
             continue
         model = HistGradientBoostingRegressor(
-            loss=loss,
+            loss="quantile" if quantile else loss,
+            quantile=quantile,
             learning_rate=0.05,
             max_iter=600,
             max_leaf_nodes=31,
@@ -260,6 +282,10 @@ def report(p: pd.DataFrame) -> pd.DataFrame:
         rows[(name, "hit cheap4")] = tk["hit_cheap"]
         rows[(name, "hit dear4")] = tk["hit_dear"]
         rows[(name, "regret cheap4 ct")] = tk["regret_cheap"] / 10
+        peak = p["price"] > p["price"].quantile(0.97)
+        q = p[peak]
+        rows[(name, "peak MAE ct")] = (q[col] - q["price"]).abs().groupby(q["h"]).mean() / 10
+        rows[(name, "peak bias ct")] = (q[col] - q["price"]).groupby(q["h"]).mean() / 10
     r = pd.DataFrame(rows)
     r.loc["all"] = r.mean()
     return r
@@ -272,6 +298,8 @@ def main() -> None:
     # neighbour prices (nbp_) did not improve MAE in the ablation, so they are off by default
     ap.add_argument("--drop", nargs="*", default=["nbp_"], help="drop feature columns containing these substrings")
     ap.add_argument("--tag", default="")
+    ap.add_argument("--quantile", type=float, default=None, help="fit a quantile model instead (e.g. 0.9)")
+    ap.add_argument("--oracle", action="store_true", help="DIAGNOSTIC ONLY: add actual load/generation of the target hour")
     args = ap.parse_args()
 
     prices = load_prices()
@@ -279,8 +307,10 @@ def main() -> None:
     cap = load_installed()
     nb_prices = {z: load_prices(z) for z in NEIGHBOR_ZONES}
     df = build_samples(prices, weather, cap, nb_prices)
+    if args.oracle:
+        df = df.join(load_public_power().add_prefix("oracle_"))
     print(f"samples: {len(df)}  issue days {df.issue_date.min().date()}..{df.issue_date.max().date()}")
-    p = walk_forward(df, args.test_start, args.loss, args.drop)
+    p = walk_forward(df, args.test_start, args.loss, args.drop, args.quantile)
     tag = args.tag or args.loss
     p.to_parquet(OUT / f"predictions_{tag}.parquet")
     pd.set_option("display.width", 200)
