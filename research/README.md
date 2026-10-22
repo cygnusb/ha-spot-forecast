@@ -123,3 +123,22 @@ the high-gas months. For the calibrated P90 peak warning the gain is small:
 
 The key-free evening-price scaling gets most of the TTF gain without an unofficial data
 source.
+
+### How long does a model last without retraining? (`--freeze`)
+
+Evening-price-scaled model (`--target gq`), MAE ct/kWh by target quarter: monthly refit vs.
+one model trained once before the start and never refit.
+
+| quarter | monthly refit | frozen 2025-04 | frozen 2025-10 | naive last week |
+|---|---|---|---|---|
+| 2025 Q2 | 1.76 | 1.84 | – | 2.71 |
+| 2025 Q3 | 1.70 | 1.71 | – | 2.65 |
+| 2025 Q4 | 1.78 | 1.90 | 1.86 | 3.48 |
+| 2026 Q1 | 2.01 | 2.03 | 1.98 | 3.13 |
+| 2026 Q2 | 2.43 | 2.87 | 2.59 | 4.05 |
+| 2026 Q3 | 2.80 | 4.30 | 3.70 | 4.29 |
+| 2026 Q4 | 3.65 | 7.14 | 5.68 | 5.93 |
+
+In a stable market a frozen model holds for 6–9 months. When the regime shifts (gas price
+doubling in 2026) it falls to the naive baseline within about two quarters and then below it.
+Retraining is required, at least monthly.

@@ -250,6 +250,7 @@ def walk_forward(
     quantile: float | None = None,
     min_leaf: int = 40,
     target: str = "diff",
+    freeze: bool = False,
 ) -> pd.DataFrame:
     df = df.copy()
     # "z": deviation scaled by recent volatility, so peak height can grow with the regime
@@ -270,7 +271,8 @@ def walk_forward(
     months = pd.period_range(test_start, df["issue_date"].max(), freq="M")
     for m in months:
         m_start = m.start_time
-        train = df[df["target_date"] < m_start]
+        # freeze: train once before test_start and never refit (how far does a shipped model last?)
+        train = df[df["target_date"] < (pd.Timestamp(test_start) if freeze else m_start)]
         test = df[(df["issue_date"] >= m_start) & (df["issue_date"] <= m.end_time)]
         if test.empty:
             continue
@@ -345,6 +347,7 @@ def main() -> None:
     ap.add_argument("--quantile", type=float, default=None, help="fit a quantile model instead (e.g. 0.9)")
     ap.add_argument("--min-leaf", type=int, default=40)
     ap.add_argument("--target", choices=["diff", "z", "gas", "gq"], default="diff")
+    ap.add_argument("--freeze", action="store_true", help="train once before --test-start, no monthly refit")
     ap.add_argument("--oracle-countries", nargs="*", default=[], help="with --oracle: also neighbours' actuals")
     ap.add_argument("--oracle", action="store_true", help="DIAGNOSTIC ONLY: add actual load/generation of the target hour")
     args = ap.parse_args()
@@ -360,7 +363,7 @@ def main() -> None:
             nb = load_public_power(c)[["load", "residual", "cross_border"]]
             df = df.join(nb.add_prefix(f"oracle_{c}_"))
     print(f"samples: {len(df)}  issue days {df.issue_date.min().date()}..{df.issue_date.max().date()}")
-    p = walk_forward(df, args.test_start, args.loss, args.drop, args.quantile, args.min_leaf, args.target)
+    p = walk_forward(df, args.test_start, args.loss, args.drop, args.quantile, args.min_leaf, args.target, args.freeze)
     tag = args.tag or args.loss
     p.to_parquet(OUT / f"predictions_{tag}.parquet")
     pd.set_option("display.width", 200)
