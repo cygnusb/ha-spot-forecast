@@ -24,8 +24,9 @@
 - Zone DE-LU, time zone `Europe/Berlin`, horizons h = 1…6 relative to the anchor day X (prices known through the end of X).
 - Weather for target day X+h in training comes from Open-Meteo `previous_day{h+1}`; `shortwave_radiation` at offsets 6 and 7 is NaN before 2025-07-01.
 - Target: `y = (price − D_mean7) / scale`, `scale = max(D_gq_evening14, 50) / 100`; prediction = `model(X) · scale + D_mean7`.
-- Model hyperparameters (both models): `learning_rate=0.05, max_iter=600, max_leaf_nodes=31, min_samples_leaf=40, l2_regularization=1.0, random_state=0`, default `early_stopping` (as in research). Median: `loss="absolute_error"`; P90: `loss="quantile", quantile=0.9`. **No categorical features** (dow and issue_dow are plain numbers), so the export only needs numeric splits.
+- Model hyperparameters (both models): `learning_rate=0.05, max_iter=600, max_leaf_nodes=31, min_samples_leaf=40, l2_regularization=1.0, random_state=0`, default `early_stopping` (as in research). Median: `loss="absolute_error"`; P90: `loss="quantile", quantile=0.9`; P10: `loss="quantile", quantile=0.1`. **No categorical features** (dow and issue_dow are plain numbers), so the export only needs numeric splits.
 - P90 conformal offset: 90 % quantile of `actual − p90_raw` over the trailing 56 target days per horizon; fewer than 200 values → default offset. Reported peak risk = `max(p90_raw + offset, median)`.
+- P10 conformal offset: 10 % quantile of `actual − p10_raw`, same window and fallback. Reported low-price value = `min(p10_raw + offset, median)`.
 - Peak threshold default: 97th percentile of hourly prices in the 365 days before the training cutoff.
 - `FEATURE_SCHEMA = 1`.
 
@@ -155,7 +156,7 @@ def test_missing_weather_gives_nan_not_error(golden): # drop one weather series 
 - Consumes: `core.features.FEATURE_NAMES`, `FEATURE_SCHEMA`.
 - Produces:
   - `core.model.Trees`: `baseline: float` and flat int/float arrays over all nodes of all trees: `feature, threshold, left, right, missing_left, is_leaf, value`, plus `roots: np.ndarray` (index of each tree's root). `predict(X: np.ndarray) -> np.ndarray` = baseline + sum of leaf values; NaN goes to the `missing_left` side; a non-NaN value goes left when `x <= threshold`.
-  - `core.model.ModelFile` (frozen dataclass): `format: int` (=1), `zone: str`, `version: str` (e.g. `"de_lu-2026-11"`), `feature_schema: int`, `features: tuple[str, ...]`, `train_cutoff: date`, `created: datetime`, `median: Trees`, `p90: Trees`, `p90_offsets: dict[int, float]` (EUR/MWh per h), `peak_threshold: float` (EUR/MWh), `capacity: dict[str, float]`, `metrics: dict`.
+  - `core.model.ModelFile` (frozen dataclass): `format: int` (=1), `zone: str`, `version: str` (e.g. `"de_lu-2026-11"`), `feature_schema: int`, `features: tuple[str, ...]`, `train_cutoff: date`, `created: datetime`, `median: Trees`, `p90: Trees`, `p10: Trees`, `p90_offsets: dict[int, float]`, `p10_offsets: dict[int, float]` (EUR/MWh per h), `peak_threshold: float` (EUR/MWh), `capacity: dict[str, float]`, `metrics: dict`.
   - `core.model.load_model(data: bytes) -> ModelFile` (gzip JSON), raising `ModelMismatch(ValueError)` if `format != 1`, `feature_schema != FEATURE_SCHEMA` or `features != FEATURE_NAMES`.
   - `core.model.dump_model(m: ModelFile) -> bytes` (gzip JSON; arrays as lists; floats as written by `json`).
   - `training.export.trees_from_sklearn(model: HistGradientBoostingRegressor) -> Trees`: reads `model._baseline_prediction` and each `model._predictors[i][0].nodes` (`feature_idx, num_threshold, left, right, missing_go_to_left, is_leaf, value`), offsetting child indices into the flat arrays. It asserts that no node `is_categorical`.
@@ -166,7 +167,7 @@ def test_missing_weather_gives_nan_not_error(golden): # drop one weather series 
 # tests/training/test_export.py  (importorskip sklearn)
 def test_export_reproduces_sklearn():
     X, y = synthetic 5000 × 82 with 3 % NaN, seed 0
-    for kw in ({"loss": "absolute_error"}, {"loss": "quantile", "quantile": 0.9}):
+    for kw in ({"loss": "absolute_error"}, {"loss": "quantile", "quantile": 0.9}, {"loss": "quantile", "quantile": 0.1}):
         m = HistGradientBoostingRegressor(max_iter=50, **kw, random_state=0).fit(X, y)
         np.testing.assert_allclose(trees_from_sklearn(m).predict(X), m.predict(X), atol=1e-6)
 
@@ -197,10 +198,11 @@ def test_predict_144_rows_under_1s(real_sized_trees):   # 600 trees × 31 leaves
 **Interfaces:**
 - Consumes: `build_features`, `decode`, `daily_stats`, `Hourly`, `ModelFile`, `Trees.predict`.
 - Produces:
-  - `Slot` (frozen dataclass): `time: datetime` (UTC hour start), `h: int`, `median: float`, `p90_raw: float` (EUR/MWh).
+  - `Slot` (frozen dataclass): `time: datetime` (UTC hour start), `h: int`, `median: float`, `p90_raw: float`, `p10_raw: float` (EUR/MWh).
   - `run_forecast(model: ModelFile, anchor: date, prices: Hourly, weather: Mapping[int, Mapping[str, Hourly]], zone: Zone, capacity: Mapping[str, float] | None = None) -> list[Slot]`. `capacity` defaults to `model.capacity`.
   - `conformal_offset(residuals: np.ndarray, default: float, min_n: int = 200, q: float = 0.9) -> float`: NaNs are ignored.
   - `peak_risk(slot: Slot, offset: float) -> float` = `max(slot.p90_raw + offset, slot.median)`.
+  - `low_price(slot: Slot, offset: float) -> float` = `min(slot.p10_raw + offset, slot.median)`.
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -215,7 +217,11 @@ def test_conformal_offset_uses_default_below_200():
 def test_conformal_offset_quantile():
     assert conformal_offset(np.arange(1000, dtype=float), default=0) == pytest.approx(np.quantile(np.arange(1000), 0.9))
 def test_peak_risk_never_below_median():
-    assert peak_risk(Slot(t, 1, median=100, p90_raw=80), offset=5) == 100
+    assert peak_risk(Slot(t, 1, median=100, p90_raw=80, p10_raw=50), offset=5) == 100
+def test_low_price_never_above_median():
+    assert low_price(Slot(t, 1, median=10, p90_raw=30, p10_raw=20), offset=-5) == 10
+def test_conformal_offset_low_quantile():
+    assert conformal_offset(np.arange(1000, dtype=float), default=0, q=0.1) == pytest.approx(np.quantile(np.arange(1000), 0.1))
 ```
 
 - [ ] **Step 2: Run** `pytest tests/core/test_forecast.py -v` → FAIL
@@ -265,10 +271,10 @@ def test_dataset_matches_research_rows():
 **Interfaces:**
 - Consumes: `build_dataset`, `trees_from_sklearn`, `ModelFile`, `dump_model`, `conformal_offset`.
 - Produces (CLI `python -m training.train --raw DIR --out DIR --cutoff YYYY-MM-DD [--walk-forward-from YYYY-MM-DD] [--backfill-days 180]`):
-  - `{out}/de_lu-{YYYY-MM}.json.gz`: the `ModelFile`, fitted on all rows with `target_date < cutoff`. Version = cutoff month. `p90_offsets` = `conformal_offset` per h over the walk-forward residuals of the last 56 target days. `peak_threshold` = 97th percentile of hourly prices in the 365 days before the cutoff. `capacity` = last month ≤ cutoff. `metrics` = the report's numbers.
-  - `{out}/de_lu-{YYYY-MM}.backfill.json.gz`: `{"format": 1, "model_version": str, "rows": [[time_utc_iso, h, median, p90_raw], ...]}`, the walk-forward out-of-sample predictions for target days in `[cutoff − backfill_days, cutoff)`. There is one monthly refit per month in that range, trained on `target_date < month start`, exactly as `research/backtest.py::walk_forward`.
-  - `{out}/de_lu-{YYYY-MM}.report.md` and `.metrics.json`. Per h: MAE over the whole walk-forward range and over the trailing 3 months, the naive "same as last week" MAE, skill `1 − MAE/naive`, peak MAE and peak bias (actual > `peak_threshold`), and calibrated P90 exceedance. All in ct/kWh in the Markdown, EUR/MWh in the JSON.
-  - `training.train.fit(ds: Dataset, quantile: float | None) -> HistGradientBoostingRegressor` with the Global Constraints hyperparameters and target.
+  - `{out}/de_lu-{YYYY-MM}.json.gz`: the `ModelFile`, fitted on all rows with `target_date < cutoff`. Version = cutoff month. `p90_offsets` / `p10_offsets` = `conformal_offset` (q = 0.9 / 0.1) per h over the walk-forward residuals of the last 56 target days. `peak_threshold` = 97th percentile of hourly prices in the 365 days before the cutoff. `capacity` = last month ≤ cutoff. `metrics` = the report's numbers.
+  - `{out}/de_lu-{YYYY-MM}.backfill.json.gz`: `{"format": 1, "model_version": str, "rows": [[time_utc_iso, h, median, p90_raw, p10_raw], ...]}`, the walk-forward out-of-sample predictions for target days in `[cutoff − backfill_days, cutoff)`. There is one monthly refit per month in that range, trained on `target_date < month start`, exactly as `research/backtest.py::walk_forward`.
+  - `{out}/de_lu-{YYYY-MM}.report.md` and `.metrics.json`. Per h: MAE over the whole walk-forward range and over the trailing 3 months, the naive "same as last week" MAE, skill `1 − MAE/naive`, peak MAE and peak bias (actual > `peak_threshold`), calibrated P90 exceedance, calibrated P10 undercut rate, and the share of negative-price hours with calibrated P10 < 0. All in ct/kWh in the Markdown, EUR/MWh in the JSON.
+  - `training.train.fit(ds: Dataset, quantile: float | None) -> HistGradientBoostingRegressor` (None = median, 0.9 / 0.1 for the quantile models) with the Global Constraints hyperparameters and target.
   - The walk-forward range starts at `--walk-forward-from` (default: cutoff − backfill_days).
 
 - [ ] **Step 1: Write the failing tests**
@@ -277,7 +283,7 @@ def test_dataset_matches_research_rows():
 def test_train_end_to_end_small(tmp_path, research_raw):   # skipped without research data
     run(["--raw", research_raw, "--out", tmp_path, "--cutoff", "2025-10-01", "--backfill-days", "31"], max_iter=30)
     m = load_model((tmp_path / "de_lu-2025-10.json.gz").read_bytes())
-    assert m.train_cutoff == date(2025, 10, 1) and set(m.p90_offsets) == {1, 2, 3, 4, 5, 6}
+    assert m.train_cutoff == date(2025, 10, 1) and set(m.p90_offsets) == set(m.p10_offsets) == {1, 2, 3, 4, 5, 6}
     bf = json.loads(gzip.decompress((tmp_path / "de_lu-2025-10.backfill.json.gz").read_bytes()))
     assert min(r[0] for r in bf["rows"]) >= "2025-08-31" and max(r[0] for r in bf["rows"]) < "2025-10-01"
     assert all(r[0] < "2025-10-01" for r in bf["rows"])        # never in sample
@@ -292,7 +298,7 @@ def test_backfill_rows_are_out_of_sample(...):   # each row's refit month cutoff
 - [ ] **Step 4: Run** the tests → PASS
 - [ ] **Step 5: Parity run** (full size, in the background, about 15 minutes):
   `python -m training.train --raw research/data/raw --out dist --cutoff 2026-10-01 --walk-forward-from 2025-04-01`
-  Expected: the report's walk-forward MAE over all h is 2.14 ± 0.05 ct/kWh and the calibrated P90 exceedance is 11–13 %. This is the research `--target gq` result; the only intended difference is numeric instead of categorical weekday. If it misses, stop and report. Do not tune.
+  Expected: the report's walk-forward MAE over all h is 2.14 ± 0.05 ct/kWh the calibrated P90 exceedance is 11–13 % and the calibrated P10 undercut rate is 9–11 %. This is the research `--target gq` result; the only intended difference is numeric instead of categorical weekday. If it misses, stop and report. Do not tune.
 - [ ] **Step 6: Commit** code and the parity report excerpt in the commit message: `git commit -m "Add training CLI: model file, out-of-sample backfill, report"`
 
 ---
@@ -301,3 +307,14 @@ def test_backfill_rows_are_out_of_sample(...):   # each row's refit month cutoff
 
 - Spec coverage for this plan: features, inference, export, P90 calibration, peak threshold, out-of-sample backfill, report with full-period and trailing-3-month numbers, and the 1e-6 export acceptance are all covered. Run-time data sources, anchor switching, entities, statistics, model download, CI and cards are plans 2–4.
 - Names used across tasks: `Hourly`, `DailyStats`, `daily_stats`, `build_features`, `FeatureMatrix`, `FEATURE_NAMES`, `FEATURE_SCHEMA`, `InsufficientHistory`, `decode`, `Trees`, `ModelFile`, `load_model`, `dump_model`, `ModelMismatch`, `trees_from_sklearn`, `Slot`, `run_forecast`, `conformal_offset`, `peak_risk`, `load_raw`, `RawData`, `build_dataset`, `Dataset`, `fit`.
+
+## Carry-over to plan 2 (from execution, 2026-10-22)
+
+- **First task of plan 2 (final review #5, Minor 1):**
+  - Inference must apply the training row filters. A target hour with missing weather (`wind_mean` NaN) or an anchor day with incomplete prices gets no forecast value, instead of a confident-looking one.
+  - The raw → hourly conversions (15-min price means, Open-Meteo GMT times, 35-day price history) exist only in the pandas training code (`training/dataset.py`). Move them into `core` with a parity test.
+- **Weather horizon:** with the anchor on tomorrow, the forecast reaches today+7, so request 8 forecast days from Open-Meteo. The spec's data table says 7; fix it.
+- **Backfill calibration:** backfill rows store raw P90/P10. Calibrate past days with rolling offsets from earlier rows only, never with the model file's offsets, which come from later days.
+- **Capacity in the training job:** `capacity_at` raises when Energy-Charts `installed_power` lags a month. The CI training job must surface that message.
+- **Minor, open:** `load_model` does not wrap `OverflowError`; `check_data_reaches` only checks each series' tail; the zone is hard-coded to DE-LU in `FEATURE_NAMES` and `nb_fr_*`.
+- The first model file `de_lu-2026-10.json.gz` (strict JSON, cutoff 2026-10-01) and its backfill file are in `dist/` (git-ignored) of the main checkout. Walk-forward MAE 2.10 ct, P90 exceedance 12.3 %, P10 undercut 10.5 %.

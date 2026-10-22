@@ -174,3 +174,5 @@ raw 17 % of hours fall below it, calibrated 10 %. As a flag for negative prices:
 P10 keeps catching ~80 % of negative hours out to D+6, where the median alone drops to 40 %.
 1 May 2026 (D+2): median minimum −4.6 ct, P10 −12.6 ct, actual −49.9 ct; P10 < 0 in 9 hours,
 actual negative 8 hours.
+
+**Production pipeline:** `training/` (`python -m training.train`) builds the shipped model file, the out-of-sample backfill and the accuracy report on the shared `core` features; this directory stays the research record.

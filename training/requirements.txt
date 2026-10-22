@@ -1,0 +1,7 @@
+numpy
+pandas
+pyarrow
+requests
+holidays
+scikit-learn==1.9.1
+pytest

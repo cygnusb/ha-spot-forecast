@@ -1,0 +1,38 @@
+# Lint settings for the integration. Mirrors the subset of Home Assistant
+# core's ruleset that makes sense for a custom component.
+target-version = "py312"
+line-length = 100
+
+[lint]
+select = [
+  "F",    # pyflakes
+  "E",    # pycodestyle errors
+  "W",    # pycodestyle warnings
+  "I",    # import sorting
+  "UP",   # pyupgrade
+  "B",    # bugbear
+  "SIM",  # simplifications
+  "C4",   # comprehensions
+  "RET",  # return statements
+  "BLE",  # blind excepts
+  "TRY",  # exception antipatterns
+  "PTH",  # pathlib over os.path
+  "RUF",
+]
+ignore = [
+  "TRY003",  # long messages in raise: these go to the HA log, verbatim
+  "TRY300",  # return-in-try reads fine in the small helpers here
+  "RUF012",  # HA entity classes use plain mutable class attributes
+  "RUF002",  # en dashes and umlauts in prose docstrings are deliberate
+]
+
+[format]
+# Ruff formats Python blocks inside Markdown too, and the docs are full of
+# illustrative pseudo-Python: a REST path in a ```python fence becomes
+# `GET / api / states / ...` because the formatter parses the slashes as
+# division, and `true/false` goes the same way. Prose is hand-formatted here.
+exclude = ["*.md"]
+
+[lint.isort]
+force-sort-within-sections = true
+known-first-party = ["spot_forecast", "core", "training"]

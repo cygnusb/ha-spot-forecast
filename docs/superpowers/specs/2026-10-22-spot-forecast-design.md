@@ -42,8 +42,8 @@ hours above 21 ct at the cost of false alarms.
 
 1. Forecast hourly DE-LU day-ahead prices for every hour after the last
    published one, up to six days after the latest known day.
-2. Per hour, an expected price (median model) and a peak-risk value
-   (calibrated P90).
+2. Per hour, an expected price (median model), a peak-risk value
+   (calibrated P90) and a low-price value (calibrated P10).
 3. Key-free by default: no account, no token, no API key.
 4. Runs on a Raspberry Pi: inference only, no heavy dependencies.
 5. A forecast card and a look-back card for the Plotly Graph Card, in the
@@ -157,8 +157,9 @@ assumed; that only helps. Keep training on `previous_day{h+1}`.
 
 ### Model and inference
 
-- Two gradient-boosted tree models per zone, as in the backtest: a median
-  model (absolute-error loss) and a P90 model (quantile loss 0.9). Target:
+- Three gradient-boosted tree models per zone, as in the backtest: a median
+  model (absolute-error loss), a P90 model (quantile loss 0.9) and a P10
+  model (quantile loss 0.1). Target:
   price minus the last 7-day mean price, divided by the recent evening price
   level (median of 18–21 h prices over the last 14 days, at least
   50 €/MWh, ÷ 100); `--target gq` in `research/backtest.py`. Evening hours are
@@ -191,6 +192,13 @@ file. Target: about 10–12 % exceedance, matching the backtest (12 %).
 Peak risk is reported as `max(P90, median)` so the band never dips below the
 line.
 
+The low-price value (P10) is calibrated the same way, mirrored: offset = the
+10 % quantile of `actual − raw P10` over the trailing 56 target days, and it is
+reported as `min(P10, median)`. In the backtest the calibrated P10 is
+undercut in 10 % of hours. "P10 < 0" catches 84 % (D+1) … 80 % (D+6) of
+negative-price hours, against 55 % … 40 % for "median < 0"
+(`research/README.md`, "Low-price chance").
+
 ### Keeping the forecasts (look-back)
 
 Every run's hourly forecast is kept in an HA `Store` until its target hour is
@@ -203,6 +211,7 @@ the integration writes **external long-term statistics**, hourly rows, as
 | `spot_forecast:de_lu_price` | actual day-ahead price, hourly mean |
 | `spot_forecast:de_lu_forecast_h1` … `_h6` | median forecast made with anchor = target day − h |
 | `spot_forecast:de_lu_peak_risk_h1` … `_h6` | calibrated P90 of the same forecast |
+| `spot_forecast:de_lu_low_h1` … `_h6` | calibrated P10 of the same forecast |
 
 Unit EUR/kWh. If several runs share an anchor, the last run before the anchor
 changes wins (the one a user would have seen last).
@@ -253,10 +262,10 @@ All prices in EUR/kWh, the bare exchange price.
   in the format SBP's ENTSO-E adapter already detects:
 
   ```json
-  {"time": "2026-09-22T18:00:00+02:00", "price": 0.2134, "p90": 0.3812, "source": "forecast", "h": 2}
+  {"time": "2026-09-22T18:00:00+02:00", "price": 0.2134, "p90": 0.3812, "p10": 0.1420, "source": "forecast", "h": 2}
   ```
 
-  `p90`, `source` (`"market"` | `"forecast"`) and `h` are additional keys that
+  `p90`, `p10`, `source` (`"market"` | `"forecast"`) and `h` are additional keys that
   the adapter ignores. Known slots keep their native resolution (15 min since
   2025-10-01); forecast slots are hourly. Slot end is the next slot's start,
   which is how the adapter reads it.
@@ -279,6 +288,14 @@ All prices in EUR/kWh, the bare exchange price.
 - Threshold: configurable in the options flow. Default from the model file =
   the 97th percentile of hourly prices in the last training year (21.2 ct for
   the current backtest).
+
+### `binary_sensor.spot_forecast_de_lu_negative_price`
+
+- Meaning: "a negative price is certain or likely in the next 48 h". On if
+  any slot from now to now + 48 h has a known price below 0 or a forecast
+  low-price value (P10) below 0. It mirrors the peak-risk sensor.
+- Attributes: the flagged slots (time, price or median, p10, `source`), and
+  `certain: true` if at least one flagged slot is a market price.
 
 ### Diagnostic sensors
 
@@ -308,6 +325,8 @@ README and on the website, as `ha-netze-bw` does.
 - One continuous time axis: yesterday and today (known) and the forecast days.
 - Known prices: solid ink step line. Forecast: blue step line (median).
 - Peak risk: hatched band from median up to P90, in the risk colour.
+- Low-price chance: a lighter hatched band from P10 up to the median, in the
+  cheap colour, so likely negative hours show below the zero line.
 - Per day, the 4 dearest (▲ orange) and 4 cheapest (▼ green) hours marked.
 - Above each day: weekday and date, maximum, and "⚠ bis NN" in the risk
   colour if peak risk exceeds the threshold.
@@ -536,6 +555,8 @@ points and models come from the zone definition.
 - Day-level sensors included but disabled by default.
 - Website in German and English only.
 - Target scaled by the recent evening price level; no gas price feed in v1.
+- P10 low-price value and a negative-price binary sensor, mirroring P90 and
+  the peak-risk sensor.
 - Model files in a rolling `models` release with a manifest; daily check, schema +
   SHA-256 + sample-prediction checks; downloaded models live in `.storage/`.
 - Model older than 60 days → repairs issue.
