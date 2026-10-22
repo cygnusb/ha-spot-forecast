@@ -62,6 +62,7 @@ async def test_setup_creates_entities_with_expected_ids(
         ("sensor", "last_run"): "sensor.spot_forecast_de_lu_last_run",
         ("sensor", "model_version"): "sensor.spot_forecast_de_lu_model_version",
         ("sensor", "forecast_error"): "sensor.spot_forecast_de_lu_forecast_error",
+        ("sensor", "backfill"): "sensor.spot_forecast_de_lu_backfill_status",
         ("binary_sensor", "peak_risk"): PEAK,
         ("binary_sensor", "negative_price"): NEGATIVE,
         **{("sensor", f"day_{i}"): f"sensor.spot_forecast_de_lu_day_{i}" for i in range(7)},

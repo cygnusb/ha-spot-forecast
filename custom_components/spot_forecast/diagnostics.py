@@ -44,6 +44,7 @@ async def async_get_config_entry_diagnostics(
             "actual_hours": len(ledger.actual),
         },
         "backfill": {
+            "state": coordinator.backfill_state,
             "done_days": coordinator.backfill_done_days,
             "result": None if result is None else asdict(result),
         },

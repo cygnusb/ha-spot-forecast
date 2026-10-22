@@ -45,6 +45,16 @@
       "forecast_error": {
         "name": "Prognosefehler"
       },
+      "backfill": {
+        "name": "Backfill-Status",
+        "state": {
+          "off": "Aus",
+          "pending": "Ausstehend",
+          "running": "Läuft",
+          "done": "Fertig",
+          "failed": "Fehlgeschlagen"
+        }
+      },
       "day_0": {
         "name": "Tag 0"
       },
@@ -79,7 +89,7 @@
   "issues": {
     "model_outdated": {
       "title": "Spot-Forecast-Modell ist veraltet",
-      "description": "Das mitgelieferte Prognosemodell {version} wurde mit Daten bis {cutoff} trainiert, also vor mehr als 60 Tagen. Je weiter sich der Markt verändert, desto ungenauer werden die Prognosen. Aktualisiere die Integration Spot Forecast, um ein neueres Modell zu erhalten."
+      "description": "Das mitgelieferte Prognosemodell {version} wurde mit Daten bis {cutoff} trainiert, also vor mehr als {max_age} Tagen. Je weiter sich der Markt verändert, desto ungenauer werden die Prognosen. Aktualisiere die Integration Spot Forecast, um ein neueres Modell zu erhalten."
     }
   }
 }

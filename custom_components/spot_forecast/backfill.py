@@ -43,9 +43,10 @@ _MAX_H = max(HORIZONS)
 class BackfillResult:
     """What one backfill pass added."""
 
-    imported: int  # runs taken from the bundled file
-    recomputed: int  # runs recomputed on the device
+    imported: int  # runs from the bundled file that were stored
+    recomputed: int  # runs recomputed on the device that were stored
     finalized_days: int  # target days whose forecast statistics this pass wrote
+    error: str | None = None  # why the pass stopped early; None when it completed
 
 
 async def run_backfill(
@@ -55,16 +56,18 @@ async def run_backfill(
 
     Bundled runs cover the target days before the training cutoff; the rest is recomputed,
     from anchors up to six days before the first such target day through yesterday, and
-    keeps target days from today on, which complete later. Anchors whose prices are too
-    short are skipped. A source error ends the pass with what was added so far; the window
-    is then not marked done, so the next start tries again.
+    keeps target days from today on, which complete later. The window's prices are recorded
+    together with the bundled runs, so every row is calibrated with all earlier rows of the
+    window. Anchors whose prices are too short, or whose forecast fails, are skipped. A
+    source error ends the pass with what was added so far (``error`` set); the window is
+    then not marked done, so the next start tries again.
     """
     model, zone = coordinator.model, coordinator.zone
     tz = ZoneInfo(zone.tz)
     today = dt_util.utcnow().astimezone(tz).date()
     first = today - timedelta(days=days)
     start = max(model.train_cutoff, first)  # first recomputed target day
-    finalized: set[date] = set()
+    session = async_get_clientsession(hass)
 
     bundled = await hass.async_add_executor_job(
         runs_from_backfill_file,
@@ -72,68 +75,80 @@ async def run_backfill(
         model.version,
         zone.tz,
     )
-    imported = _merged(
-        coordinator.ledger.runs,
-        [r for r in (_targets_in(run, first, model.train_cutoff) for run in bundled) if r],
-    )
-    finalized |= await coordinator.async_add_history(imported)
-
-    candidates = [start + (i - _MAX_H) * _DAY for i in range((today - start).days + _MAX_H)]
-    anchors = [a for a in candidates if _needs_recompute(coordinator.ledger.runs.get(a), start)]
-    recomputed: list[Run] = []
     try:
-        session = async_get_clientsession(hass)
         market = await fetch_prices(
             session,
             zone.code,
             min(first, start - (_MAX_H + PRICE_HISTORY_DAYS) * _DAY),
             today,
         )
-        prices = hourly_prices(market)
-        finalized |= await coordinator.async_add_history(
-            [], actual=_since(prices, _midnight(first, tz))
-        )
-        if anchors:
+    except SourceError as err:
+        return _stopped(err, BackfillResult(0, 0, 0))
+    prices = hourly_prices(market)
+    in_window = [r for r in (_targets_in(run, first, model.train_cutoff) for run in bundled) if r]
+    imported, finalized = await coordinator.async_add_history(
+        _merged(coordinator.ledger.runs, in_window), actual=_since(prices, _midnight(first, tz))
+    )
+
+    candidates = [start + (i - _MAX_H) * _DAY for i in range((today - start).days + _MAX_H)]
+    anchors = [a for a in candidates if _needs_recompute(coordinator.ledger.runs.get(a), start)]
+    recomputed = 0
+    if anchors:
+        try:
             weather = await fetch_previous_runs(
                 session, zone, max(start - _DAY, anchors[0]), anchors[-1] + _MAX_H * _DAY
             )
-            computed = await hass.async_add_executor_job(
-                _recompute, model, zone, anchors, prices, weather, start
+        except SourceError as err:
+            return _stopped(err, BackfillResult(imported, 0, len(finalized)))
+        runs = []
+        for anchor in anchors:  # one job per anchor: a cancelled backfill stops promptly
+            run = await hass.async_add_executor_job(
+                _recompute, model, zone, anchor, prices, weather, start
             )
-            recomputed = _merged(coordinator.ledger.runs, computed)
-            finalized |= await coordinator.async_add_history(recomputed)
-    except SourceError as err:
-        _LOGGER.warning("Backfill stopped early, it is retried on the next start: %s", err)
-        return BackfillResult(len(imported), len(recomputed), len(finalized))
+            if run is not None:
+                runs.append(run)
+        recomputed, days_written = await coordinator.async_add_history(
+            _merged(coordinator.ledger.runs, runs)
+        )
+        finalized |= days_written
 
     coordinator.mark_backfill_done(days)
-    result = BackfillResult(len(imported), len(recomputed), len(finalized))
+    result = BackfillResult(imported, recomputed, len(finalized))
     _LOGGER.debug("Backfill of %d days done: %s", days, result)
     return result
+
+
+def _stopped(err: SourceError, result: BackfillResult) -> BackfillResult:
+    _LOGGER.warning("Backfill stopped early, it is retried on the next start: %s", err)
+    return replace(result, error=str(err))
 
 
 def _recompute(
     model: ModelFile,
     zone: Zone,
-    anchors: Sequence[date],
+    anchor: date,
     prices: Hourly,
     weather: Mapping[int, Mapping[str, Hourly]],
     first_target: date,
-) -> list[Run]:
-    """One backfill run per anchor, with the target days from ``first_target`` on (blocking)."""
+) -> Run | None:
+    """The backfill run of ``anchor`` with the target days from ``first_target`` on (blocking).
+
+    None when the anchor cannot be forecast: too short prices, or a bug in the forecast,
+    which is logged and skips only this anchor (as a live run keeps the last forecast).
+    """
     tz = ZoneInfo(zone.tz)
-    runs = []
-    for anchor in anchors:
-        known = _until(prices, _midnight(anchor + _DAY, tz))  # what was published by then
-        try:
-            slots = run_forecast(model, anchor, known, weather, zone)
-        except InsufficientHistory as err:  # IncompleteAnchorDay included
-            _LOGGER.debug("Backfill skips anchor %s: %s", anchor, err)
-            continue
-        issued = datetime.combine(anchor, time(ISSUE_HOUR), tz).astimezone(UTC)
-        kept = tuple(s for s in slots if anchor + timedelta(days=s.h) >= first_target)
-        runs.append(Run(anchor, issued, model.version, kept, True))
-    return runs
+    known = _until(prices, _midnight(anchor + _DAY, tz))  # what was published by then
+    try:
+        slots = run_forecast(model, anchor, known, weather, zone)
+    except InsufficientHistory as err:  # IncompleteAnchorDay included
+        _LOGGER.debug("Backfill skips anchor %s: %s", anchor, err)
+        return None
+    except Exception:  # a bug in core: skip this anchor, keep the rest
+        _LOGGER.exception("Backfill forecast for %s failed, skipping it", anchor)
+        return None
+    issued = datetime.combine(anchor, time(ISSUE_HOUR), tz).astimezone(UTC)
+    kept = tuple(s for s in slots if anchor + timedelta(days=s.h) >= first_target)
+    return Run(anchor, issued, model.version, kept, True)
 
 
 def _targets_in(run: Run, first: date, end: date) -> Run | None:

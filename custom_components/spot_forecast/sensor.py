@@ -13,7 +13,7 @@ from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.util import dt as dt_util
 
 from . import SpotForecastConfigEntry
-from .coordinator import SpotForecastCoordinator
+from .coordinator import BACKFILL_STATES, SpotForecastCoordinator
 from .core.output import current_price, day_summaries
 from .entity import SpotEntity
 
@@ -35,6 +35,7 @@ async def async_setup_entry(
             LastRunSensor(coordinator),
             ModelVersionSensor(coordinator),
             ForecastErrorSensor(coordinator),
+            BackfillSensor(coordinator),
             *(DaySensor(coordinator, offset) for offset in range(DAYS)),
         ]
     )
@@ -118,6 +119,32 @@ class ForecastErrorSensor(SpotEntity, SensorEntity):
     def extra_state_attributes(self) -> dict[str, Any]:
         accuracy = self.coordinator.data.accuracy
         return {k: accuracy.get(k) for k in ("mae_h", "peak_mae", "n")}
+
+
+class BackfillSensor(SpotEntity, SensorEntity):
+    """Whether past forecasts were reconstructed for the look-back, and how many."""
+
+    _attr_device_class = SensorDeviceClass.ENUM
+    _attr_options = list(BACKFILL_STATES)
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
+
+    def __init__(self, coordinator: SpotForecastCoordinator) -> None:
+        super().__init__(coordinator, "backfill")
+
+    @property
+    def native_value(self) -> str:
+        return self.coordinator.backfill_state
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        result = self.coordinator.backfill_result
+        return {
+            "days": self.coordinator.backfill_done_days,
+            "imported": None if result is None else result.imported,
+            "recomputed": None if result is None else result.recomputed,
+            "finalized_days": None if result is None else result.finalized_days,
+            "last_error": self.coordinator.backfill_error,
+        }
 
 
 class DaySensor(SpotEntity, SensorEntity):

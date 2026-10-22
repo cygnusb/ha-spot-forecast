@@ -34,7 +34,11 @@ async def test_model_outdated_issue_created_and_cleared(
     assert issue.translation_key == "model_outdated"
     assert issue.severity is ir.IssueSeverity.WARNING
     assert not issue.is_fixable
-    assert issue.translation_placeholders == {"version": model.version, "cutoff": "2026-08-22"}
+    assert issue.translation_placeholders == {
+        "version": model.version,
+        "cutoff": "2026-08-22",
+        "max_age": "60",
+    }
 
     coordinator = entry.runtime_data.coordinator
     coordinator.model = replace(model, train_cutoff=date(2026, 8, 23))
@@ -84,9 +88,11 @@ async def test_diagnostics_contains_model_and_ledger(
     assert ledger["backfill_runs"] == 16
     assert ledger["finalized_days"] > 0
     assert ledger["actual_hours"] > 0
+    assert diag["backfill"]["state"] == "done"
     assert diag["backfill"]["done_days"] == 10
     assert diag["backfill"]["result"]["recomputed"] == 16
-    assert set(diag["backfill"]["result"]) == {"imported", "recomputed", "finalized_days"}
+    assert diag["backfill"]["result"]["error"] is None
+    assert set(diag["backfill"]["result"]) == {"imported", "recomputed", "finalized_days", "error"}
     assert diag["accuracy"]["n"] > 0
     entries = diag["entries"]
     assert len(entries) == 48

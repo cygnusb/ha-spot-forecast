@@ -196,14 +196,15 @@ async def set_up(
 ) -> AsyncIterator[SetUp]:
     """Set up a DE-LU entry at 2026-10-22 10:00; unloaded again after the test.
 
-    Backfill is off unless ``options`` set ``CONF_BACKFILL_DAYS``.
+    Backfill is off unless ``options`` set ``CONF_BACKFILL_DAYS``. With ``wait=False`` a
+    started backfill is not waited for.
     """
     hass = hass_with_recorder
     freezer.move_to(T10)
     entries: list[MockConfigEntry] = []
 
     async def _set_up(
-        options: dict[str, Any] | None = None, entry_id: str | None = None
+        options: dict[str, Any] | None = None, entry_id: str | None = None, wait: bool = True
     ) -> MockConfigEntry:
         entry = MockConfigEntry(
             domain=DOMAIN,
@@ -215,7 +216,7 @@ async def set_up(
         )
         entry.add_to_hass(hass)
         assert await hass.config_entries.async_setup(entry.entry_id)
-        await hass.async_block_till_done(wait_background_tasks=True)
+        await hass.async_block_till_done(wait_background_tasks=wait)
         entries.append(entry)
         return entry
 

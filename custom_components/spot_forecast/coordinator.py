@@ -6,6 +6,7 @@ import asyncio
 from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import date, datetime, time, timedelta
+from functools import partial
 import logging
 from zoneinfo import ZoneInfo
 
@@ -25,12 +26,13 @@ from .const import (
     CONF_ZONE,
     DEFAULT_BACKFILL_DAYS,
     DOMAIN,
+    MAX_BACKFILL_DAYS,
     PRICE_HISTORY_DAYS,
 )
 from .core.features import HORIZONS, Hourly, InsufficientHistory
 from .core.forecast import Slot, run_forecast
 from .core.ingest import MarketSlot, hourly_prices
-from .core.ledger import PRICE, Ledger, Run
+from .core.ledger import PRICE, Ledger, Run, StatRow
 from .core.model import ModelFile
 from .core.output import prices_attribute
 from .core.schedule import choose_anchor, is_stale, next_run
@@ -44,6 +46,21 @@ from .store import ForecastStore
 _LOGGER = logging.getLogger(__name__)
 
 MARKET_KEEP_DAYS = 3  # market slots kept for display and in the Store, before today
+# ledger days kept: the widest backfill window, its anchors' horizons, and a margin
+LEDGER_KEEP_DAYS = MAX_BACKFILL_DAYS + max(HORIZONS) + 14
+
+BACKFILL_OFF = "off"
+BACKFILL_PENDING = "pending"
+BACKFILL_RUNNING = "running"
+BACKFILL_DONE = "done"
+BACKFILL_FAILED = "failed"
+BACKFILL_STATES = (
+    BACKFILL_OFF,
+    BACKFILL_PENDING,
+    BACKFILL_RUNNING,
+    BACKFILL_DONE,
+    BACKFILL_FAILED,
+)
 
 
 @dataclass(frozen=True)
@@ -93,7 +110,9 @@ class SpotForecastCoordinator(DataUpdateCoordinator[SpotData]):
         self._ran = False  # a run succeeded since this setup
         self._backfill_done_days = 0  # the widest backfill window completed so far
         self._backfill_started = False  # one backfill attempt per setup
+        self._backfill_running = False
         self.backfill_result: BackfillResult | None = None  # of this setup's backfill
+        self.backfill_error: str | None = None  # why this setup's backfill failed
 
     @property
     def peak_threshold(self) -> float:
@@ -110,6 +129,25 @@ class SpotForecastCoordinator(DataUpdateCoordinator[SpotData]):
     def backfill_done_days(self) -> int:
         """The widest backfill window (days) completed, 0 if none."""
         return self._backfill_done_days
+
+    @property
+    def _backfill_days(self) -> int:
+        """The backfill window the options ask for; 0 turns the backfill off."""
+        return int(self.config_entry.options.get(CONF_BACKFILL_DAYS, DEFAULT_BACKFILL_DAYS))
+
+    @property
+    def backfill_state(self) -> str:
+        """One of ``BACKFILL_STATES``."""
+        days = self._backfill_days
+        if days <= 0:
+            return BACKFILL_OFF
+        if self._backfill_running:
+            return BACKFILL_RUNNING
+        if self._backfill_done_days >= days:
+            return BACKFILL_DONE
+        if self.backfill_error is not None:
+            return BACKFILL_FAILED
+        return BACKFILL_PENDING
 
     async def _async_setup(self) -> None:
         """Rebuild the last state from the Store before the first run."""
@@ -137,7 +175,7 @@ class SpotForecastCoordinator(DataUpdateCoordinator[SpotData]):
                 raise UpdateFailed(f"no forecast yet and nothing stored: {err}") from err
             _LOGGER.warning("Forecast run failed, keeping the last forecast: %s", err)
         self._write_statistics()
-        self._ledger.prune()  # keeps 200 days: the 180-day backfill window and a margin
+        self._ledger.prune(LEDGER_KEEP_DAYS)
         self._calibrate(now)
         self._save()
         return self._build(now)
@@ -148,14 +186,16 @@ class SpotForecastCoordinator(DataUpdateCoordinator[SpotData]):
         No ``await`` between finalize, the write and the save, so a cancelled task can never
         leave days marked written that were not.
         """
-        long_term_statistics.async_write(
-            self.hass,
-            self._ledger.finalize(
-                self.zone.tz,
-                zone_id=self.zone.slug,
-                default_p90=self.model.p90_offsets,
-                default_p10=self.model.p10_offsets,
-            ),
+        long_term_statistics.async_write(self.hass, self._finalize(self._ledger)())
+
+    def _finalize(self, ledger: Ledger) -> partial[list[StatRow]]:
+        """``ledger.finalize`` with this zone's ids and the model's default offsets."""
+        return partial(
+            ledger.finalize,
+            self.zone.tz,
+            zone_id=self.zone.slug,
+            default_p90=self.model.p90_offsets,
+            default_p10=self.model.p10_offsets,
         )
 
     def _save(self) -> None:
@@ -165,26 +205,36 @@ class SpotForecastCoordinator(DataUpdateCoordinator[SpotData]):
 
     async def async_add_history(
         self, runs: Sequence[Run], actual: Hourly | None = None
-    ) -> set[date]:
+    ) -> tuple[int, set[date]]:
         """Add backfilled runs and past prices (EUR/MWh) and write the statistics they complete.
 
-        Holds the run lock, so it never interleaves with a run. Returns the target days
-        that got forecast statistics.
+        Holds the run lock, so it never interleaves with a run. The rows are built in the
+        executor from a copy of the ledger, whose ``finalized`` is taken over only once the
+        rows are back: cancelled in between, nothing counts as written. Returns how many
+        of ``runs`` were stored and the target days that got forecast statistics.
         """
         async with self._run_lock:
             if actual is not None:
                 self._ledger.record_actual(actual)
+            stored = 0
             for run in runs:
                 self._ledger.add_run(run)
+                stored += self._ledger.runs.get(run.anchor) is run
             before = set(self._ledger.finalized)
-            self._write_statistics()
+            snapshot = Ledger(
+                dict(self._ledger.runs), set(self._ledger.finalized), dict(self._ledger.actual)
+            )
+            rows = await self.hass.async_add_executor_job(self._finalize(snapshot))
+            self._ledger.finalized = snapshot.finalized
+            long_term_statistics.async_write(self.hass, rows)
             now = dt_util.utcnow()
             self._calibrate(now)
             self._save()
             if self.data is not None:
                 self.data = self._build(now)
                 self.async_update_listeners()
-            return {day for day, series in self._ledger.finalized - before if series != PRICE}
+            written = {day for day, series in self._ledger.finalized - before if series != PRICE}
+            return stored, written
 
     @callback
     def mark_backfill_done(self, days: int) -> None:
@@ -303,7 +353,7 @@ class SpotForecastCoordinator(DataUpdateCoordinator[SpotData]):
 
         Once per setup, and only while the option's window is wider than the one done.
         """
-        days = int(self.config_entry.options.get(CONF_BACKFILL_DAYS, DEFAULT_BACKFILL_DAYS))
+        days = self._backfill_days
         if (
             self._backfill_started
             or not self._started
@@ -317,7 +367,17 @@ class SpotForecastCoordinator(DataUpdateCoordinator[SpotData]):
         )
 
     async def _async_backfill(self, days: int) -> None:
-        self.backfill_result = await run_backfill(self.hass, self, days)
+        self._backfill_running = True
+        self.async_update_listeners()
+        try:
+            self.backfill_result = await run_backfill(self.hass, self, days)
+            self.backfill_error = self.backfill_result.error
+        except Exception as err:  # a bug: report it on the sensor, retry on the next start
+            _LOGGER.exception("Backfill failed")
+            self.backfill_error = f"{type(err).__name__}: {err}"
+        finally:
+            self._backfill_running = False
+        self.async_update_listeners()
 
     def _schedule_next_run(self, now: datetime) -> None:
         if not self._started:  # a run that was still going during unload

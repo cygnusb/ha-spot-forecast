@@ -8,24 +8,30 @@ recorded previous runs (see ``conftest.Sources``).
 
 from __future__ import annotations
 
+import asyncio
 from datetime import UTC, date, datetime, time, timedelta
 import gzip
 import json
+import logging
+from typing import Any
 from zoneinfo import ZoneInfo
 
 from conftest import PREVIOUS_RUNS_URL, T10, SetUp, Sources, advance, stat_rows
 from freezegun.api import FrozenDateTimeFactory
+from homeassistant.config_entries import ConfigEntryState
 from homeassistant.core import HomeAssistant
 import numpy as np
 import pytest
 from pytest_homeassistant_custom_component.test_util.aiohttp import AiohttpClientMocker
 
+from custom_components.spot_forecast import backfill as backfill_module
 from custom_components.spot_forecast.const import CONF_BACKFILL_DAYS, DOMAIN
 from custom_components.spot_forecast.core.ledger import Ledger
 from custom_components.spot_forecast.model_loader import MODELS_DIR
 
 BERLIN = ZoneInfo("Europe/Berlin")
 TODAY = date(2026, 10, 22)
+BACKFILL = "sensor.spot_forecast_de_lu_backfill_status"
 
 
 def _hours(day: date) -> list[datetime]:
@@ -138,6 +144,10 @@ async def test_backfill_source_error_keeps_imports_and_retries_on_next_start(
     assert coordinator.backfill_done_days == 0
     assert coordinator.backfill_result.imported > 0
     assert coordinator.backfill_result.recomputed == 0
+    state = hass.states.get(BACKFILL)
+    assert state.state == "failed"
+    assert "previous-runs-api.open-meteo.com" in state.attributes["last_error"]
+    assert state.attributes["days"] == 0
     h1 = await stat_rows(hass, "spot_forecast:de_lu_forecast_h1")
     assert len(_rows_of(h1, date(2026, 9, 25))) == 24  # the bundled import stays
 
@@ -149,6 +159,7 @@ async def test_backfill_source_error_keeps_imports_and_retries_on_next_start(
     assert coordinator.backfill_result.recomputed > 0
     h1 = await stat_rows(hass, "spot_forecast:de_lu_forecast_h1")
     assert len(_rows_of(h1, date(2026, 10, 5))) == 24
+    assert hass.states.get(BACKFILL).state == "done"
 
 
 async def test_backfill_waits_for_a_successful_run(
@@ -165,11 +176,13 @@ async def test_backfill_waits_for_a_successful_run(
     await hass.async_block_till_done(wait_background_tasks=True)  # the update reloads
     coordinator = entry.runtime_data.coordinator
     assert coordinator.backfill_result is None
+    assert hass.states.get(BACKFILL).state == "pending"
 
     sources.serve()
     await advance(hass, freezer, T10 + timedelta(minutes=15))  # weather run 08:15 UTC
     assert coordinator.backfill_result is not None
     assert coordinator.backfill_done_days == 10
+    assert hass.states.get(BACKFILL).state == "done"
 
 
 async def test_store_without_backfill_record_backfills(
@@ -234,3 +247,133 @@ async def test_backfilled_calibration_uses_only_earlier_rows(
         s.time: round(max(s.p90_raw + default, s.median) / 1000, 5) for s in run.slots if s.h == 1
     }
     assert _rows_of(peak_h1, first) == pytest.approx(expected)
+
+
+async def test_bundled_rows_use_every_earlier_row_of_the_window(
+    hass_with_recorder: HomeAssistant, set_up: SetUp
+) -> None:
+    """60-day window: a bundled day inside the 40-day price history the first run fetched
+    is calibrated with the window's older rows too, as if every actual came first."""
+    hass = hass_with_recorder
+    entry = await set_up({CONF_BACKFILL_DAYS: 60})
+    coordinator = entry.runtime_data.coordinator
+    ledger = coordinator.ledger
+    day = date(2026, 9, 15)  # bundled; the first run's prices start 2026-09-12
+    offset, n = _p90_offset(ledger, 1, day - timedelta(days=1))
+    assert n >= 200
+    assert offset != pytest.approx(coordinator.model.p90_offsets[1], abs=1e-3)
+
+    pure = Ledger(
+        runs={a: r for a, r in ledger.runs.items() if r.backfill}, actual=dict(ledger.actual)
+    )
+    rows = pure.finalize(
+        "Europe/Berlin",
+        zone_id="de_lu",
+        default_p90=coordinator.model.p90_offsets,
+        default_p10=coordinator.model.p10_offsets,
+    )
+    hours = set(_hours(day))
+    expected = {
+        r.start: r.value
+        for r in rows
+        if r.statistic_id == "spot_forecast:de_lu_peak_risk_h1" and r.start in hours
+    }
+    assert len(expected) == 24
+    peak_h1 = await stat_rows(hass, "spot_forecast:de_lu_peak_risk_h1")
+    assert _rows_of(peak_h1, day) == pytest.approx(expected)
+
+
+async def test_backfill_status_sensor(hass_with_recorder: HomeAssistant, set_up: SetUp) -> None:
+    hass = hass_with_recorder
+    entry = await set_up()
+    assert hass.states.get(BACKFILL).state == "off"
+    assert hass.states.get(BACKFILL).attributes["options"] == [
+        "off",
+        "pending",
+        "running",
+        "done",
+        "failed",
+    ]
+
+    hass.config_entries.async_update_entry(entry, options={CONF_BACKFILL_DAYS: 10})
+    await hass.async_block_till_done(wait_background_tasks=True)  # the update reloads
+    state = hass.states.get(BACKFILL)
+    assert state.state == "done"
+    result = entry.runtime_data.coordinator.backfill_result
+    assert state.attributes["days"] == 10
+    assert state.attributes["imported"] == 0
+    assert state.attributes["recomputed"] == 16
+    assert state.attributes["finalized_days"] == result.finalized_days > 0
+    assert state.attributes["last_error"] is None
+
+
+async def test_backfill_skips_an_anchor_whose_forecast_fails(
+    hass_with_recorder: HomeAssistant,
+    set_up: SetUp,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    hass = hass_with_recorder
+    forecast = backfill_module.run_forecast
+
+    def broken_once(model: Any, anchor: date, *args: Any) -> Any:
+        if anchor == date(2026, 10, 10):
+            raise IndexError("bug in core")
+        return forecast(model, anchor, *args)
+
+    monkeypatch.setattr(backfill_module, "run_forecast", broken_once)
+    entry = await set_up({CONF_BACKFILL_DAYS: 10})
+
+    coordinator = entry.runtime_data.coordinator
+    assert coordinator.backfill_result.recomputed == 15  # 16 anchors, one skipped
+    assert date(2026, 10, 10) not in coordinator.ledger.runs
+    assert hass.states.get(BACKFILL).state == "done"
+    errors = [r for r in caplog.records if r.levelno == logging.ERROR]
+    assert errors and errors[0].exc_info[0] is IndexError
+
+
+async def test_backfill_bug_sets_failed_state(
+    hass_with_recorder: HomeAssistant, set_up: SetUp, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    hass = hass_with_recorder
+
+    def unreadable(*args: Any) -> Any:
+        raise ValueError("unsupported backfill format 2")
+
+    monkeypatch.setattr(backfill_module, "runs_from_backfill_file", unreadable)
+    entry = await set_up({CONF_BACKFILL_DAYS: 10})
+
+    assert entry.state is ConfigEntryState.LOADED
+    state = hass.states.get(BACKFILL)
+    assert state.state == "failed"
+    assert state.attributes["last_error"] == "ValueError: unsupported backfill format 2"
+    assert entry.runtime_data.coordinator.backfill_done_days == 0
+
+
+async def test_unload_stops_a_running_backfill(
+    hass_with_recorder: HomeAssistant, set_up: SetUp, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Unload cancels the backfill (it never resumes); the next start does it from scratch."""
+    hass = hass_with_recorder
+    release = asyncio.Event()
+    fetch = backfill_module.fetch_previous_runs
+
+    async def held(*args: Any) -> Any:
+        await release.wait()
+        return await fetch(*args)
+
+    monkeypatch.setattr(backfill_module, "fetch_previous_runs", held)
+    entry = await set_up({CONF_BACKFILL_DAYS: 30}, wait=False)
+    assert hass.states.get(BACKFILL).state == "running"
+
+    assert await hass.config_entries.async_unload(entry.entry_id)
+    await hass.async_block_till_done(wait_background_tasks=True)  # hangs if it survived
+    assert not release.is_set()
+
+    monkeypatch.setattr(backfill_module, "fetch_previous_runs", fetch)
+    assert await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_block_till_done(wait_background_tasks=True)
+    coordinator = entry.runtime_data.coordinator
+    assert coordinator.backfill_done_days == 30
+    assert coordinator.backfill_result.recomputed > 0
+    assert hass.states.get(BACKFILL).state == "done"

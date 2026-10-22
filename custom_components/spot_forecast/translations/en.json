@@ -45,6 +45,16 @@
       "forecast_error": {
         "name": "Forecast error"
       },
+      "backfill": {
+        "name": "Backfill status",
+        "state": {
+          "off": "Off",
+          "pending": "Pending",
+          "running": "Running",
+          "done": "Done",
+          "failed": "Failed"
+        }
+      },
       "day_0": {
         "name": "Day 0"
       },
@@ -79,7 +89,7 @@
   "issues": {
     "model_outdated": {
       "title": "Spot Forecast model is outdated",
-      "description": "The bundled forecast model {version} was trained on data up to {cutoff}, more than 60 days ago. Forecasts get less accurate as the market changes. Update the Spot Forecast integration to get a newer model."
+      "description": "The bundled forecast model {version} was trained on data up to {cutoff}, more than {max_age} days ago. Forecasts get less accurate as the market changes. Update the Spot Forecast integration to get a newer model."
     }
   }
 }
