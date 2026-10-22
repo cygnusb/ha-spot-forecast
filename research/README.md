@@ -155,3 +155,5 @@ Population-weighted regional holidays (`hol_share`, e.g. Corpus Christi 0.64), b
 and the Christmas week (`hol_` features) changed nothing (MAE 2.14 → 2.15, national holiday
 bias +0.93 → +0.73, 1 May unchanged), so they stay off (`--drop` default includes `hol_`).
 With ~25 holidays in the data, holiday × strong sun is too rare to learn.
+
+**Production pipeline:** `training/` (`python -m training.train`) builds the shipped model file, the out-of-sample backfill and the accuracy report on the shared `core` features; this directory stays the research record.
