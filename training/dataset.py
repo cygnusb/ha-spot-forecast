@@ -20,7 +20,7 @@ from core.features import (
 )
 from core.zones import DE_LU
 
-from .fetch import OFFSETS
+from .constants import OFFSETS
 
 # Open-Meteo previous-runs radiation at lead offsets >= 6 days is wrong before this date
 # (shifted/scaled by 0.5-1.6x; ECMWF switches to coarser output steps at 144 h). Masked.

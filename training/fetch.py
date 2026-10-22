@@ -22,11 +22,9 @@ import requests
 
 from core.zones import DE_LU
 
+from .constants import OFFSETS, WEATHER_MODEL
+
 START = dt.date(2024, 3, 1)
-# Lead offsets in days. Target day D+h is forecast with offset h+1, so every value comes
-# from a model run that was available at the 06:00 issue time on day D.
-OFFSETS = range(2, 8)
-WEATHER_MODEL = "ecmwf_ifs025"
 
 
 def _get(url: str, params: dict, retries: int = 5) -> dict:

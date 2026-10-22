@@ -12,6 +12,7 @@ from zoneinfo import ZoneInfo
 import numpy as np
 import pytest
 
+pytest.importorskip("pandas")
 from core.features import FEATURE_NAMES, Hourly, build_features, daily_stats
 from core.zones import DE_LU
 from training.dataset import build_dataset, load_raw

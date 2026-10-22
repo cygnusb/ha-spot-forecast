@@ -11,6 +11,8 @@ from zoneinfo import ZoneInfo
 
 import pytest
 
+pytest.importorskip("pandas")
+pytest.importorskip("sklearn")
 from core.model import load_model
 
 RESEARCH = Path(

@@ -2,6 +2,9 @@
 
 from datetime import date
 
+import pytest
+
+pytest.importorskip("requests")
 from training.fetch import _is_complete, month_chunks
 
 
