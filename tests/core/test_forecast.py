@@ -16,7 +16,12 @@ def test_run_forecast_matches_manual(golden, tiny_model_file):
     slots = run_forecast(m, case.anchor, case.prices, case.weather, DE_LU, case.capacity)
     assert len(slots) == len(case.times) and {s.h for s in slots} == {1, 2, 3, 4, 5, 6}
     fm = build_features(
-        case.anchor, case.prices, daily_stats(case.prices, DE_LU), case.weather, case.capacity, DE_LU
+        case.anchor,
+        case.prices,
+        daily_stats(case.prices, DE_LU),
+        case.weather,
+        case.capacity,
+        DE_LU,
     )
     assert [s.time for s in slots] == fm.times
     for name, got in (("median", "median"), ("p90", "p90_raw"), ("p10", "p10_raw")):
@@ -50,7 +55,9 @@ def test_conformal_offset_low_quantile():
 def test_conformal_offset_ignores_nan():
     r = np.concatenate([np.arange(200, dtype=float), np.full(50, np.nan)])
     assert conformal_offset(r, default=0) == pytest.approx(np.quantile(np.arange(200), 0.9))
-    assert conformal_offset(np.concatenate([np.ones(150), np.full(100, np.nan)]), default=7.0) == 7.0
+    assert (
+        conformal_offset(np.concatenate([np.ones(150), np.full(100, np.nan)]), default=7.0) == 7.0
+    )
 
 
 def test_peak_risk_never_below_median():
