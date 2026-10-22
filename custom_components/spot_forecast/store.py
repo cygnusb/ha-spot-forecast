@@ -47,7 +47,7 @@ class ForecastStore:
                 market,
                 None if last is None else datetime.fromisoformat(last),
             )
-        except (KeyError, TypeError, ValueError) as err:
+        except Exception as err:  # noqa: BLE001 - any unreadable layout starts empty
             _LOGGER.warning(
                 "Stored forecast data %s cannot be read, starting empty: %s: %s",
                 self._store.key,
