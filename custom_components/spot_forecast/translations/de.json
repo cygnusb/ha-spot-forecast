@@ -30,5 +30,50 @@
         }
       }
     }
+  },
+  "entity": {
+    "sensor": {
+      "price": {
+        "name": "Preis"
+      },
+      "last_run": {
+        "name": "Letzter Lauf"
+      },
+      "model_version": {
+        "name": "Modellversion"
+      },
+      "forecast_error": {
+        "name": "Prognosefehler"
+      },
+      "day_0": {
+        "name": "Tag 0"
+      },
+      "day_1": {
+        "name": "Tag 1"
+      },
+      "day_2": {
+        "name": "Tag 2"
+      },
+      "day_3": {
+        "name": "Tag 3"
+      },
+      "day_4": {
+        "name": "Tag 4"
+      },
+      "day_5": {
+        "name": "Tag 5"
+      },
+      "day_6": {
+        "name": "Tag 6"
+      }
+    },
+    "binary_sensor": {
+      "peak_risk": {
+        "name": "Preisspitzen-Risiko"
+      },
+      "negative_price": {
+        "name": "Negativer Preis"
+      }
+    }
   }
 }

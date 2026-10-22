@@ -5,13 +5,17 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from homeassistant.config_entries import ConfigEntry
+from homeassistant.const import Platform
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import ConfigEntryError
 
 from .const import CONF_ZONE
+from .coordinator import SpotForecastCoordinator
 from .core.model import ModelFile, ModelMismatch
 from .core.zones import ZONES
 from .model_loader import load_bundled
+
+PLATFORMS = [Platform.SENSOR, Platform.BINARY_SENSOR]
 
 
 @dataclass
@@ -20,13 +24,14 @@ class SpotForecastRuntimeData:
 
     model: ModelFile
     backfill: bytes  # raw gzip bytes of the bundled backfill file
+    coordinator: SpotForecastCoordinator
 
 
 type SpotForecastConfigEntry = ConfigEntry[SpotForecastRuntimeData]
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: SpotForecastConfigEntry) -> bool:
-    """Load the zone's bundled model."""
+    """Load the zone's bundled model, run (or restore) the forecast and add the entities."""
     zone = entry.data[CONF_ZONE]
     if zone not in ZONES:
         raise ConfigEntryError(f"unsupported zone {zone}")
@@ -34,8 +39,14 @@ async def async_setup_entry(hass: HomeAssistant, entry: SpotForecastConfigEntry)
         model, backfill = await hass.async_add_executor_job(load_bundled, zone)
     except (OSError, ModelMismatch) as e:
         raise ConfigEntryError(f"bundled model for {zone} cannot be loaded: {e}") from e
-    entry.runtime_data = SpotForecastRuntimeData(model=model, backfill=backfill)
+    coordinator = SpotForecastCoordinator(hass, entry, model)
+    await coordinator.async_config_entry_first_refresh()
+    entry.runtime_data = SpotForecastRuntimeData(
+        model=model, backfill=backfill, coordinator=coordinator
+    )
+    coordinator.async_start()
     entry.async_on_unload(entry.add_update_listener(_async_reload_on_update))
+    await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
     return True
 
 
@@ -45,5 +56,5 @@ async def _async_reload_on_update(hass: HomeAssistant, entry: SpotForecastConfig
 
 
 async def async_unload_entry(hass: HomeAssistant, entry: SpotForecastConfigEntry) -> bool:
-    """Nothing to tear down yet; the update listener goes via ``async_on_unload``."""
-    return True
+    """Remove the entities; timers, Store flush and listener go via ``async_on_unload``."""
+    return await hass.config_entries.async_unload_platforms(entry, PLATFORMS)

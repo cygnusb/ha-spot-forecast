@@ -3,12 +3,15 @@
 from __future__ import annotations
 
 import ast
+from datetime import datetime
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 from homeassistant import config_entries
 from homeassistant.config_entries import ConfigEntryState
 from homeassistant.core import HomeAssistant
 from homeassistant.data_entry_flow import FlowResultType
+import pytest
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
 from custom_components.spot_forecast.const import (
@@ -19,6 +22,12 @@ from custom_components.spot_forecast.const import (
 )
 
 CONFIG_FLOW = Path(__file__).parent.parent / "custom_components" / DOMAIN / "config_flow.py"
+
+
+@pytest.fixture
+def recorded_sources(sources, freezer) -> None:
+    """Setting an entry up runs the forecast: serve the recorded payloads at their date."""
+    freezer.move_to(datetime(2026, 10, 22, 10, tzinfo=ZoneInfo("Europe/Berlin")))
 
 
 def _entry() -> MockConfigEntry:
@@ -34,7 +43,9 @@ def _default(schema, key: str):
     raise AssertionError(f"{key} not in schema")
 
 
-async def test_user_flow_creates_entry(hass_with_recorder: HomeAssistant) -> None:
+async def test_user_flow_creates_entry(
+    hass_with_recorder: HomeAssistant, recorded_sources: None
+) -> None:
     hass = hass_with_recorder
     result = await hass.config_entries.flow.async_init(
         DOMAIN, context={"source": config_entries.SOURCE_USER}
@@ -68,7 +79,7 @@ async def test_second_entry_aborts(hass_with_recorder: HomeAssistant) -> None:
 
 
 async def test_options_flow_saves_threshold_and_backfill(
-    hass_with_recorder: HomeAssistant,
+    hass_with_recorder: HomeAssistant, recorded_sources: None
 ) -> None:
     hass = hass_with_recorder
     entry = _entry()
@@ -110,7 +121,9 @@ async def test_options_flow_falls_back_without_runtime_data(
     assert _default(result["data_schema"], CONF_PEAK_THRESHOLD) == 15.0
 
 
-async def test_setup_and_unload_entry(hass_with_recorder: HomeAssistant) -> None:
+async def test_setup_and_unload_entry(
+    hass_with_recorder: HomeAssistant, recorded_sources: None
+) -> None:
     hass = hass_with_recorder
     entry = _entry()
     entry.add_to_hass(hass)
