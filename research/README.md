@@ -76,7 +76,22 @@ The mean MAE hides the peaks: they are 3 % of the hours but 12 % of the absolute
 Even perfect knowledge of German load and renewables leaves peaks ~4 ct too low, so part of
 the peak height is not explained by DE residual load (imports, outages, scarcity bidding).
 
-A P90 quantile model (`--quantile 0.9`) works as a peak warning: "P90 > 21 ct" flags
-65 % (D+1) … 45 % (D+6) of peak hours with 46 … 30 % precision; the median forecast flags only
-27 … 17 %. P90 is under-dispersed out of sample (25 % of hours exceed it instead of 10 %)
-and needs recalibration.
+Further oracle/variant runs, peak MAE D+1 (squared-error loss):
+
+| variant | peak MAE D+1 | peak bias D+1 |
+|---|---|---|
+| + actual DE cross-border flows | 5.73 | −3.8 |
+| + actual load/residual load of FR, NL, AT, CH, PL, DK | 5.76 | −3.8 |
+| smaller leaves (`--min-leaf 10`, no oracle) | 6.11 | −4.4 |
+| volatility-scaled target (`--target z`, no oracle) | 6.45 | −5.1 |
+
+None of these closes the gap: realised neighbour load and flows add nothing for peak height.
+
+**Decision value:** peak *timing* is caught. Regret of discharging in the forecast's 4 dearest
+hours instead of the true ones (`regret dear4`): 0.29 ct (D+1) … 0.59 ct (D+6), vs.
+0.84–1.05 for the naive baselines; the true 4 dearest hours average 5.9 ct above the daily mean.
+
+**Peak warning:** a P90 quantile model (`--quantile 0.9`) is under-dispersed out of sample
+(25 % exceedance). With a rolling conformal offset (trailing 56 days' 90 % quantile of
+`price − P90`, known at issue time) exceedance is 12 %, and "P90 > 21 ct" flags 80 % (D+1) …
+67 % (D+6) of peak hours with 39 … 26 % precision (median forecast: 27 … 17 % recall).

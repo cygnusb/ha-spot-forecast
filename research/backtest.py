@@ -81,9 +81,10 @@ def load_public_power(country: str = "de") -> pd.DataFrame:
     return pd.DataFrame(
         {
             "load": g["Load"],
-            "wind": g["Wind onshore"] + g["Wind offshore"],
-            "solar": g["Solar"],
+            "wind": g.get("Wind onshore", 0) + g.get("Wind offshore", 0),
+            "solar": g.get("Solar", 0),
             "residual": g["Residual load"],
+            "cross_border": g["Cross border electricity trading"],
         }
     )
 
@@ -219,10 +220,18 @@ NON_FEATURES = {"price", "target_date", "issue_date", "y"}
 
 
 def walk_forward(
-    df: pd.DataFrame, test_start: str, loss: str, drop: list[str] | None = None, quantile: float | None = None
+    df: pd.DataFrame,
+    test_start: str,
+    loss: str,
+    drop: list[str] | None = None,
+    quantile: float | None = None,
+    min_leaf: int = 40,
+    target: str = "diff",
 ) -> pd.DataFrame:
     df = df.copy()
-    df["y"] = df["price"] - df["D_mean7"]
+    # "z": deviation scaled by recent volatility, so peak height can grow with the regime
+    scale = df["D_std7"].clip(lower=5) if target == "z" else 1.0
+    df["y"] = (df["price"] - df["D_mean7"]) / scale
     features = [c for c in df.columns if c not in NON_FEATURES and not any(d in c for d in drop or [])]
     preds = []
     months = pd.period_range(test_start, df["issue_date"].max(), freq="M")
@@ -238,14 +247,15 @@ def walk_forward(
             learning_rate=0.05,
             max_iter=600,
             max_leaf_nodes=31,
-            min_samples_leaf=40,
+            min_samples_leaf=min_leaf,
             l2_regularization=1.0,
             categorical_features=["dow", "issue_dow"],
             random_state=0,
         )
         model.fit(train[features], train["y"])
         p = test[["h", "target_date", "issue_date", "price", "p_lastday", "p_lastweek"]].copy()
-        p["pred"] = model.predict(test[features]) + test["D_mean7"].values
+        s = test["D_std7"].clip(lower=5).values if target == "z" else 1.0
+        p["pred"] = model.predict(test[features]) * s + test["D_mean7"].values
         preds.append(p)
         print(f"  {m}: train={len(train):>7} test={len(test):>6}")
     return pd.concat(preds)
@@ -282,6 +292,7 @@ def report(p: pd.DataFrame) -> pd.DataFrame:
         rows[(name, "hit cheap4")] = tk["hit_cheap"]
         rows[(name, "hit dear4")] = tk["hit_dear"]
         rows[(name, "regret cheap4 ct")] = tk["regret_cheap"] / 10
+        rows[(name, "regret dear4 ct")] = tk["regret_dear"] / 10
         peak = p["price"] > p["price"].quantile(0.97)
         q = p[peak]
         rows[(name, "peak MAE ct")] = (q[col] - q["price"]).abs().groupby(q["h"]).mean() / 10
@@ -299,6 +310,9 @@ def main() -> None:
     ap.add_argument("--drop", nargs="*", default=["nbp_"], help="drop feature columns containing these substrings")
     ap.add_argument("--tag", default="")
     ap.add_argument("--quantile", type=float, default=None, help="fit a quantile model instead (e.g. 0.9)")
+    ap.add_argument("--min-leaf", type=int, default=40)
+    ap.add_argument("--target", choices=["diff", "z"], default="diff")
+    ap.add_argument("--oracle-countries", nargs="*", default=[], help="with --oracle: also neighbours' actuals")
     ap.add_argument("--oracle", action="store_true", help="DIAGNOSTIC ONLY: add actual load/generation of the target hour")
     args = ap.parse_args()
 
@@ -309,8 +323,11 @@ def main() -> None:
     df = build_samples(prices, weather, cap, nb_prices)
     if args.oracle:
         df = df.join(load_public_power().add_prefix("oracle_"))
+        for c in args.oracle_countries:
+            nb = load_public_power(c)[["load", "residual", "cross_border"]]
+            df = df.join(nb.add_prefix(f"oracle_{c}_"))
     print(f"samples: {len(df)}  issue days {df.issue_date.min().date()}..{df.issue_date.max().date()}")
-    p = walk_forward(df, args.test_start, args.loss, args.drop, args.quantile)
+    p = walk_forward(df, args.test_start, args.loss, args.drop, args.quantile, args.min_leaf, args.target)
     tag = args.tag or args.loss
     p.to_parquet(OUT / f"predictions_{tag}.parquet")
     pd.set_option("display.width", 200)

@@ -162,4 +162,5 @@ if __name__ == "__main__":
     fetch_weather(NEIGHBOR_POINTS, NEIGHBOR_VARS)
     for zone in NEIGHBOR_ZONES:
         fetch_prices(zone)
-    fetch_public_power("de")
+    for country in ["de", "fr", "nl", "at", "ch", "pl", "dk"]:
+        fetch_public_power(country)
