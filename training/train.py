@@ -112,6 +112,32 @@ def peak_threshold(prices: Hourly, cutoff: date) -> float:
     return float(np.nanpercentile(prices.window(first, hours), PEAK_PERCENTILE))
 
 
+def _last_valid_hour(s: Hourly) -> datetime | None:
+    idx = np.flatnonzero(~np.isnan(s.values))
+    return s.start + timedelta(hours=int(idx[-1])) if len(idx) else None
+
+
+def check_data_reaches(raw: RawData, cutoff: date) -> None:
+    """Fail if prices or any weather series end before the day ``cutoff - 1``.
+
+    A gap at the end would otherwise only drop rows (no actual price, no history) and the
+    model would silently be trained on less data than its version name promises.
+    """
+    last_day = cutoff - timedelta(days=1)
+    need = _local_midnight_utc(last_day)
+    series = {"prices": raw.prices}
+    for offset, by_name in sorted(raw.weather.items()):
+        series.update({f"weather {name} (offset {offset})": s for name, s in by_name.items()})
+    for name, s in series.items():
+        last = _last_valid_hour(s)
+        if last is None or last < need:
+            ends = "has no data" if last is None else f"ends {last:%Y-%m-%d %H:%M} UTC"
+            raise ValueError(
+                f"{name} {ends}, before {last_day} (the day before cutoff {cutoff}); "
+                "refetch the raw data or choose an earlier cutoff"
+            )
+
+
 def capacity_at(raw: RawData, cutoff: date) -> dict[str, float]:
     """Installed capacity of the last training anchor's month (the day before the cutoff)."""
     month = f"{cutoff - timedelta(days=1):%Y-%m}"
@@ -161,6 +187,7 @@ def run(argv: list[str], max_iter: int = 600) -> None:
     version = f"{ZONE}-{cutoff:%Y-%m}"
 
     raw = load_raw(args.raw)
+    check_data_reaches(raw, cutoff)
     ds = build_training_data(raw, cutoff)
     print(f"rows: {len(ds.y_price)}  target days {min(ds.target_date)}..{max(ds.target_date)}")
     # earliest issue day whose D+6 target is in the backfill window

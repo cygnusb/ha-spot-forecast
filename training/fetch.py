@@ -3,7 +3,8 @@
 Sources: Energy-Charts day-ahead prices DE-LU (data from SMARD, CC BY 4.0), Energy-Charts
 installed capacity, Open-Meteo Previous Runs API (archived ECMWF IFS 0.25 forecasts).
 Same layout as research/data/raw: prices/DE-LU/*.json, weather/<point>_<YYYY-MM>.json,
-installed_power.json. Finished chunks are cached; chunks near the end are refetched.
+installed_power.json. Chunks whose cached data reaches the chunk end are reused; chunks near
+the end are refetched.
 
 Usage: python -m training.fetch --raw training/data/raw [--end YYYY-MM-DD]
 """
@@ -51,9 +52,42 @@ def month_chunks(
         cur = nxt
 
 
+# Weather hours are labelled at their start, so a full chunk ends at 23:00 UTC of its last day.
+_END_TOLERANCE = dt.timedelta(hours=1)
+
+
+def _last_timestamp(path: Path) -> dt.datetime | None:
+    """Last UTC time with data in a cached Energy-Charts or Open-Meteo file, else None."""
+    try:
+        doc = json.loads(path.read_text())
+        if "unix_seconds" in doc:
+            times = [
+                t for t, v in zip(doc["unix_seconds"], doc["price"], strict=True) if v is not None
+            ]
+            return dt.datetime.fromtimestamp(max(times), dt.UTC) if times else None
+        hourly = doc["hourly"]
+        columns = [v for k, v in hourly.items() if k != "time"]
+        times = [
+            t
+            for t, *row in zip(hourly["time"], *columns, strict=True)
+            if any(x is not None for x in row)
+        ]
+        return dt.datetime.fromisoformat(max(times)).replace(tzinfo=dt.UTC) if times else None
+    except (OSError, ValueError, KeyError, TypeError):
+        return None
+
+
 def _is_complete(path: Path, chunk_end: dt.date, end: dt.date) -> bool:
-    # Chunks touching the last few days are refetched so late data gets filled in.
-    return path.exists() and chunk_end < end - dt.timedelta(days=3)
+    """A cached chunk is reused only if its data reaches the chunk end.
+
+    A chunk fetched while still open stops early and must be fetched again once it has
+    closed. Chunks touching the last few days are refetched so late data gets filled in.
+    """
+    if chunk_end >= end - dt.timedelta(days=3):
+        return False
+    last = _last_timestamp(path)
+    chunk_stop = dt.datetime.combine(chunk_end + dt.timedelta(days=1), dt.time(), dt.UTC)
+    return last is not None and last >= chunk_stop - _END_TOLERANCE
 
 
 def fetch_prices(raw: Path, end: dt.date, start: dt.date = START) -> None:

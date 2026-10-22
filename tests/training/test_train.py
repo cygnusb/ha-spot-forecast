@@ -2,13 +2,14 @@
 
 from __future__ import annotations
 
-from datetime import date, datetime
+from datetime import UTC, date, datetime, timedelta
 import gzip
 import json
 import os
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
+import numpy as np
 import pytest
 
 pytest.importorskip("pandas")
@@ -101,3 +102,45 @@ def test_capacity_is_the_last_training_anchor_month():
     assert capacity_at(raw, date(2026, 10, 15)) == {"cap_solar": 2.0}
     with pytest.raises(ValueError, match="2026-11"):
         capacity_at(raw, date(2026, 11, 2))
+
+
+def _raw_until(price_last: datetime, weather_last: datetime):
+    """Synthetic raw data: hourly prices and one weather series up to the given hours."""
+    from core.features import Hourly
+    from training.dataset import RawData
+
+    start = datetime(2026, 8, 1, tzinfo=UTC)
+
+    def series(last: datetime) -> Hourly:
+        n = int((last - start) / timedelta(hours=1)) + 1
+        return Hourly(start, np.append(np.ones(n), [np.nan] * 5))  # trailing NaN is no data
+
+    return RawData(
+        prices=series(price_last), weather={2: {"nrw__wind": series(weather_last)}}, capacity={}
+    )
+
+
+def test_check_data_reaches_the_day_before_cutoff():
+    from training.train import check_data_reaches
+
+    # 2026-09-30 00:00 Europe/Berlin is 2026-09-29 22:00 UTC
+    reaches = datetime(2026, 9, 29, 22, tzinfo=UTC)
+    check_data_reaches(_raw_until(reaches, reaches), date(2026, 10, 1))
+    short = reaches - timedelta(hours=1)
+    with pytest.raises(ValueError, match=r"prices ends 2026-09-29 21:00 UTC, before 2026-09-30"):
+        check_data_reaches(_raw_until(short, reaches), date(2026, 10, 1))
+    with pytest.raises(ValueError, match=r"weather nrw__wind \(offset 2\) ends"):
+        check_data_reaches(_raw_until(reaches, short), date(2026, 10, 1))
+
+
+def test_run_fails_when_raw_data_ends_before_cutoff(monkeypatch, tmp_path):
+    import training.train as train
+
+    monkeypatch.setattr(
+        train, "load_raw", lambda path: _raw_until(*[datetime(2026, 9, 20, tzinfo=UTC)] * 2)
+    )
+    with pytest.raises(ValueError, match="refetch the raw data"):
+        train.run(
+            ["--raw", str(tmp_path), "--out", str(tmp_path / "out"), "--cutoff", "2026-10-01"]
+        )
+    assert not (tmp_path / "out").exists()
