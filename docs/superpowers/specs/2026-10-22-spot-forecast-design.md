@@ -314,8 +314,8 @@ them as disabled-by-default entities.)*
 
 ## Dashboard cards (Plotly Graph Card, variant A)
 
-The mock-ups with real backtest data:
-<https://claude.ai/artifact/KwZQSij9EHuMFRoFhhP8VV> (variant A "Verlauf").
+Chosen from three mock-ups built with real backtest data (variant A
+"Verlauf"; the others were day tiles and a calendar heatmap).
 Shipped as `examples/plotly_forecast.yaml` and `examples/plotly_lookback.yaml`
 for `custom:plotly-graph`, with screenshots in light and dark mode in the
 README and on the website, as `ha-netze-bw` does.
