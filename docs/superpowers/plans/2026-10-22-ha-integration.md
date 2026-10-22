@@ -14,7 +14,7 @@
 
 ## Global Constraints
 
-- `manifest.json`: `domain "spot_forecast"`, `name "Spot Forecast"`, `codeowners ["@cygnusb"]`, `config_flow true`, `dependencies ["recorder"]`, `documentation "https://github.com/cygnusb/ha-spot-forecast"`, `issue_tracker "https://github.com/cygnusb/ha-spot-forecast/issues"`, `integration_type "service"`, `iot_class "cloud_polling"`, `requirements []`, `version "0.1.0"`, `loggers ["custom_components.spot_forecast"]`.
+- `manifest.json`: `domain "spot_forecast"`, `name "Spot Forecast"`, `codeowners ["@cygnusb"]`, `config_flow true`, `dependencies ["recorder"]`, `documentation "https://github.com/cygnusb/ha-spot-forecast"`, `issue_tracker "https://github.com/cygnusb/ha-spot-forecast/issues"`, `integration_type "service"`, `iot_class "cloud_polling"`, `requirements ["numpy"]` (unpinned), `version "0.1.0"`, `loggers ["custom_components.spot_forecast"]`.
 - Minimum HA 2024.11.0: no APIs newer than that without a fallback. Options flow keeps the entry as `self._entry`, never `self.config_entry`. Use `entry.runtime_data`, never `hass.data`.
 - Everything in `core/` stays HA-free: standard library and numpy only, relative imports.
 - Market time zone `Europe/Berlin` (from `core.zones.DE_LU.tz`), whatever HA's own time zone is.

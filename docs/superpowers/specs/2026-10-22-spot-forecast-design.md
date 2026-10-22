@@ -93,9 +93,10 @@ hours above 21 ct at the cost of false alarms.
   large chunks, backoff. Both sources must be credited in the README, the
   website and the integration's attribution attribute.
 - **Hardware:** Raspberry Pi 4 class. A forecast run must finish in a few
-  seconds and stay well under 100 MB extra memory. `numpy` is available from
-  Home Assistant core; no other runtime requirement (`manifest.json`
-  `requirements: []`).
+  seconds and stay well under 100 MB extra memory. `numpy` is the only runtime
+  requirement (`manifest.json` `requirements: ["numpy"]`, unpinned). Home
+  Assistant pins it in its package constraints and the default install already
+  has it, so this only matters for minimal core installs.
 - **Home Assistant:** minimum version 2024.11.0, as SBP.
 - **Training:** monthly in GitHub Actions (Ubuntu runner, Python 3.12, CPU
   only); the same pipeline runs locally on the owner's machines.
