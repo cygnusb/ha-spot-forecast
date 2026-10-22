@@ -71,6 +71,21 @@ def test_golden_parity(golden, anchor):
     np.testing.assert_array_equal(fm.h, fm.X[:, col("h")])
 
 
+def test_prices_after_anchor_day_are_ignored(golden):
+    """Ruling R7: training passes the full price history; lags must not read past the anchor."""
+    case = golden[date(2025, 10, 25)]
+    extra = np.arange(48, dtype=float) + 1000.0  # two more days of (synthetic) prices
+    longer = Hourly(case.prices.start, np.concatenate([case.prices.values, extra]))
+    fm = build(case, prices=longer)
+    end = case.prices.start + len(case.prices.values) * timedelta(hours=1)
+    lookahead = [i for i, t in enumerate(fm.times) if t - timedelta(days=int(fm.h[i])) >= end]
+    assert len(lookahead) == 6
+    assert np.isnan(fm.X[lookahead, col("p_lastday")]).all()
+    expected = case.X.copy()
+    expected[lookahead, col("p_lastday")] = np.nan
+    np.testing.assert_allclose(fm.X, expected, rtol=1e-9, atol=1e-9, equal_nan=True)
+
+
 def test_dst_end_target_day_has_25_rows(golden):
     fm = build(golden[date(2025, 10, 25)])  # target 2025-10-26 has 25 hours
     assert (fm.h == 1).sum() == 25

@@ -237,8 +237,10 @@ def build_features(
 ) -> FeatureMatrix:
     """Feature rows for every hour of the local days anchor+1 … anchor+6.
 
-    ``prices`` must reach the end of the anchor day; ``weather[h]`` holds the
-    ``"{point}__{var}"`` series for target day anchor+h. Missing inputs give NaN features.
+    ``prices`` must reach the end of the anchor day; prices after it are ignored, since they
+    are not published at issue time (the price lags read NaN there instead). ``weather[h]``
+    holds the ``"{point}__{var}"`` series for target day anchor+h. Missing inputs give NaN
+    features.
     """
     a = daily.index(anchor)
     if a is None or np.isnan(daily.mean30[a]) or np.isnan(daily.gq_evening14[a]):
@@ -246,6 +248,13 @@ def build_features(
     d_features = {f"D_{n}": getattr(daily, n)[a] for n in _DAILY_NAMES}
     scale = max(daily.gq_evening14[a], zone.scale_floor) / zone.scale_divisor
     tz = ZoneInfo(zone.tz)
+    known_until = datetime.combine(anchor + _DAY, time(), tz).astimezone(UTC)
+
+    def lag(first: datetime, n: int) -> np.ndarray:
+        """Prices of ``n`` hours from ``first``; hours after the anchor day read NaN."""
+        out = prices.window(first, n)
+        out[max((known_until - first) // _HOUR, 0) :] = np.nan
+        return out
 
     blocks, times, hs = [], [], []
     for h in HORIZONS:
@@ -269,8 +278,8 @@ def build_features(
             "holiday": float(holiday),
             "offday": float(holiday or dow >= 5),
             "issue_dow": anchor.weekday(),
-            "p_lastday": prices.window(first - h * _DAY, n),
-            "p_lastweek": prices.window(first - 7 * _DAY, n),
+            "p_lastday": lag(first - h * _DAY, n),
+            "p_lastweek": lag(first - 7 * _DAY, n),
             **d_features,
             **_weather_features(w, day_times, zone),
             **{c: capacity.get(c, np.nan) for c in CAPACITY_NAMES},
