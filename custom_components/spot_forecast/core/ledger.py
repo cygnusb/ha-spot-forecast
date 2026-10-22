@@ -24,6 +24,7 @@ BACKFILL_FORMAT = 1
 ISSUE_HOUR = 6  # local hour a backfilled run is deemed to have been issued
 _HOUR = timedelta(hours=1)
 _PREFIX = "spot_forecast"
+PRICE = "price"  # series key in ``Ledger.finalized``; forecast series are "h1" … "h6"
 
 
 @dataclass(frozen=True)
@@ -72,7 +73,8 @@ def _day_hours(d: date, tz: ZoneInfo) -> list[datetime]:
 @dataclass
 class Ledger:
     runs: dict[date, Run] = field(default_factory=dict)  # last run per anchor
-    finalized: set[date] = field(default_factory=set)  # target days whose statistics are written
+    # (target day, series) pairs whose statistics are written; series is PRICE or "h<h>"
+    finalized: set[tuple[date, str]] = field(default_factory=set)
     actual: dict[datetime, float] = field(default_factory=dict)  # UTC hour -> EUR/MWh
 
     def add_run(self, run: Run) -> None:
@@ -112,32 +114,37 @@ class Ledger:
     def finalize(
         self,
         tz: str,
-        zone_id: str = "de_lu",
-        default_p90: Mapping[int, float] | None = None,
-        default_p10: Mapping[int, float] | None = None,
+        *,
+        zone_id: str,
+        default_p90: Mapping[int, float],
+        default_p10: Mapping[int, float],
     ) -> list[StatRow]:
-        """Statistic rows of every target day with all hourly actuals, not yet finalized.
+        """Statistic rows not yet written, for every target day with all hourly actuals.
 
-        ``default_*`` are the model's offsets for ``offsets`` (0.0 when omitted).
+        Tracked per series: a day's price rows go out once; its forecast, peak-risk and low
+        rows for horizon ``h`` go out once a run with anchor ``day - h`` exists (so runs added
+        later, e.g. by the backfill, still produce their rows). ``default_*`` are the model's
+        offsets, used by ``offsets`` while a horizon has too few residuals.
         """
         zone = ZoneInfo(tz)
-        d90 = default_p90 or dict.fromkeys(HORIZONS, 0.0)
-        d10 = default_p10 or dict.fromkeys(HORIZONS, 0.0)
         by_anchor: dict[date, tuple[dict[int, float], dict[int, float]]] = {}
         rows: list[StatRow] = []
-        days = sorted({t.astimezone(zone).date() for t in self.actual} - self.finalized)
-        for day in days:
+        for day in sorted({t.astimezone(zone).date() for t in self.actual}):
             hours = _day_hours(day, zone)
             if any(t not in self.actual for t in hours):
                 continue
-            rows += [StatRow(f"{_PREFIX}:{zone_id}_price", t, _kwh(self.actual[t])) for t in hours]
+            if (day, PRICE) not in self.finalized:
+                rows += [
+                    StatRow(f"{_PREFIX}:{zone_id}_price", t, _kwh(self.actual[t])) for t in hours
+                ]
+                self.finalized.add((day, PRICE))
             span = set(hours)
             for h in HORIZONS:
                 run = self.runs.get(day - timedelta(days=h))
-                if run is None:
+                if run is None or (day, f"h{h}") in self.finalized:
                     continue
                 if run.anchor not in by_anchor:
-                    by_anchor[run.anchor] = self.offsets(run.anchor, d90, d10)
+                    by_anchor[run.anchor] = self.offsets(run.anchor, default_p90, default_p10)
                 o90, o10 = by_anchor[run.anchor]
                 for s in run.slots:
                     if s.h != h or not s.valid or s.time not in span:
@@ -151,7 +158,7 @@ class Ledger:
                         StatRow(f"{_PREFIX}:{zone_id}_{name}", s.time, _kwh(v))
                         for name, v in cal.items()
                     ]
-            self.finalized.add(day)
+                self.finalized.add((day, f"h{h}"))
         return rows
 
     def accuracy(
@@ -159,7 +166,8 @@ class Ledger:
     ) -> dict:
         """Median-forecast accuracy over target days in [today - days, today) (local), EUR/kWh.
 
-        ``peak_threshold`` is EUR/MWh; ``peak_mae`` covers hours with actual >= it.
+        ``peak_threshold`` is EUR/MWh; ``peak_mae`` covers hours with actual > it
+        (as in training/report.py).
         """
         today = now.astimezone(ZoneInfo(tz)).date()
         lo = today - timedelta(days=days)
@@ -174,7 +182,7 @@ class Ledger:
                     continue
                 e = abs(s.median - actual)
                 errs.setdefault(s.h, []).append(e)
-                if actual >= peak_threshold:
+                if actual > peak_threshold:
                     peak.append(e)
         allerr = [e for v in errs.values() for e in v]
         return {
@@ -194,7 +202,7 @@ class Ledger:
         cut_t = datetime.combine(cutoff, time(), UTC)
         self.runs = {a: r for a, r in self.runs.items() if a >= cutoff}
         self.actual = {t: v for t, v in self.actual.items() if t >= cut_t}
-        self.finalized = {d for d in self.finalized if d >= cutoff}
+        self.finalized = {f for f in self.finalized if f[0] >= cutoff}
 
     def to_json(self) -> dict:
         return {
@@ -218,7 +226,7 @@ class Ledger:
                 }
                 for _, r in sorted(self.runs.items())
             ],
-            "finalized": [d.isoformat() for d in sorted(self.finalized)],
+            "finalized": [[d.isoformat(), k] for d, k in sorted(self.finalized)],
             "actual": [[t.isoformat(), v] for t, v in sorted(self.actual.items())],
         }
 
@@ -247,7 +255,7 @@ class Ledger:
             runs[run.anchor] = run
         return cls(
             runs,
-            {date.fromisoformat(x) for x in d["finalized"]},
+            {(date.fromisoformat(x), str(k)) for x, k in d["finalized"]},
             {_utc(t): float(v) for t, v in d["actual"]},
         )
 

@@ -15,6 +15,10 @@ BERLIN = ZoneInfo(TZ)
 ZERO = dict.fromkeys(range(1, 7), 0.0)
 
 
+def fin(led: Ledger, p90=None, p10=None) -> list[StatRow]:
+    return led.finalize(TZ, zone_id="de_lu", default_p90=p90 or ZERO, default_p10=p10 or ZERO)
+
+
 def day_hours(d: date) -> list[datetime]:
     start = datetime.combine(d, time(), BERLIN).astimezone(UTC)
     end = datetime.combine(d + timedelta(days=1), time(), BERLIN).astimezone(UTC)
@@ -111,7 +115,7 @@ def _complete_ledger(day: date) -> Ledger:
 def test_finalize_emits_price_and_19_series_rows():
     day = date(2026, 6, 10)
     led = _complete_ledger(day)
-    rows = led.finalize(TZ)
+    rows = fin(led)
     by_id: dict[str, list[StatRow]] = {}
     for r in rows:
         by_id.setdefault(r.statistic_id, []).append(r)
@@ -133,7 +137,7 @@ def test_finalize_uses_offsets_of_run_anchor():
     led = _complete_ledger(day)
     d90 = dict.fromkeys(range(1, 7), 20.0)
     d10 = dict.fromkeys(range(1, 7), -30.0)
-    rows = led.finalize(TZ, default_p90=d90, default_p10=d10)
+    rows = fin(led, d90, d10)
     vals = {r.statistic_id: r.value for r in rows}
     assert vals["spot_forecast:de_lu_peak_risk_h1"] == 0.08
     assert vals["spot_forecast:de_lu_low_h1"] == 0.01
@@ -148,16 +152,16 @@ def test_finalize_skips_invalid_slots():
     led.runs[run.anchor] = Run(
         run.anchor, run.issued_at, run.model_version, (bad, *run.slots[1:]), run.backfill
     )
-    rows = led.finalize(TZ)
+    rows = fin(led)
     assert len(rows) == 24 + 24 * 6 * 3 - 3
     assert not [r for r in rows if r.start == first.time and r.statistic_id.endswith("h2")]
 
 
 def test_finalize_is_idempotent():
     led = _complete_ledger(date(2026, 6, 10))
-    assert led.finalize(TZ)
-    assert led.finalize(TZ) == []
-    assert date(2026, 6, 10) in led.finalized
+    assert fin(led)
+    assert fin(led) == []
+    assert (date(2026, 6, 10), "price") in led.finalized
 
 
 def test_finalize_waits_for_complete_day():
@@ -166,28 +170,31 @@ def test_finalize_waits_for_complete_day():
     ts = day_hours(day)
     partial = Ledger(runs=led.runs)
     partial.record_actual(Hourly(ts[0], np.arange(23, dtype=float)))
-    assert partial.finalize(TZ) == []
+    assert fin(partial) == []
     partial.record_actual(Hourly(ts[23], np.array([5.0])))
-    assert len(partial.finalize(TZ)) == 24 + 24 * 18
+    assert len(fin(partial)) == 24 + 24 * 18
 
 
 def test_finalize_dst_days():
     for day, n in ((date(2026, 3, 29), 23), (date(2026, 10, 25), 25)):
         led = Ledger()
+        for h in range(1, 7):
+            led.add_run(make_run(day - timedelta(days=h), hs=[h]))
         led.record_actual(hourly_for([day], 10.0))
-        rows = led.finalize(TZ)
-        assert len(rows) == n
+        rows = fin(led)
+        assert len(rows) == n + n * 18
+        assert len({(r.statistic_id, r.start) for r in rows}) == len(rows)
 
 
 def test_peak_risk_row_never_below_forecast_row():
     day = date(2026, 6, 10)
     led = _complete_ledger(day)
-    rows = led.finalize(TZ, default_p90=dict.fromkeys(range(1, 7), -500.0))
+    rows = fin(led, p90=dict.fromkeys(range(1, 7), -500.0))
     fc = {(r.start, r.statistic_id[-2:]): r.value for r in rows if "forecast_h" in r.statistic_id}
     pk = {(r.start, r.statistic_id[-2:]): r.value for r in rows if "peak_risk_h" in r.statistic_id}
     assert fc and all(pk[k] >= v for k, v in fc.items())
     led2 = _complete_ledger(day)
-    rows2 = led2.finalize(TZ, default_p10=dict.fromkeys(range(1, 7), 500.0))
+    rows2 = fin(led2, p10=dict.fromkeys(range(1, 7), 500.0))
     lo2 = [r.value for r in rows2 if "_low_h" in r.statistic_id]
     assert lo2 and all(v <= 0.05 for v in lo2)
 
@@ -227,7 +234,7 @@ def test_json_roundtrip():
     led.add_run(
         Run(date(2026, 6, 19), datetime(2026, 6, 19, 4, tzinfo=UTC), "v", (nan_slot,), True)
     )
-    led.finalize(TZ)
+    fin(led)
     d = led.to_json()
     assert json.loads(json.dumps(d)) == d
     back = Ledger.from_json(json.loads(json.dumps(d)))
@@ -245,13 +252,13 @@ def test_prune_drops_old_entries():
     for a in (old, new):
         led.add_run(make_run(a - timedelta(days=1), hs=[1]))
         led.record_actual(hourly_for([a], 10.0))
-    led.finalize(TZ)
-    assert led.finalized == {old, new}
+    fin(led)
+    assert {d for d, _ in led.finalized} == {old, new}
     led.prune(keep_days=30)
-    assert led.finalized == {new}
+    assert {d for d, _ in led.finalized} == {new}
     assert set(led.runs) == {new - timedelta(days=1)}
     assert all(t >= datetime(2026, 5, 1, tzinfo=UTC) for t in led.actual)
-    assert led.finalize(TZ) == []
+    assert fin(led) == []
 
 
 def _backfill_bytes(rows, version="v1") -> bytes:
@@ -275,3 +282,19 @@ def test_backfill_file_groups_by_anchor():
     assert all(s.valid for s in r.slots)
     assert (r.slots[0].median, r.slots[0].p90_raw, r.slots[0].p10_raw) == (50.0, 60.0, 40.0)
     assert r.slots[0].time.tzinfo is not None
+
+
+def test_finalize_emits_forecast_rows_for_runs_added_after_price_rows():
+    day = date(2026, 6, 10)
+    led = Ledger()
+    led.record_actual(hourly_for([day], 80.0))
+    first = fin(led)
+    assert len(first) == 24 and {r.statistic_id for r in first} == {"spot_forecast:de_lu_price"}
+    for h in range(1, 7):
+        led.add_run(make_run(day - timedelta(days=h), hs=[h]))
+    second = fin(led)
+    assert len(second) == 24 * 18
+    assert not [r for r in second if r.statistic_id.endswith("_price")]
+    assert fin(led) == []
+    again = Ledger.from_json(json.loads(json.dumps(led.to_json())))
+    assert fin(again) == []
