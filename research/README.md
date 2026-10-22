@@ -142,3 +142,16 @@ one model trained once before the start and never refit.
 In a stable market a frozen model holds for 6–9 months. When the regime shifts (gas price
 doubling in 2026) it falls to the naive baseline within about two quarters and then below it.
 Retraining is required, at least monthly.
+
+### Holidays and negative prices
+
+National holidays are features (`holiday`, `offday`). 1 May 2026 (Friday, sunny): the model
+caught the negative hours (forecast negative 10–16 h, actual 9–16 h) but not their depth
+(forecast minimum −4.6 ct, actual −49.9 ct). Of all negative hours (7.3 %), the median
+forecast is negative for 55 % (D+1) … 41 % (D+6) and below 2 ct for 80 % … 61 %; mean bias
+in negative hours is only +1.4 ct (D+1), so days like 1 May are rare.
+
+Population-weighted regional holidays (`hol_share`, e.g. Corpus Christi 0.64), bridge days
+and the Christmas week (`hol_` features) changed nothing (MAE 2.14 → 2.15, national holiday
+bias +0.93 → +0.73, 1 May unchanged), so they stay off (`--drop` default includes `hol_`).
+With ~25 holidays in the data, holiday × strong sun is too rare to learn.

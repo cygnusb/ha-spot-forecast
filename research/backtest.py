@@ -106,6 +106,27 @@ def load_installed() -> pd.DataFrame:
 
 # ---------------------------------------------------------------- features
 
+# Population by state (millions, Destatis 2023), to weight regional holidays.
+STATE_POP = {"BW": 11.3, "BY": 13.4, "BE": 3.9, "BB": 2.6, "HB": 0.7, "HH": 1.9, "HE": 6.4, "MV": 1.6,
+             "NI": 8.1, "NW": 18.1, "RP": 4.2, "SL": 1.0, "SN": 4.0, "ST": 2.2, "SH": 3.0, "TH": 2.1}
+
+
+def holiday_table(years: range) -> pd.DataFrame:
+    """Per date: population share on holiday, bridge day, Christmas/New Year week (prefix hol_)."""
+    days = pd.date_range(f"{years.start}-01-01", f"{years.stop - 1}-12-31", freq="D")
+    total = sum(STATE_POP.values())
+    share = pd.Series(0.0, index=days)
+    for state, pop in STATE_POP.items():
+        hs = holidays.Germany(subdiv=state, years=years)
+        share += pd.Series([d.date() in hs for d in days], index=days) * pop / total
+    national = holidays.Germany(years=years)
+    bridge = pd.Series(
+        [(d - pd.Timedelta(days=1)).date() in national and d.dayofweek == 4
+         or (d + pd.Timedelta(days=1)).date() in national and d.dayofweek == 0 for d in days], index=days)
+    xmas = pd.Series([(d.month == 12 and d.day >= 24) or (d.month == 1 and d.day == 1) for d in days], index=days)
+    return pd.DataFrame({"hol_share": share.round(3), "hol_bridge": bridge, "hol_xmas": xmas})
+
+
 
 def clear_sky_ghi(t: pd.DatetimeIndex, lat: float, lon: float) -> np.ndarray:
     """Haurwitz clear-sky irradiance (W/m2), averaged-hour midpoint (Open-Meteo labels the end)."""
@@ -197,6 +218,7 @@ def build_samples(
     nb_daily = neighbor_price_daily(nb_prices)
 
     de_holidays = holidays.Germany(years=range(2023, 2028))
+    hol = holiday_table(range(2023, 2028))
     out = []
     for h in HORIZONS:
         w = weather_features(weather[h + 1])
@@ -214,6 +236,7 @@ def build_samples(
         s["holiday"] = [d in de_holidays for d in loc.date]
         s["offday"] = s["holiday"] | (s["dow"] >= 5)
         s["issue_dow"] = issue_date.dayofweek
+        s = s.join(hol, on="target_date")
         # price lags known at issue time
         lag_d = t - pd.Timedelta(days=h)  # same hour on day D
         lag_w = t - pd.Timedelta(days=7)  # same hour one week before target (<= D since h <= 6)
@@ -342,7 +365,7 @@ def main() -> None:
     ap.add_argument("--test-start", default="2025-04-01")
     ap.add_argument("--loss", default="absolute_error")
     # neighbour prices (nbp_) did not improve MAE in the ablation, so they are off by default
-    ap.add_argument("--drop", nargs="*", default=["nbp_", "gas_", "gq_"], help="drop feature columns containing these substrings")
+    ap.add_argument("--drop", nargs="*", default=["nbp_", "gas_", "gq_", "hol_"], help="drop feature columns containing these substrings")
     ap.add_argument("--tag", default="")
     ap.add_argument("--quantile", type=float, default=None, help="fit a quantile model instead (e.g. 0.9)")
     ap.add_argument("--min-leaf", type=int, default=40)
