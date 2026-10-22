@@ -9,6 +9,7 @@ from __future__ import annotations
 from collections.abc import AsyncIterator, Awaitable, Callable
 from datetime import UTC, datetime, timedelta
 from typing import Any
+from unittest.mock import patch
 from zoneinfo import ZoneInfo
 
 from conftest import Sources
@@ -358,8 +359,16 @@ async def test_restart_keeps_forecast_and_does_not_duplicate_statistics(
     assert h1_before > 0
 
     sources.fail_all()
-    assert await hass.config_entries.async_reload(entry.entry_id)
-    await hass.async_block_till_done()
+    with patch.object(
+        coordinator_module.statistics,
+        "async_write",
+        wraps=coordinator_module.statistics.async_write,
+    ) as write:
+        assert await hass.config_entries.async_reload(entry.entry_id)
+        await hass.async_block_till_done()
+
+    # the restored ledger knows what was finalized: nothing is written again
+    assert write.call_args_list and all(c.args[1] == [] for c in write.call_args_list)
 
     assert entry.state is ConfigEntryState.LOADED
     assert aioclient_mock.call_count > 0  # the first refresh tried and failed

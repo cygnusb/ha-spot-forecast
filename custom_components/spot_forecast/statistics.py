@@ -35,7 +35,8 @@ _LABELS = {"forecast": "forecast", "peak_risk": "peak risk", "low": "low"}
 def statistic_name(statistic_id: str) -> str:
     """Readable name, e.g. "Spot Forecast DE-LU forecast D+1" for ``…:de_lu_forecast_h1``."""
     object_id = statistic_id.partition(":")[2]
-    for zone in ZONES.values():
+    # longest slug first, so a zone "de" could never claim "de_lu_price"
+    for zone in sorted(ZONES.values(), key=lambda z: -len(z.slug)):
         series = object_id.removeprefix(f"{zone.slug}_")
         if series != object_id:
             break

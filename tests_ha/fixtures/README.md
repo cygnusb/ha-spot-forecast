@@ -16,6 +16,11 @@ rows were copied forward, and the Open-Meteo forecasts were recorded on 2026-10-
 already start at 2026-10-22 00:00 GMT and no timestamps were shifted. The only edit is the
 removal of 2026-10-23 from `energy_charts_price.json`.
 
+The HA tests synthesize more in code, never in these files: `conftest.Sources` serves the
+prices with 40 days of history in front (the four recorded days tiled backwards, see
+`_with_history`, since the integration needs 30 days) and can override single quarter hours
+(`price_overrides`, e.g. one negative price).
+
 The Energy-Charts API reads date-only `start`/`end` as whole market days in local time,
 `end` inclusive.
 
