@@ -29,6 +29,11 @@ class Zone:
     scale_floor: float = 50.0
     scale_divisor: float = 100.0
 
+    @property
+    def slug(self) -> str:
+        """Lower-case identifier for file names, statistic ids and storage keys."""
+        return self.code.lower().replace("-", "_")
+
 
 DE_LU = Zone(
     code="DE-LU",
@@ -67,3 +72,6 @@ DE_LU = Zone(
     nb_hydro=("nb_alps_ch", "nb_alps_at", "nb_no_south", "nb_se_north"),
     nb_nordic=("nb_no_south", "nb_se_north", "nb_fi"),
 )
+
+ZONES: dict[str, Zone] = {z.code: z for z in (DE_LU,)}
+"""Supported zones by code."""

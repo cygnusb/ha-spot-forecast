@@ -1,0 +1,34 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Spot Forecast",
+        "description": "Forecasts day-ahead electricity prices for the next days. Prices come from Energy-Charts and weather from Open-Meteo; no account or API key is needed.",
+        "data": {
+          "zone": "Bidding zone"
+        },
+        "data_description": {
+          "zone": "Day-ahead market zone whose prices are forecast."
+        }
+      }
+    },
+    "abort": {
+      "already_configured": "This bidding zone is already set up."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Spot Forecast options",
+        "data": {
+          "peak_threshold": "Peak price threshold",
+          "backfill_days": "Backfill window (days)"
+        },
+        "data_description": {
+          "peak_threshold": "Wholesale price above which an hour counts as a price peak, in ct/kWh without taxes or grid fees. The default comes from the model's training data.",
+          "backfill_days": "How many past days of forecasts are reconstructed on first start so accuracy statistics have history. 0 turns backfill off."
+        }
+      }
+    }
+  }
+}

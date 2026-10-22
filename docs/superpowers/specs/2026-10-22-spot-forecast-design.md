@@ -115,7 +115,7 @@ hours above 21 ct at the cost of false alarms.
 | what | source | when |
 |---|---|---|
 | Day-ahead prices DE-LU, last 35 days through the latest published day | Energy-Charts `/price?bzn=DE-LU` | every run; one request |
-| Weather forecast, hourly, 7 days, ECMWF IFS 0.25, at the 10 German and 12 neighbour points of `research/fetch.py` | Open-Meteo forecast API, `models=ecmwf_ifs025`, all points in one multi-location request | every run |
+| Weather forecast, hourly, 8 days, ECMWF IFS 0.25, at the 10 German and 12 neighbour points of `research/fetch.py` | Open-Meteo forecast API, `models=ecmwf_ifs025`, all points in one multi-location request | every run |
 | Installed wind/solar capacity | shipped in the model file (last training value) | — |
 | Public holidays DE | computed in the integration (fixed dates plus Easter offsets) | — |
 

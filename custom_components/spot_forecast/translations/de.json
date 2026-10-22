@@ -1,0 +1,34 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Spot Forecast",
+        "description": "Prognostiziert die Day-Ahead-Strompreise der nächsten Tage. Preise kommen von Energy-Charts, Wetter von Open-Meteo; Konto oder API-Schlüssel sind nicht nötig.",
+        "data": {
+          "zone": "Gebotszone"
+        },
+        "data_description": {
+          "zone": "Day-Ahead-Marktgebiet, dessen Preise prognostiziert werden."
+        }
+      }
+    },
+    "abort": {
+      "already_configured": "Diese Gebotszone ist bereits eingerichtet."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Spot Forecast Optionen",
+        "data": {
+          "peak_threshold": "Schwelle für Preisspitzen",
+          "backfill_days": "Rückwirkender Zeitraum (Tage)"
+        },
+        "data_description": {
+          "peak_threshold": "Börsenpreis, ab dem eine Stunde als Preisspitze gilt, in ct/kWh ohne Steuern und Netzentgelte. Der Standardwert stammt aus den Trainingsdaten des Modells.",
+          "backfill_days": "Für wie viele vergangene Tage beim ersten Start Prognosen nachberechnet werden, damit die Genauigkeitsstatistik Verlauf hat. 0 schaltet das ab."
+        }
+      }
+    }
+  }
+}
