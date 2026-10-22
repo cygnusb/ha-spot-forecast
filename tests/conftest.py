@@ -63,3 +63,88 @@ def golden() -> dict[date, GoldenCase]:
             mean7=_array(c["mean7"]),
         )
     return cases
+
+
+def make_random_trees(n_trees: int, n_leaves: int, n_features: int, seed: int):
+    """Synthetic trees: each grows by splitting a random leaf until it has ``n_leaves`` leaves."""
+    from core.model import Trees
+
+    rng = np.random.default_rng(seed)
+    cols: dict[str, list] = {
+        k: [] for k in ("feature", "threshold", "left", "right", "missing_left", "is_leaf", "value")
+    }
+    roots = []
+    for _ in range(n_trees):
+        base = len(cols["feature"])
+        roots.append(base)
+        feature, threshold, left, right = [0], [0.0], [0], [0]
+        missing_left, is_leaf, value = [False], [True], [float(rng.normal(0, 0.05))]
+        leaves = [0]
+        while len(leaves) < n_leaves:
+            n = leaves.pop(int(rng.integers(len(leaves))))
+            for _child in range(2):
+                feature.append(0)
+                threshold.append(0.0)
+                left.append(0)
+                right.append(0)
+                missing_left.append(False)
+                is_leaf.append(True)
+                value.append(float(rng.normal(0, 0.05)))
+            lo, hi = len(feature) - 2, len(feature) - 1
+            feature[n] = int(rng.integers(n_features))
+            threshold[n] = float(rng.normal())
+            left[n], right[n] = base + lo, base + hi
+            missing_left[n] = bool(rng.integers(2))
+            is_leaf[n] = False
+            leaves += [lo, hi]
+        for k, v in zip(
+            cols, (feature, threshold, left, right, missing_left, is_leaf, value), strict=True
+        ):
+            cols[k].extend(v)
+    return Trees(
+        baseline=float(rng.normal()),
+        roots=np.array(roots, dtype=np.int64),
+        feature=np.array(cols["feature"], dtype=np.int64),
+        threshold=np.array(cols["threshold"]),
+        left=np.array(cols["left"], dtype=np.int64),
+        right=np.array(cols["right"], dtype=np.int64),
+        missing_left=np.array(cols["missing_left"], dtype=bool),
+        is_leaf=np.array(cols["is_leaf"], dtype=bool),
+        value=np.array(cols["value"]),
+    )
+
+
+@pytest.fixture(scope="session")
+def real_sized_trees():
+    """600 trees x 31 leaves over the 82 model features (synthetic)."""
+    from core.features import FEATURE_NAMES
+
+    return make_random_trees(600, 31, len(FEATURE_NAMES), seed=1)
+
+
+@pytest.fixture(scope="session")
+def tiny_model_file():
+    """A small valid ModelFile with hand-made trees (no scikit-learn needed)."""
+    from datetime import UTC
+
+    from core.features import FEATURE_NAMES, FEATURE_SCHEMA
+    from core.model import ModelFile
+
+    n = len(FEATURE_NAMES)
+    return ModelFile(
+        format=1,
+        zone="de_lu",
+        version="de_lu-2026-11",
+        feature_schema=FEATURE_SCHEMA,
+        features=FEATURE_NAMES,
+        train_cutoff=date(2026, 11, 1),
+        created=datetime(2026, 11, 2, 3, 4, 5, tzinfo=UTC),
+        median=make_random_trees(5, 4, n, seed=10),
+        p90=make_random_trees(5, 4, n, seed=11),
+        p10=make_random_trees(5, 4, n, seed=12),
+        p90_offsets={h: 1.5 * h for h in range(1, 7)},
+        p10_offsets={h: -0.5 * h for h in range(1, 7)},
+        peak_threshold=185.25,
+        capacity={"cap_solar": 100.5, "cap_wind_on": 70.0, "cap_wind_off": 9.0},
+        metrics={"mae_ct": 2.14, "note": "tiny"},
+    )
