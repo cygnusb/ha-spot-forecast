@@ -42,6 +42,10 @@ class InsufficientHistory(ValueError):
     """The anchor day lacks the 30-day price history the features need."""
 
 
+class IncompleteAnchorDay(InsufficientHistory):
+    """The anchor day's own prices are not all published yet."""
+
+
 @dataclass(frozen=True, eq=False)
 class Hourly:
     """Hourly series starting at ``start`` (UTC, on the hour); NaN marks a missing hour."""
