@@ -15,7 +15,7 @@ from homeassistant.helpers.event import async_track_point_in_utc_time, async_tra
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 from homeassistant.util import dt as dt_util
 
-from . import statistics
+from . import long_term_statistics
 from .const import CONF_PEAK_THRESHOLD, CONF_ZONE, DOMAIN, PRICE_HISTORY_DAYS
 from .core.features import HORIZONS, InsufficientHistory
 from .core.forecast import Slot, run_forecast
@@ -98,7 +98,7 @@ class SpotForecastCoordinator(DataUpdateCoordinator[SpotData]):
             if not self._market and self._latest_run() is None:
                 raise UpdateFailed(f"no forecast yet and nothing stored: {err}") from err
             _LOGGER.warning("Forecast run failed, keeping the last forecast: %s", err)
-        statistics.async_write(
+        long_term_statistics.async_write(
             self.hass,
             self._ledger.finalize(
                 self.zone.tz,

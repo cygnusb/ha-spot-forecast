@@ -47,17 +47,41 @@ def statistic_name(statistic_id: str) -> str:
     return f"Spot Forecast {zone.code} {series.replace('_', ' ')}"
 
 
-def _metadata(statistic_id: str) -> StatisticMetaData:
+def declared_keys(typed_dict: type) -> frozenset[str]:
+    """Keys a TypedDict declares, inherited and ``NotRequired`` ones included."""
+    keys = getattr(typed_dict, "__required_keys__", frozenset()) | getattr(
+        typed_dict, "__optional_keys__", frozenset()
+    )
+    if not keys:  # not a real TypedDict: walk the annotations of the class and its bases
+        for cls in getattr(typed_dict, "__mro__", (typed_dict,)):
+            keys |= set(getattr(cls, "__annotations__", {}))
+    return frozenset(keys)
+
+
+def build_metadata(
+    statistic_id: str,
+    meta_type: type = StatisticMetaData,
+    mean_type: Any = StatisticMeanType,
+) -> StatisticMetaData:
+    """Metadata with exactly the optional keys the running HA declares.
+
+    The recorder builds its ``StatisticsMeta`` row with ``StatisticsMeta(**meta)``, so a key
+    the running version does not know (``unit_class`` before 2025.11, ``has_mean`` once it
+    is removed) fails every import. ``mean_type`` exists from 2025.4 on.
+    """
+    declared = declared_keys(meta_type)
     meta: dict[str, Any] = {
-        "has_mean": True,
         "has_sum": False,
         "name": statistic_name(statistic_id),
         "source": DOMAIN,
         "statistic_id": statistic_id,
         "unit_of_measurement": UNIT,
     }
-    if StatisticMeanType is not None:
-        meta["mean_type"] = StatisticMeanType.ARITHMETIC
+    if "has_mean" in declared:
+        meta["has_mean"] = True
+    if "mean_type" in declared and mean_type is not None:
+        meta["mean_type"] = mean_type.ARITHMETIC
+    if "unit_class" in declared:
         meta["unit_class"] = None
     return meta  # type: ignore[return-value]
 
@@ -71,4 +95,4 @@ def async_write(hass: HomeAssistant, rows: list[StatRow]) -> None:
             StatisticData(start=r.start, mean=r.value, min=r.value, max=r.value, state=r.value)
             for r in sorted(group, key=attrgetter("start"))
         ]
-        async_add_external_statistics(hass, _metadata(statistic_id), stats)
+        async_add_external_statistics(hass, build_metadata(statistic_id), stats)

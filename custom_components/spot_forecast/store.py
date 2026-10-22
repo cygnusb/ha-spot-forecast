@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime
+import logging
 from typing import Any
 
 from homeassistant.core import HomeAssistant, callback
@@ -11,6 +12,8 @@ from homeassistant.helpers.storage import Store
 from .const import STORE_KEY, STORE_VERSION
 from .core.ingest import MarketSlot
 from .core.ledger import Ledger
+
+_LOGGER = logging.getLogger(__name__)
 
 SAVE_DELAY = 10  # seconds
 
@@ -25,20 +28,33 @@ class ForecastStore:
         self._pending: dict[str, Any] | None = None
 
     async def async_load(self) -> tuple[Ledger, list[MarketSlot], datetime | None]:
-        """The stored ledger, market slots and last success; empty ones if nothing is stored."""
+        """The stored ledger, market slots and last success; empty ones if nothing is stored.
+
+        A payload that cannot be read (damaged, or an unknown layout) is dropped with a
+        warning instead of failing setup on every retry.
+        """
         data = await self._store.async_load()
         if data is None:
             return Ledger(), [], None
-        market = [
-            MarketSlot(datetime.fromisoformat(start), datetime.fromisoformat(end), float(price))
-            for start, end, price in data["market"]
-        ]
-        last = data["last_success"]
-        return (
-            Ledger.from_json(data["ledger"]),
-            market,
-            None if last is None else datetime.fromisoformat(last),
-        )
+        try:
+            market = [
+                MarketSlot(datetime.fromisoformat(start), datetime.fromisoformat(end), float(price))
+                for start, end, price in data["market"]
+            ]
+            last = data["last_success"]
+            return (
+                Ledger.from_json(data["ledger"]),
+                market,
+                None if last is None else datetime.fromisoformat(last),
+            )
+        except (KeyError, TypeError, ValueError) as err:
+            _LOGGER.warning(
+                "Stored forecast data %s cannot be read, starting empty: %s: %s",
+                self._store.key,
+                type(err).__name__,
+                err,
+            )
+            return Ledger(), [], None
 
     @callback
     def async_save(
@@ -51,7 +67,13 @@ class ForecastStore:
             "last_success": None if last_success is None else last_success.isoformat(),
         }
         self._pending = snapshot
-        self._store.async_delay_save(lambda: snapshot, SAVE_DELAY)
+
+        def written() -> dict[str, Any]:
+            if self._pending is snapshot:
+                self._pending = None
+            return snapshot
+
+        self._store.async_delay_save(written, SAVE_DELAY)
 
     async def async_flush(self) -> None:
         """Write a pending snapshot now (on unload; a reload reads the file right after)."""

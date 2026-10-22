@@ -45,6 +45,7 @@ T14 = datetime(2026, 10, 22, 14, tzinfo=BERLIN)
 PRICE = "sensor.spot_forecast_de_lu_price"
 PEAK = "binary_sensor.spot_forecast_de_lu_peak_risk"
 NEGATIVE = "binary_sensor.spot_forecast_de_lu_negative_price"
+LAST_RUN = "sensor.spot_forecast_de_lu_last_run"
 STAT_PRICE = "spot_forecast:de_lu_price"
 STAT_H1 = "spot_forecast:de_lu_forecast_h1"
 
@@ -60,9 +61,12 @@ async def set_up(
     freezer.move_to(T10)
     entries: list[MockConfigEntry] = []
 
-    async def _set_up(options: dict[str, Any] | None = None) -> MockConfigEntry:
+    async def _set_up(
+        options: dict[str, Any] | None = None, entry_id: str | None = None
+    ) -> MockConfigEntry:
         entry = MockConfigEntry(
             domain=DOMAIN,
+            entry_id=entry_id,
             title="Spot Forecast DE-LU",
             unique_id="DE-LU",
             data={CONF_ZONE: "DE-LU"},
@@ -316,6 +320,7 @@ async def test_weather_outage_keeps_last_forecast(
     hass = hass_with_recorder
     await set_up()
     before = hass.states.get(PRICE).attributes
+    last_run = hass.states.get(LAST_RUN).state
 
     sources.serve(weather_status=500)
     await _advance(hass, freezer, T10 + timedelta(minutes=15))  # weather run 08:15 UTC
@@ -327,6 +332,7 @@ async def test_weather_outage_keeps_last_forecast(
     assert state.attributes["issued_at"] == before["issued_at"]
     assert state.attributes["prices"] == before["prices"]
     assert hass.states.get(PEAK).state != STATE_UNAVAILABLE
+    assert hass.states.get(LAST_RUN).state == last_run
 
     # 36 h after the last success: forecast dropped, known prices kept
     sources.serve("energy_charts_price_tomorrow.json", weather_status=500)
@@ -360,9 +366,9 @@ async def test_restart_keeps_forecast_and_does_not_duplicate_statistics(
 
     sources.fail_all()
     with patch.object(
-        coordinator_module.statistics,
+        coordinator_module.long_term_statistics,
         "async_write",
-        wraps=coordinator_module.statistics.async_write,
+        wraps=coordinator_module.long_term_statistics.async_write,
     ) as write:
         assert await hass.config_entries.async_reload(entry.entry_id)
         await hass.async_block_till_done()
@@ -418,3 +424,34 @@ async def test_state_advances_each_quarter_hour_without_fetching(
     )
     assert _market_price(recorded, T10 + timedelta(minutes=15)) != _market_price(recorded, T10)
     assert aioclient_mock.call_count == calls
+
+
+@pytest.mark.parametrize(
+    "stored",
+    [
+        {"ledger": {"runs": "garbage"}, "market": [], "last_success": None},
+        {"market": [["not a time", "x", 1.0]], "ledger": {}, "last_success": None},
+        ["an", "old", "layout"],
+    ],
+)
+async def test_unreadable_store_starts_empty(
+    hass_with_recorder: HomeAssistant,
+    set_up: SetUp,
+    hass_storage: dict[str, Any],
+    stored: Any,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    hass = hass_with_recorder
+    entry_id = "unreadable"
+    hass_storage[f"{DOMAIN}.{entry_id}"] = {
+        "version": 1,
+        "minor_version": 1,
+        "key": f"{DOMAIN}.{entry_id}",
+        "data": stored,
+    }
+
+    entry = await set_up(entry_id=entry_id)
+
+    assert entry.state is ConfigEntryState.LOADED
+    assert "cannot be read, starting empty" in caplog.text
+    assert hass.states.get(PRICE).attributes["anchor_day"] == "2026-10-22"

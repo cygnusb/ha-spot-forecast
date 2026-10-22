@@ -25,6 +25,7 @@ async def async_setup_entry(
 class _FlagSensor(SpotEntity, BinarySensorEntity):
     """On if any slot in [now, now + 48 h) crosses the threshold: market price or forecast key."""
 
+    _unrecorded_attributes = frozenset({"slots"})  # a subset of the price sensor's prices
     _key: str  # forecast entry key compared instead of the median
     _above: bool
 
