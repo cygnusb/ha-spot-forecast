@@ -307,3 +307,14 @@ def test_backfill_rows_are_out_of_sample(...):   # each row's refit month cutoff
 
 - Spec coverage for this plan: features, inference, export, P90 calibration, peak threshold, out-of-sample backfill, report with full-period and trailing-3-month numbers, and the 1e-6 export acceptance are all covered. Run-time data sources, anchor switching, entities, statistics, model download, CI and cards are plans 2–4.
 - Names used across tasks: `Hourly`, `DailyStats`, `daily_stats`, `build_features`, `FeatureMatrix`, `FEATURE_NAMES`, `FEATURE_SCHEMA`, `InsufficientHistory`, `decode`, `Trees`, `ModelFile`, `load_model`, `dump_model`, `ModelMismatch`, `trees_from_sklearn`, `Slot`, `run_forecast`, `conformal_offset`, `peak_risk`, `load_raw`, `RawData`, `build_dataset`, `Dataset`, `fit`.
+
+## Carry-over to plan 2 (from execution, 2026-10-22)
+
+- **First task of plan 2 (final review #5, Minor 1):**
+  - Inference must apply the training row filters. A target hour with missing weather (`wind_mean` NaN) or an anchor day with incomplete prices gets no forecast value, instead of a confident-looking one.
+  - The raw → hourly conversions (15-min price means, Open-Meteo GMT times, 35-day price history) exist only in the pandas training code (`training/dataset.py`). Move them into `core` with a parity test.
+- **Weather horizon:** with the anchor on tomorrow, the forecast reaches today+7, so request 8 forecast days from Open-Meteo. The spec's data table says 7; fix it.
+- **Backfill calibration:** backfill rows store raw P90/P10. Calibrate past days with rolling offsets from earlier rows only, never with the model file's offsets, which come from later days.
+- **Capacity in the training job:** `capacity_at` raises when Energy-Charts `installed_power` lags a month. The CI training job must surface that message.
+- **Minor, open:** `load_model` does not wrap `OverflowError`; `check_data_reaches` only checks each series' tail; the zone is hard-coded to DE-LU in `FEATURE_NAMES` and `nb_fr_*`.
+- The first model file `de_lu-2026-10.json.gz` (strict JSON, cutoff 2026-10-01) and its backfill file are in `dist/` (git-ignored) of the main checkout. Walk-forward MAE 2.10 ct, P90 exceedance 12.3 %, P10 undercut 10.5 %.
