@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from dataclasses import dataclass
 from datetime import date, datetime, time, timedelta
 import logging
@@ -77,6 +78,7 @@ class SpotForecastCoordinator(DataUpdateCoordinator[SpotData]):
         self._unsub_run: CALLBACK_TYPE | None = None
         self._unsub_tick: CALLBACK_TYPE | None = None
         self._unsub_stop: CALLBACK_TYPE | None = None
+        self._run_lock = asyncio.Lock()  # a manual refresh never interleaves with a run
         self._started = False  # between async_start and unload / HA stop
 
     @property
@@ -91,6 +93,10 @@ class SpotForecastCoordinator(DataUpdateCoordinator[SpotData]):
         self._calibrate(dt_util.utcnow())
 
     async def _async_update_data(self) -> SpotData:
+        async with self._run_lock:
+            return await self._async_update_locked()
+
+    async def _async_update_locked(self) -> SpotData:
         now = dt_util.utcnow()
         try:
             await self._async_run(now)
@@ -115,7 +121,8 @@ class SpotForecastCoordinator(DataUpdateCoordinator[SpotData]):
     async def _async_run(self, now: datetime) -> None:
         """Fetch prices and weather, forecast and record the run; raises on missing data.
 
-        Fresh prices are kept even when the weather fails afterwards.
+        Fresh prices are kept even when the weather or the forecast fails afterwards; an
+        unexpected error in the forecast itself is logged, not raised.
         """
         today = self._today(now)
         session = async_get_clientsession(self.hass)
@@ -132,9 +139,20 @@ class SpotForecastCoordinator(DataUpdateCoordinator[SpotData]):
 
         anchor = choose_anchor(now, market, self.zone.tz)
         weather = await fetch_forecast(session, self.zone)
-        slots = await self.hass.async_add_executor_job(
-            run_forecast, self.model, anchor, prices, dict.fromkeys(HORIZONS, weather), self.zone
-        )
+        try:
+            slots = await self.hass.async_add_executor_job(
+                run_forecast,
+                self.model,
+                anchor,
+                prices,
+                dict.fromkeys(HORIZONS, weather),
+                self.zone,
+            )
+        except InsufficientHistory:
+            raise
+        except Exception:  # a bug in core: keep the last forecast, still show the prices
+            _LOGGER.exception("Forecast for %s failed, keeping the last forecast", anchor)
+            return
         self._ledger.add_run(Run(anchor, now, self.model.version, tuple(slots), False))
         self._last_success = now
 

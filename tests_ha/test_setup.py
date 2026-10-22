@@ -6,8 +6,10 @@ sources serve the recorded payloads (see ``conftest.Sources``).
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import AsyncIterator, Awaitable, Callable
 from datetime import UTC, datetime, timedelta
+import logging
 from typing import Any
 from unittest.mock import patch
 from zoneinfo import ZoneInfo
@@ -455,3 +457,52 @@ async def test_unreadable_store_starts_empty(
     assert entry.state is ConfigEntryState.LOADED
     assert "cannot be read, starting empty" in caplog.text
     assert hass.states.get(PRICE).attributes["anchor_day"] == "2026-10-22"
+
+
+async def test_forecast_bug_keeps_price_sensor_with_fresh_market(
+    hass_with_recorder: HomeAssistant,
+    set_up: SetUp,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+    recorded,
+) -> None:
+    hass = hass_with_recorder
+
+    def broken(*args: Any) -> None:
+        raise IndexError("bug in core")
+
+    monkeypatch.setattr(coordinator_module, "run_forecast", broken)
+    entry = await set_up()
+
+    assert entry.state is ConfigEntryState.LOADED
+    state = hass.states.get(PRICE)
+    assert state.state != STATE_UNAVAILABLE
+    assert float(state.state) == _market_price(recorded, T10)
+    assert {e["source"] for e in state.attributes["prices"]} == {"market"}
+    errors = [r for r in caplog.records if r.levelno == logging.ERROR]
+    assert errors and errors[0].exc_info[0] is IndexError
+
+
+async def test_refreshes_never_interleave(
+    hass_with_recorder: HomeAssistant, set_up: SetUp, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    entry = await set_up()
+    coordinator = entry.runtime_data.coordinator
+    active, peak = 0, 0
+    fetch = coordinator_module.fetch_prices
+
+    async def counting_fetch(*args: Any) -> Any:
+        nonlocal active, peak
+        active += 1
+        peak = max(peak, active)
+        await asyncio.sleep(0)
+        try:
+            return await fetch(*args)
+        finally:
+            active -= 1
+
+    monkeypatch.setattr(coordinator_module, "fetch_prices", counting_fetch)
+    # Straight at the update method: newer HA locks async_refresh itself, 2024.11 does not.
+    await asyncio.gather(coordinator._async_update_data(), coordinator._async_update_data())
+
+    assert peak == 1
