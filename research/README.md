@@ -155,3 +155,22 @@ Population-weighted regional holidays (`hol_share`, e.g. Corpus Christi 0.64), b
 and the Christmas week (`hol_` features) changed nothing (MAE 2.14 → 2.15, national holiday
 bias +0.93 → +0.73, 1 May unchanged), so they stay off (`--drop` default includes `hol_`).
 With ~25 holidays in the data, holiday × strong sun is too rare to learn.
+
+### Low-price chance (P10)
+
+A P10 quantile model (`--quantile 0.1 --target gq`) with the mirrored rolling conformal
+offset (trailing 56 days' 10 % quantile of `price − P10`, reported as `min(P10, median)`):
+raw 17 % of hours fall below it, calibrated 10 %. As a flag for negative prices:
+
+| horizon | flag | negative hours caught | flagged hours actually negative | flagged h/month |
+|---|---|---|---|---|
+| D+1 | median < 0 | 55 % | 86 % | 30 |
+| D+1 | median < 2 ct | 79 % | 65 % | 57 |
+| D+1 | **P10 < 0** | **84 %** | 60 % | 66 |
+| D+6 | median < 0 | 40 % | 70 % | 27 |
+| D+6 | median < 2 ct | 61 % | 55 % | 51 |
+| D+6 | **P10 < 0** | **80 %** | 43 % | 87 |
+
+P10 keeps catching ~80 % of negative hours out to D+6, where the median alone drops to 40 %.
+1 May 2026 (D+2): median minimum −4.6 ct, P10 −12.6 ct, actual −49.9 ct; P10 < 0 in 9 hours,
+actual negative 8 hours.
