@@ -149,6 +149,15 @@ def weather_features(w: pd.DataFrame) -> pd.DataFrame:
     return f.drop(columns=[c for c in w.columns if c.startswith("nb_")])
 
 
+def load_gas() -> pd.Series:
+    """Daily TTF close (EUR/MWh) by trading date; research only, see fetch_gas()."""
+    r = json.loads((RAW / "gas_ttf.json").read_text())["chart"]["result"][0]
+    tz = r["meta"]["exchangeTimezoneName"]
+    idx = pd.to_datetime(r["timestamp"], unit="s", utc=True).tz_convert(tz).date
+    s = pd.Series(r["indicators"]["quote"][0]["close"], index=pd.to_datetime(idx), dtype=float)
+    return s[~s.index.duplicated(keep="last")].dropna()
+
+
 def neighbor_price_daily(nb_prices: dict[str, pd.Series]) -> pd.DataFrame:
     """Per local date: daily mean and 7-day mean of each neighbour zone (prefix nbp_)."""
     cols = {}
@@ -165,6 +174,7 @@ def build_samples(
     weather: dict[int, pd.DataFrame],
     cap: pd.DataFrame,
     nb_prices: dict[str, pd.Series],
+    gas: pd.Series | None = None,
 ) -> pd.DataFrame:
     local = prices.index.tz_convert(TZ)
     pdf = pd.DataFrame({"price": prices.values, "date": local.date}, index=prices.index)
@@ -175,6 +185,14 @@ def build_samples(
     daily["mean30"] = daily["mean"].rolling(30).mean()
     daily["min7"] = daily["min"].rolling(7).min()
     daily["max7"] = daily["max"].rolling(7).max()
+    # Key-free proxy for the fuel-driven price level: recent evening prices, when gas plants set the price.
+    hour = local.hour
+    evening = pdf[(hour >= 18) & (hour <= 21)].groupby("date")["price"].median()
+    evening.index = pd.to_datetime(evening.index)
+    daily["gq_evening14"] = evening.rolling(14).median()
+    q = pdf.groupby("date")["price"].quantile(0.9)
+    q.index = pd.to_datetime(q.index)
+    daily["gq_q90_14"] = q.rolling(14).mean()
     daily = daily.add_prefix("D_")
     nb_daily = neighbor_price_daily(nb_prices)
 
@@ -205,6 +223,11 @@ def build_samples(
             s[f"nbp_{zone}_lastday"] = zs.reindex(lag_d).values
         s = s.join(daily, on="issue_date")
         s = s.join(nb_daily, on="issue_date")
+        if gas is not None:
+            # Last settlement before the 06:00 issue time: the previous trading day's close.
+            g = gas.reindex(pd.date_range(gas.index.min(), issue_date.max(), freq="D")).ffill()
+            s["gas_ttf"] = g.reindex(issue_date - pd.Timedelta(days=1)).values
+            s["gas_chg7"] = s["gas_ttf"] - g.reindex(issue_date - pd.Timedelta(days=8)).values
         s = s.join(w)
         per = issue_date.to_period("M")
         s[cap.columns] = cap.reindex(per).values
@@ -216,7 +239,7 @@ def build_samples(
 
 # ---------------------------------------------------------------- model / eval
 
-NON_FEATURES = {"price", "target_date", "issue_date", "y"}
+NON_FEATURES = {"price", "target_date", "issue_date", "y", "_scale"}
 
 
 def walk_forward(
@@ -230,8 +253,18 @@ def walk_forward(
 ) -> pd.DataFrame:
     df = df.copy()
     # "z": deviation scaled by recent volatility, so peak height can grow with the regime
-    scale = df["D_std7"].clip(lower=5) if target == "z" else 1.0
-    df["y"] = (df["price"] - df["D_mean7"]) / scale
+    # "gas": deviation relative to the gas price, so spikes can scale with fuel cost beyond the training range
+    if target == "z":
+        scale = df["D_std7"].clip(lower=5)
+    elif target == "gas":
+        scale = df["gas_ttf"].clip(lower=15) / 40
+    elif target == "gq":
+        # key-free alternative: scale by the recent evening price level (gas plants usually set it)
+        scale = df["D_gq_evening14"].clip(lower=50) / 100
+    else:
+        scale = 1.0
+    df["_scale"] = scale
+    df["y"] = (df["price"] - df["D_mean7"]) / df["_scale"]
     features = [c for c in df.columns if c not in NON_FEATURES and not any(d in c for d in drop or [])]
     preds = []
     months = pd.period_range(test_start, df["issue_date"].max(), freq="M")
@@ -254,7 +287,7 @@ def walk_forward(
         )
         model.fit(train[features], train["y"])
         p = test[["h", "target_date", "issue_date", "price", "p_lastday", "p_lastweek"]].copy()
-        s = test["D_std7"].clip(lower=5).values if target == "z" else 1.0
+        s = test["_scale"].values
         p["pred"] = model.predict(test[features]) * s + test["D_mean7"].values
         preds.append(p)
         print(f"  {m}: train={len(train):>7} test={len(test):>6}")
@@ -307,11 +340,11 @@ def main() -> None:
     ap.add_argument("--test-start", default="2025-04-01")
     ap.add_argument("--loss", default="absolute_error")
     # neighbour prices (nbp_) did not improve MAE in the ablation, so they are off by default
-    ap.add_argument("--drop", nargs="*", default=["nbp_"], help="drop feature columns containing these substrings")
+    ap.add_argument("--drop", nargs="*", default=["nbp_", "gas_", "gq_"], help="drop feature columns containing these substrings")
     ap.add_argument("--tag", default="")
     ap.add_argument("--quantile", type=float, default=None, help="fit a quantile model instead (e.g. 0.9)")
     ap.add_argument("--min-leaf", type=int, default=40)
-    ap.add_argument("--target", choices=["diff", "z"], default="diff")
+    ap.add_argument("--target", choices=["diff", "z", "gas", "gq"], default="diff")
     ap.add_argument("--oracle-countries", nargs="*", default=[], help="with --oracle: also neighbours' actuals")
     ap.add_argument("--oracle", action="store_true", help="DIAGNOSTIC ONLY: add actual load/generation of the target hour")
     args = ap.parse_args()
@@ -320,7 +353,7 @@ def main() -> None:
     weather = load_weather()
     cap = load_installed()
     nb_prices = {z: load_prices(z) for z in NEIGHBOR_ZONES}
-    df = build_samples(prices, weather, cap, nb_prices)
+    df = build_samples(prices, weather, cap, nb_prices, load_gas())
     if args.oracle:
         df = df.join(load_public_power().add_prefix("oracle_"))
         for c in args.oracle_countries:

@@ -95,3 +95,31 @@ hours instead of the true ones (`regret dear4`): 0.29 ct (D+1) … 0.59 ct (D+6)
 (25 % exceedance). With a rolling conformal offset (trailing 56 days' 90 % quantile of
 `price − P90`, known at issue time) exceedance is 12 %, and "P90 > 21 ct" flags 80 % (D+1) …
 67 % (D+6) of peak hours with 39 … 26 % precision (median forecast: 27 … 17 % recall).
+
+### Gas price (TTF) and scaling the target
+
+TTF front-month closes (Yahoo `TTF=F`, unofficial, research only, `fetch_gas()`) rose from
+~32 €/MWh (Sep 2025) to 75 (Sep 2026) and 82 (Oct 2026), exactly the months with the
+largest errors. Peak = hour above 21.2 ct; bias = mean (forecast − actual) in peak hours.
+
+| variant (median model) | MAE all | MAE Aug–Oct 2026 | peak MAE D+1 | peak bias D+1 | peak bias Aug–Oct |
+|---|---|---|---|---|---|
+| default | 2.18 | 3.27 | 7.48 | −7.07 | −5.48 |
+| + key-free proxy features (`gq_`: 14-day evening price median, 14-day mean of daily P90) | 2.19 | 3.36 | 7.50 | −7.12 | −5.68 |
+| + TTF as a feature | 2.17 | 3.23 | 7.38 | −6.89 | −5.14 |
+| target relative to TTF (`--target gas`) | 2.16 | 3.25 | 6.77 | −6.05 | −3.70 |
+| target relative to evening price level (`--target gq`, key-free) | 2.14 | 3.27 | 7.16 | −6.60 | −4.81 |
+| target relative to TTF, squared error | 2.29 | 3.52 | 6.13 | −3.04 | −1.00 |
+
+As a plain feature TTF does nothing: trees cannot extrapolate to a gas price they never saw.
+Scaling the target by it lets spikes grow with fuel cost and roughly halves the peak bias in
+the high-gas months. For the calibrated P90 peak warning the gain is small:
+
+| P90 variant (calibrated) | exceedance | recall D+1 / D+3 / D+6 | precision D+1 / D+6 | recall Aug–Oct | alarm h/month |
+|---|---|---|---|---|---|
+| default | 12 % | 0.80 / 0.79 / 0.68 | 0.40 / 0.27 | 0.87 | 53 |
+| relative to TTF | 12 % | 0.84 / 0.80 / 0.71 | 0.38 / 0.27 | 0.93 | 58 |
+| relative to evening price level | 12 % | 0.82 / 0.78 / 0.70 | 0.41 / 0.27 | 0.90 | 54 |
+
+The key-free evening-price scaling gets most of the TTF gain without an unofficial data
+source.

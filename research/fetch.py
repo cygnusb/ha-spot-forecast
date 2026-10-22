@@ -129,6 +129,18 @@ def fetch_installed() -> None:
     (RAW / "installed_power.json").write_text(json.dumps(data))
 
 
+def fetch_gas() -> None:
+    """RESEARCH ONLY: daily TTF front-month settlement (EUR/MWh) from Yahoo's unofficial chart API."""
+    r = requests.get(
+        "https://query1.finance.yahoo.com/v8/finance/chart/TTF=F",
+        params={"range": "5y", "interval": "1d"},
+        headers={"User-Agent": "Mozilla/5.0"},
+        timeout=60,
+    )
+    r.raise_for_status()
+    (RAW / "gas_ttf.json").write_text(r.text)
+
+
 def fetch_weather(points: dict = POINTS, variables: list[str] = WEATHER_VARS) -> None:
     out = RAW / "weather"
     out.mkdir(parents=True, exist_ok=True)
@@ -157,6 +169,7 @@ def fetch_weather(points: dict = POINTS, variables: list[str] = WEATHER_VARS) ->
 
 if __name__ == "__main__":
     fetch_installed()
+    fetch_gas()
     fetch_prices()
     fetch_weather()
     fetch_weather(NEIGHBOR_POINTS, NEIGHBOR_VARS)
