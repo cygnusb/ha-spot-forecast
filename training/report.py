@@ -22,7 +22,7 @@ class Predictions:
     h: np.ndarray
     anchor: np.ndarray  # issue day, date (object array)
     target_date: np.ndarray  # local date (object array)
-    train_cutoff: np.ndarray  # first target day the predicting model never saw (object array)
+    train_last_target: np.ndarray  # last target day in the predicting model's fit (object array)
     actual: np.ndarray
     p_lastweek: np.ndarray
     median: np.ndarray

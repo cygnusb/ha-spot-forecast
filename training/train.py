@@ -87,7 +87,7 @@ def walk_forward(ds: Dataset, first_anchor: date, cutoff: date, max_iter: int = 
                     h=test.h,
                     anchor=test.anchor,
                     target_date=test.target_date,
-                    train_cutoff=np.full(len(test_idx), month, dtype=object),
+                    train_last_target=np.full(len(test_idx), max(train.target_date), dtype=object),
                     actual=test.y_price,
                     p_lastweek=test.p_lastweek,
                     **preds,
@@ -113,8 +113,10 @@ def peak_threshold(prices: Hourly, cutoff: date) -> float:
 
 
 def capacity_at(raw: RawData, cutoff: date) -> dict[str, float]:
-    """Installed capacity of the last month on or before the cutoff month."""
-    month = max(m for m in raw.capacity if m <= f"{cutoff:%Y-%m}")
+    """Installed capacity of the last training anchor's month (the day before the cutoff)."""
+    month = f"{cutoff - timedelta(days=1):%Y-%m}"
+    if month not in raw.capacity:
+        raise ValueError(f"no installed capacity for {month}")
     return dict(raw.capacity[month])
 
 

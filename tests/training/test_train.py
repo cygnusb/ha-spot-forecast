@@ -19,7 +19,7 @@ RESEARCH = Path(
 RESEARCH_RAW = RESEARCH / "data" / "raw"
 BERLIN = ZoneInfo("Europe/Berlin")
 
-pytestmark = pytest.mark.skipif(not RESEARCH_RAW.exists(), reason="research raw data missing")
+needs_raw = pytest.mark.skipif(not RESEARCH_RAW.exists(), reason="research raw data missing")
 
 
 @pytest.fixture(scope="module")
@@ -47,6 +47,7 @@ def _local_date(iso: str) -> date:
     return datetime.fromisoformat(iso).astimezone(BERLIN).date()
 
 
+@needs_raw
 def test_train_end_to_end_small(trained):
     m = load_model((trained / "de_lu-2025-10.json.gz").read_bytes())
     assert m.version == "de_lu-2025-10"
@@ -71,6 +72,7 @@ def test_train_end_to_end_small(trained):
     assert "MAE" in md and "D+6" in md
 
 
+@needs_raw
 def test_backfill_rows_are_out_of_sample():
     from training.dataset import load_raw
     from training.train import build_training_data, walk_forward
@@ -78,9 +80,22 @@ def test_backfill_rows_are_out_of_sample():
     ds = build_training_data(load_raw(RESEARCH_RAW), date(2025, 10, 1))
     wf = walk_forward(ds, date(2025, 8, 25), date(2025, 10, 1), max_iter=5)
     assert len(wf.anchor) > 0
-    rows = zip(wf.train_cutoff, wf.anchor, wf.target_date, strict=True)
-    for train_cutoff, anchor, target in rows:
-        # the month's model was fitted only on targets before its month start, which is
-        # on or before the issue day, and the prediction is for a later day
-        assert train_cutoff <= anchor < target < date(2025, 10, 1)
-        assert train_cutoff == anchor.replace(day=1)
+    rows = zip(wf.train_last_target, wf.anchor, wf.target_date, strict=True)
+    for last_fitted, anchor, target in rows:
+        # the predicting model saw no target day from its issue day on
+        assert last_fitted < anchor < target < date(2025, 10, 1)
+    # monthly refit: the September model saw August, the August model only July
+    assert max(wf.train_last_target) == date(2025, 8, 31)
+    assert min(wf.train_last_target) == date(2025, 7, 31)
+
+
+def test_capacity_is_the_last_training_anchor_month():
+    from training.dataset import RawData
+    from training.train import capacity_at
+
+    caps = {m: {"cap_solar": float(i)} for i, m in enumerate(["2026-08", "2026-09", "2026-10"])}
+    raw = RawData(prices=None, weather={}, capacity=caps)
+    assert capacity_at(raw, date(2026, 10, 1)) == {"cap_solar": 1.0}
+    assert capacity_at(raw, date(2026, 10, 15)) == {"cap_solar": 2.0}
+    with pytest.raises(ValueError, match="2026-11"):
+        capacity_at(raw, date(2026, 11, 2))
