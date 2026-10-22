@@ -185,7 +185,7 @@ class Ledger:
         }
 
     def prune(self, keep_days: int = 200) -> None:
-        """Drop runs, actuals and finalized days older than ``keep_days`` before the newest entry."""
+        """Drop runs, actuals and finalized days older than ``keep_days`` before the newest one."""
         newest = [max(self.actual)] if self.actual else []
         newest += [r.issued_at for r in self.runs.values()]
         if not newest:
