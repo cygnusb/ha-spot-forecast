@@ -7,10 +7,11 @@ from datetime import date, datetime
 import gzip
 import json
 from typing import Any
+import zlib
 
 import numpy as np
 
-from .features import FEATURE_NAMES, FEATURE_SCHEMA
+from .features import FEATURE_NAMES, FEATURE_SCHEMA, HORIZONS
 
 FORMAT = 1
 _ROW_CHUNK = 4096
@@ -18,6 +19,10 @@ _ROW_CHUNK = 4096
 
 class ModelMismatch(ValueError):
     """The model file does not fit this version of the code."""
+
+
+class ModelCorrupt(ModelMismatch):
+    """The model file cannot be decoded or its trees are not well-formed."""
 
 
 @dataclass(frozen=True, eq=False)
@@ -102,11 +107,43 @@ def _trees_to_json(t: Trees) -> dict[str, Any]:
     return d
 
 
-def _trees_from_json(d: dict[str, Any]) -> Trees:
-    return Trees(
+def _trees_from_json(d: dict[str, Any], name: str) -> Trees:
+    t = Trees(
         baseline=float(d["baseline"]),
-        **{name: np.asarray(d[name], dtype=dtype) for name, dtype in _TREE_FIELDS},
+        **{field: np.asarray(d[field], dtype=dtype) for field, dtype in _TREE_FIELDS},
     )
+    _check_trees(t, name)
+    return t
+
+
+def _check_trees(t: Trees, name: str) -> None:
+    """Structural checks that make ``predict`` safe: in bounds, finite, and terminating."""
+    n = len(t.feature)
+    nodes = [getattr(t, field) for field, _ in _TREE_FIELDS if field != "roots"]
+    if any(a.ndim != 1 or len(a) != n for a in nodes):
+        raise ModelCorrupt(f"{name}: node arrays differ in length")
+    if t.roots.ndim != 1 or ((t.roots < 0) | (t.roots >= n)).any():
+        raise ModelCorrupt(f"{name}: root index out of bounds")
+    if not np.isfinite(t.baseline) or not np.isfinite(t.value[t.is_leaf]).all():
+        raise ModelCorrupt(f"{name}: non-finite baseline or leaf value")
+    inner = np.flatnonzero(~t.is_leaf)
+    # sklearn numbers every child after its parent; requiring this proves the trees acyclic,
+    # so the descent in ``_predict_chunk`` ends after at most n steps
+    for child in (t.left[inner], t.right[inner]):
+        if ((child <= inner) | (child >= n)).any():
+            raise ModelCorrupt(f"{name}: child index out of bounds or not after its parent")
+    feature = t.feature[inner]
+    if ((feature < 0) | (feature >= len(FEATURE_NAMES))).any():
+        raise ModelCorrupt(f"{name}: feature index out of range")
+    if not np.isfinite(t.threshold[inner]).all():
+        raise ModelCorrupt(f"{name}: non-finite split threshold")
+
+
+def _offsets(d: dict[str, Any], name: str) -> dict[int, float]:
+    offsets = {int(h): float(v) for h, v in d.items()}
+    if set(offsets) != set(HORIZONS):
+        raise ModelCorrupt(f"{name}: horizons {sorted(offsets)} != {list(HORIZONS)}")
+    return offsets
 
 
 def dump_model(m: ModelFile) -> bytes:
@@ -132,8 +169,22 @@ def dump_model(m: ModelFile) -> bytes:
 
 
 def load_model(data: bytes) -> ModelFile:
-    """Parse a model file; raise ``ModelMismatch`` if it does not fit the code."""
-    doc = json.loads(gzip.decompress(data))
+    """Parse and check a model file.
+
+    Raises ``ModelMismatch`` if it does not fit the code, and its subclass ``ModelCorrupt``
+    if it cannot be decoded or is not well-formed.
+    """
+    try:
+        return _model_from_json(json.loads(gzip.decompress(data)))
+    except ModelMismatch:
+        raise
+    except (OSError, EOFError, zlib.error, ValueError, KeyError, TypeError, AttributeError) as e:
+        raise ModelCorrupt(f"model file is corrupt: {type(e).__name__}: {e}") from e
+
+
+def _model_from_json(doc: Any) -> ModelFile:
+    if not isinstance(doc, dict):
+        raise ModelCorrupt("model file is not a JSON object")
     if doc.get("format") != FORMAT:
         raise ModelMismatch(f"unsupported model format {doc.get('format')!r}")
     if doc.get("feature_schema") != FEATURE_SCHEMA:
@@ -148,11 +199,11 @@ def load_model(data: bytes) -> ModelFile:
         features=tuple(doc["features"]),
         train_cutoff=date.fromisoformat(doc["train_cutoff"]),
         created=datetime.fromisoformat(doc["created"]),
-        median=_trees_from_json(doc["median"]),
-        p90=_trees_from_json(doc["p90"]),
-        p10=_trees_from_json(doc["p10"]),
-        p90_offsets={int(h): float(v) for h, v in doc["p90_offsets"].items()},
-        p10_offsets={int(h): float(v) for h, v in doc["p10_offsets"].items()},
+        median=_trees_from_json(doc["median"], "median"),
+        p90=_trees_from_json(doc["p90"], "p90"),
+        p10=_trees_from_json(doc["p10"], "p10"),
+        p90_offsets=_offsets(doc["p90_offsets"], "p90_offsets"),
+        p10_offsets=_offsets(doc["p10_offsets"], "p10_offsets"),
         peak_threshold=float(doc["peak_threshold"]),
         capacity={k: float(v) for k, v in doc["capacity"].items()},
         metrics=doc["metrics"],
