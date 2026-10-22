@@ -110,7 +110,7 @@ def _trees_from_json(d: dict[str, Any]) -> Trees:
 
 
 def dump_model(m: ModelFile) -> bytes:
-    """Serialise to gzip JSON."""
+    """Serialise to gzip JSON; strict JSON, so non-finite numbers raise ``ValueError``."""
     doc = {
         "format": m.format,
         "zone": m.zone,
@@ -128,7 +128,7 @@ def dump_model(m: ModelFile) -> bytes:
         "capacity": m.capacity,
         "metrics": m.metrics,
     }
-    return gzip.compress(json.dumps(doc).encode(), mtime=0)
+    return gzip.compress(json.dumps(doc, allow_nan=False).encode(), mtime=0)
 
 
 def load_model(data: bytes) -> ModelFile:

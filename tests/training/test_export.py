@@ -45,3 +45,43 @@ def test_rejects_categorical_splits():
     )
     with pytest.raises(ValueError, match="categorical"):
         trees_from_sklearn(m)
+
+
+def _no_constants(name: str) -> float:
+    raise ValueError(f"non-standard JSON constant {name}")
+
+
+def test_inf_threshold_exports_as_strict_json(tiny_model_file):
+    """sklearn stores +inf as the threshold of a split that sends every known value left and
+    only missing values right; the model file must still be strict JSON (orjson in HA)."""
+    from dataclasses import replace
+    import gzip
+    import json
+
+    from core.model import dump_model, load_model
+
+    rng = np.random.default_rng(2)
+    X = rng.normal(size=(4000, 82))
+    X[rng.random(4000) < 0.5, 0] = np.nan
+    y = 10.0 * np.isnan(X[:, 0]) + X[:, 1] + rng.normal(scale=0.3, size=4000)
+    m = HistGradientBoostingRegressor(max_iter=20, random_state=0).fit(X, y)
+    thresholds = np.concatenate([p[0].nodes["num_threshold"] for p in m._predictors])
+    assert np.isinf(thresholds).any()  # the case under test really occurs
+
+    trees = trees_from_sklearn(m)
+    assert np.isfinite(trees.threshold).all()
+    data = dump_model(replace(tiny_model_file, median=trees, p90=trees, p10=trees))
+    json.loads(gzip.decompress(data), parse_constant=_no_constants)
+    back = load_model(data)
+    probe = np.vstack([X[:500], np.full((5, 82), np.nan)])
+    np.testing.assert_array_equal(back.median.predict(probe), trees.predict(probe))
+    np.testing.assert_allclose(back.median.predict(probe), m.predict(probe), atol=1e-6)
+
+
+def test_dump_refuses_non_finite_values(tiny_model_file):
+    from dataclasses import replace
+
+    from core.model import dump_model
+
+    with pytest.raises(ValueError):
+        dump_model(replace(tiny_model_file, peak_threshold=float("inf")))
