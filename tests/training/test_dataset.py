@@ -92,7 +92,7 @@ def test_skips_anchors_without_history(raw):
     assert len(ds.y_price) == 0 or min(ds.anchor) >= date(2024, 3, 1)
 
 
-def test_full_range_row_count_and_speed(raw, research_rows):
+def test_full_range_is_complete_and_fast(raw):
     import time as clock
 
     t0 = clock.perf_counter()
