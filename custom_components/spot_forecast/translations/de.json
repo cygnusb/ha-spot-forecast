@@ -75,5 +75,11 @@
         "name": "Negativer Preis"
       }
     }
+  },
+  "issues": {
+    "model_outdated": {
+      "title": "Spot-Forecast-Modell ist veraltet",
+      "description": "Das mitgelieferte Prognosemodell {version} wurde mit Daten bis {cutoff} trainiert, also vor mehr als 60 Tagen. Je weiter sich der Markt verändert, desto ungenauer werden die Prognosen. Aktualisiere die Integration Spot Forecast, um ein neueres Modell zu erhalten."
+    }
   }
 }

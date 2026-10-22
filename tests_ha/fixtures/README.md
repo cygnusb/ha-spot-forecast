@@ -10,6 +10,7 @@ date the HA tests freeze to. Values are the real API responses; nothing was roun
 | `open_meteo_de.json` | `GET https://api.open-meteo.com/v1/forecast` with the DE points (query below) | unchanged response: list of 10 location documents, 2026-10-22T00:00 to 2026-10-29T23:00 GMT |
 | `open_meteo_nb.json` | same URL with the neighbour points | unchanged response: list of 12 location documents, same time range |
 | `open_meteo_prev_de.json` | `GET https://previous-runs-api.open-meteo.com/v1/forecast` with the DE points | unchanged response: list of 10 location documents, 2026-10-01T00:00 to 2026-10-22T23:00 GMT, all 24 `{var}_previous_day{2..7}` columns |
+| `open_meteo_prev_nb.json` | same URL with the neighbour points, recorded at about 21:50 CEST (19:50 UTC) | unchanged response: list of 12 location documents, same time range and column layout |
 
 **Synthesized:** nothing. The Energy-Charts recording already contained 2026-10-23, so no
 rows were copied forward, and the Open-Meteo forecasts were recorded on 2026-10-22, so they
@@ -19,7 +20,15 @@ removal of 2026-10-23 from `energy_charts_price.json`.
 The HA tests synthesize more in code, never in these files: `conftest.Sources` serves the
 prices with 40 days of history in front (the four recorded days tiled backwards, see
 `_with_history`, since the integration needs 30 days) and can override single quarter hours
-(`price_overrides`, e.g. one negative price).
+(`price_overrides`, e.g. one negative price). The backfill tests need prices back to
+about 2026-08-25 (30 days of history before the first recomputed anchor), so the history
+has 80 days (`HISTORY_BLOCKS = 20`, from 2026-07-31, all CEST).
+
+The previous-runs recordings are served whole, whatever `start_date`/`end_date` a request
+asks for. They cover the recompute span of the backfill tests (target days 2026-10-01 …
+2026-10-22) and nothing was shifted or synthesized: target hours outside it (the first two
+hours of local 2026-10-01, which are 2026-09-30 GMT, and the days after 2026-10-22) simply
+have no weather, so those forecast slots are invalid and write no statistics.
 
 The Energy-Charts API reads date-only `start`/`end` as whole market days in local time,
 `end` inclusive.
@@ -48,5 +57,11 @@ models=ecmwf_ifs025  forecast_days=8  timezone=GMT
 latitude, longitude as for open_meteo_de.json
 hourly={wind_speed_100m,shortwave_radiation,temperature_2m,cloud_cover}_previous_day{2..7}
        (variable-major: wind_speed_100m_previous_day2, ..._day3, ..., cloud_cover_previous_day7)
+models=ecmwf_ifs025  start_date=2026-10-01  end_date=2026-10-22  timezone=GMT
+
+# open_meteo_prev_nb.json
+latitude, longitude as for open_meteo_nb.json
+hourly={wind_speed_100m,shortwave_radiation,temperature_2m,precipitation}_previous_day{2..7}
+       (variable-major, as above)
 models=ecmwf_ifs025  start_date=2026-10-01  end_date=2026-10-22  timezone=GMT
 ```

@@ -7,32 +7,25 @@ sources serve the recorded payloads (see ``conftest.Sources``).
 from __future__ import annotations
 
 import asyncio
-from collections.abc import AsyncIterator, Awaitable, Callable
 from datetime import UTC, datetime, timedelta
 import logging
 from typing import Any
 from unittest.mock import patch
 from zoneinfo import ZoneInfo
 
-from conftest import Sources
+from conftest import T10, SetUp, Sources, advance, stat_rows
 from freezegun.api import FrozenDateTimeFactory
 from homeassistant.components.recorder import get_instance
 from homeassistant.components.recorder.statistics import (
     get_metadata,
-    statistics_during_period,
 )
 from homeassistant.config_entries import ConfigEntryState
 from homeassistant.const import STATE_OFF, STATE_ON, STATE_UNAVAILABLE
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import entity_registry as er
-from homeassistant.util import dt as dt_util
 import pytest
 from pytest_homeassistant_custom_component.common import (
     MockConfigEntry,
-    async_fire_time_changed,
-)
-from pytest_homeassistant_custom_component.components.recorder.common import (
-    async_wait_recording_done,
 )
 from pytest_homeassistant_custom_component.test_util.aiohttp import AiohttpClientMocker
 
@@ -41,7 +34,6 @@ from custom_components.spot_forecast.const import CONF_PEAK_THRESHOLD, CONF_ZONE
 from custom_components.spot_forecast.core.ingest import parse_energy_charts
 
 BERLIN = ZoneInfo("Europe/Berlin")
-T10 = datetime(2026, 10, 22, 10, tzinfo=BERLIN)
 T14 = datetime(2026, 10, 22, 14, tzinfo=BERLIN)
 
 PRICE = "sensor.spot_forecast_de_lu_price"
@@ -50,63 +42,6 @@ NEGATIVE = "binary_sensor.spot_forecast_de_lu_negative_price"
 LAST_RUN = "sensor.spot_forecast_de_lu_last_run"
 STAT_PRICE = "spot_forecast:de_lu_price"
 STAT_H1 = "spot_forecast:de_lu_forecast_h1"
-
-SetUp = Callable[..., Awaitable[MockConfigEntry]]
-
-
-@pytest.fixture
-async def set_up(
-    hass_with_recorder: HomeAssistant, sources: Sources, freezer: FrozenDateTimeFactory
-) -> AsyncIterator[SetUp]:
-    """Set up a DE-LU entry at 2026-10-22 10:00; unloaded again after the test."""
-    hass = hass_with_recorder
-    freezer.move_to(T10)
-    entries: list[MockConfigEntry] = []
-
-    async def _set_up(
-        options: dict[str, Any] | None = None, entry_id: str | None = None
-    ) -> MockConfigEntry:
-        entry = MockConfigEntry(
-            domain=DOMAIN,
-            entry_id=entry_id,
-            title="Spot Forecast DE-LU",
-            unique_id="DE-LU",
-            data={CONF_ZONE: "DE-LU"},
-            options=options or {},
-        )
-        entry.add_to_hass(hass)
-        assert await hass.config_entries.async_setup(entry.entry_id)
-        await hass.async_block_till_done()
-        entries.append(entry)
-        return entry
-
-    yield _set_up
-    for entry in entries:
-        if entry.state is ConfigEntryState.LOADED:
-            assert await hass.config_entries.async_unload(entry.entry_id)
-    await hass.async_block_till_done()
-
-
-async def _advance(hass: HomeAssistant, freezer: FrozenDateTimeFactory, to: datetime) -> None:
-    """Move the clock and fire the timers that are due."""
-    freezer.move_to(to)
-    async_fire_time_changed(hass, dt_util.utcnow())
-    await hass.async_block_till_done()
-
-
-async def _stat_rows(hass: HomeAssistant, statistic_id: str) -> list[dict]:
-    await async_wait_recording_done(hass)
-    stats = await get_instance(hass).async_add_executor_job(
-        statistics_during_period,
-        hass,
-        datetime(2026, 1, 1, tzinfo=UTC),
-        None,
-        {statistic_id},
-        "hour",
-        None,
-        {"mean"},
-    )
-    return stats.get(statistic_id, [])
 
 
 def _market_price(recorded, at: datetime, name: str = "energy_charts_price.json") -> float:
@@ -192,7 +127,7 @@ async def test_anchor_switches_after_publication(
     assert hass.states.get(PRICE).attributes["anchor_day"] == "2026-10-22"
 
     sources.serve("energy_charts_price_tomorrow.json")
-    await _advance(hass, freezer, T14)
+    await advance(hass, freezer, T14)
 
     attrs = hass.states.get(PRICE).attributes
     assert attrs["anchor_day"] == "2026-10-23"
@@ -277,28 +212,28 @@ async def test_statistics_written_for_completed_day(
 ) -> None:
     hass = hass_with_recorder
     await set_up()
-    price_rows = await _stat_rows(hass, STAT_PRICE)
+    price_rows = await stat_rows(hass, STAT_PRICE)
     assert price_rows  # every complete day of the 40-day history
     assert datetime.fromtimestamp(price_rows[-1]["start"], UTC) == datetime(
         2026, 10, 22, 21, tzinfo=UTC
     )
-    assert await _stat_rows(hass, STAT_H1) == []  # no target day complete yet
+    assert await stat_rows(hass, STAT_H1) == []  # no target day complete yet
 
     # 14:00: 2026-10-23 is published, so the 10:00 run's D+1 day is complete
     sources.serve("energy_charts_price_tomorrow.json")
-    await _advance(hass, freezer, T14)
+    await advance(hass, freezer, T14)
 
-    h1 = await _stat_rows(hass, STAT_H1)
+    h1 = await stat_rows(hass, STAT_H1)
     assert len(h1) == 24
     assert datetime.fromtimestamp(h1[0]["start"], UTC) == datetime(2026, 10, 22, 22, tzinfo=UTC)
     assert all(row["mean"] is not None for row in h1)
-    price_rows = await _stat_rows(hass, STAT_PRICE)
+    price_rows = await stat_rows(hass, STAT_PRICE)
     assert datetime.fromtimestamp(price_rows[-1]["start"], UTC) == datetime(
         2026, 10, 23, 21, tzinfo=UTC
     )
     for series in ("peak_risk_h1", "low_h1"):
-        assert len(await _stat_rows(hass, f"spot_forecast:de_lu_{series}")) == 24
-    assert await _stat_rows(hass, "spot_forecast:de_lu_forecast_h2") == []
+        assert len(await stat_rows(hass, f"spot_forecast:de_lu_{series}")) == 24
+    assert await stat_rows(hass, "spot_forecast:de_lu_forecast_h2") == []
 
     metadata = await get_instance(hass).async_add_executor_job(
         lambda: get_metadata(hass, statistic_ids={STAT_PRICE, STAT_H1})
@@ -325,7 +260,7 @@ async def test_weather_outage_keeps_last_forecast(
     last_run = hass.states.get(LAST_RUN).state
 
     sources.serve(weather_status=500)
-    await _advance(hass, freezer, T10 + timedelta(minutes=15))  # weather run 08:15 UTC
+    await advance(hass, freezer, T10 + timedelta(minutes=15))  # weather run 08:15 UTC
 
     assert any("open-meteo" in str(url) for _, url, _, _ in aioclient_mock.mock_calls)
     state = hass.states.get(PRICE)
@@ -339,7 +274,7 @@ async def test_weather_outage_keeps_last_forecast(
     # 36 h after the last success: forecast dropped, known prices kept
     sources.serve("energy_charts_price_tomorrow.json", weather_status=500)
     later = T10 + timedelta(hours=36, minutes=15)
-    await _advance(hass, freezer, later)
+    await advance(hass, freezer, later)
 
     assert aioclient_mock.call_count > 0  # a run was attempted, and failed again
     state = hass.states.get(PRICE)
@@ -361,9 +296,9 @@ async def test_restart_keeps_forecast_and_does_not_duplicate_statistics(
     hass = hass_with_recorder
     entry = await set_up()
     sources.serve("energy_charts_price_tomorrow.json")
-    await _advance(hass, freezer, T14)
+    await advance(hass, freezer, T14)
     before = hass.states.get(PRICE).attributes
-    h1_before = len(await _stat_rows(hass, STAT_H1))
+    h1_before = len(await stat_rows(hass, STAT_H1))
     assert h1_before > 0
 
     sources.fail_all()
@@ -385,7 +320,7 @@ async def test_restart_keeps_forecast_and_does_not_duplicate_statistics(
     assert state.attributes["prices"] == before["prices"]
     assert state.attributes["issued_at"] == before["issued_at"]
     assert state.attributes["stale"] is False
-    assert len(await _stat_rows(hass, STAT_H1)) == h1_before
+    assert len(await stat_rows(hass, STAT_H1)) == h1_before
 
 
 async def test_setup_retries_without_data(
@@ -419,7 +354,7 @@ async def test_state_advances_each_quarter_hour_without_fetching(
     assert float(hass.states.get(PRICE).state) == _market_price(recorded, T10)
     calls = aioclient_mock.call_count
 
-    await _advance(hass, freezer, T10 + timedelta(minutes=15))
+    await advance(hass, freezer, T10 + timedelta(minutes=15))
 
     assert float(hass.states.get(PRICE).state) == _market_price(
         recorded, T10 + timedelta(minutes=15)

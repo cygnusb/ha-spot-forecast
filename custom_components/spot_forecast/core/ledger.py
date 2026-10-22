@@ -78,9 +78,19 @@ class Ledger:
     actual: dict[datetime, float] = field(default_factory=dict)  # UTC hour -> EUR/MWh
 
     def add_run(self, run: Run) -> None:
-        """Store ``run`` unless a run issued later already exists for its anchor."""
+        """Store ``run`` unless the stored run of its anchor takes precedence.
+
+        What the user saw wins: a backfill run never replaces a live run, and a live run
+        always replaces a backfill run. Between runs of one kind the later issued wins; a
+        backfill run also on a tie, so a re-import with a wider window completes a stored one.
+        """
         old = self.runs.get(run.anchor)
-        if old is None or run.issued_at > old.issued_at:
+        if (
+            old is None
+            or (old.backfill and not run.backfill)
+            or (old.backfill == run.backfill and run.issued_at > old.issued_at)
+            or (old.backfill and run.backfill and run.issued_at == old.issued_at)
+        ):
             self.runs[run.anchor] = run
 
     def record_actual(self, hourly: Hourly) -> None:
@@ -122,9 +132,10 @@ class Ledger:
         """Statistic rows not yet written, for every target day with all hourly actuals.
 
         Tracked per series: a day's price rows go out once; its forecast, peak-risk and low
-        rows for horizon ``h`` go out once a run with anchor ``day - h`` exists (so runs added
-        later, e.g. by the backfill, still produce their rows). ``default_*`` are the model's
-        offsets, used by ``offsets`` while a horizon has too few residuals.
+        rows for horizon ``h`` go out once a run with anchor ``day - h`` holds slots for that
+        horizon (so runs added or completed later, e.g. by the backfill, still produce their
+        rows). ``default_*`` are the model's offsets, used by ``offsets`` while a horizon has
+        too few residuals.
         """
         zone = ZoneInfo(tz)
         by_anchor: dict[date, tuple[dict[int, float], dict[int, float]]] = {}
@@ -141,7 +152,11 @@ class Ledger:
             span = set(hours)
             for h in HORIZONS:
                 run = self.runs.get(day - timedelta(days=h))
-                if run is None or (day, f"h{h}") in self.finalized:
+                if (
+                    run is None
+                    or (day, f"h{h}") in self.finalized
+                    or not any(s.h == h for s in run.slots)
+                ):
                     continue
                 if run.anchor not in by_anchor:
                     by_anchor[run.anchor] = self.offsets(run.anchor, default_p90, default_p10)

@@ -1,4 +1,4 @@
-"""Persistence of the ledger, recent market slots and the last successful run."""
+"""Persistence of the ledger, recent market slots, the last successful run and the backfill."""
 
 from __future__ import annotations
 
@@ -27,15 +27,16 @@ class ForecastStore:
         )
         self._pending: dict[str, Any] | None = None
 
-    async def async_load(self) -> tuple[Ledger, list[MarketSlot], datetime | None]:
-        """The stored ledger, market slots and last success; empty ones if nothing is stored.
+    async def async_load(self) -> tuple[Ledger, list[MarketSlot], datetime | None, int]:
+        """The stored ledger, market slots, last success and backfill window done (days).
 
-        A payload that cannot be read (damaged, or an unknown layout) is dropped with a
-        warning instead of failing setup on every retry.
+        Empty ones if nothing is stored. A payload that cannot be read (damaged, or an
+        unknown layout) is dropped with a warning instead of failing setup on every retry.
+        A payload without ``backfill_done_days`` (written before the backfill) reads as 0.
         """
         data = await self._store.async_load()
         if data is None:
-            return Ledger(), [], None
+            return Ledger(), [], None, 0
         try:
             market = [
                 MarketSlot(datetime.fromisoformat(start), datetime.fromisoformat(end), float(price))
@@ -46,6 +47,7 @@ class ForecastStore:
                 Ledger.from_json(data["ledger"]),
                 market,
                 None if last is None else datetime.fromisoformat(last),
+                int(data.get("backfill_done_days", 0)),
             )
         except Exception as err:  # noqa: BLE001 - any unreadable layout starts empty
             _LOGGER.warning(
@@ -54,17 +56,22 @@ class ForecastStore:
                 type(err).__name__,
                 err,
             )
-            return Ledger(), [], None
+            return Ledger(), [], None, 0
 
     @callback
     def async_save(
-        self, ledger: Ledger, market: list[MarketSlot], last_success: datetime | None
+        self,
+        ledger: Ledger,
+        market: list[MarketSlot],
+        last_success: datetime | None,
+        backfill_done_days: int,
     ) -> None:
         """Save a snapshot taken now, written ``SAVE_DELAY`` seconds later."""
         snapshot = {
             "ledger": ledger.to_json(),
             "market": [[m.start.isoformat(), m.end.isoformat(), m.price] for m in market],
             "last_success": None if last_success is None else last_success.isoformat(),
+            "backfill_done_days": backfill_done_days,
         }
         self._pending = snapshot
 

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import date, datetime, time, timedelta
 import logging
@@ -17,15 +18,24 @@ from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, Upda
 from homeassistant.util import dt as dt_util
 
 from . import long_term_statistics
-from .const import CONF_PEAK_THRESHOLD, CONF_ZONE, DOMAIN, PRICE_HISTORY_DAYS
-from .core.features import HORIZONS, InsufficientHistory
+from .backfill import BackfillResult, run_backfill
+from .const import (
+    CONF_BACKFILL_DAYS,
+    CONF_PEAK_THRESHOLD,
+    CONF_ZONE,
+    DEFAULT_BACKFILL_DAYS,
+    DOMAIN,
+    PRICE_HISTORY_DAYS,
+)
+from .core.features import HORIZONS, Hourly, InsufficientHistory
 from .core.forecast import Slot, run_forecast
 from .core.ingest import MarketSlot, hourly_prices
-from .core.ledger import Ledger, Run
+from .core.ledger import PRICE, Ledger, Run
 from .core.model import ModelFile
 from .core.output import prices_attribute
 from .core.schedule import choose_anchor, is_stale, next_run
 from .core.zones import ZONES, Zone
+from .issues import async_check_model_age, async_delete_model_issue
 from .sources.energy_charts import fetch_prices
 from .sources.http import SourceError
 from .sources.open_meteo import fetch_forecast
@@ -78,8 +88,12 @@ class SpotForecastCoordinator(DataUpdateCoordinator[SpotData]):
         self._unsub_run: CALLBACK_TYPE | None = None
         self._unsub_tick: CALLBACK_TYPE | None = None
         self._unsub_stop: CALLBACK_TYPE | None = None
-        self._run_lock = asyncio.Lock()  # a manual refresh never interleaves with a run
+        self._run_lock = asyncio.Lock()  # runs, refreshes and backfill never interleave
         self._started = False  # between async_start and unload / HA stop
+        self._ran = False  # a run succeeded since this setup
+        self._backfill_done_days = 0  # the widest backfill window completed so far
+        self._backfill_started = False  # one backfill attempt per setup
+        self.backfill_result: BackfillResult | None = None  # of this setup's backfill
 
     @property
     def peak_threshold(self) -> float:
@@ -87,9 +101,26 @@ class SpotForecastCoordinator(DataUpdateCoordinator[SpotData]):
         option = self.config_entry.options.get(CONF_PEAK_THRESHOLD)
         return float(option) if option is not None else round(self.model.peak_threshold / 10, 1)
 
+    @property
+    def ledger(self) -> Ledger:
+        """The forecast ledger, to read; change it only through ``async_add_history``."""
+        return self._ledger
+
+    @property
+    def backfill_done_days(self) -> int:
+        """The widest backfill window (days) completed, 0 if none."""
+        return self._backfill_done_days
+
     async def _async_setup(self) -> None:
         """Rebuild the last state from the Store before the first run."""
-        self._ledger, self._market, self._last_success = await self._store.async_load()
+        entry_id = self.config_entry.entry_id
+        self.config_entry.async_on_unload(lambda: async_delete_model_issue(self.hass, entry_id))
+        (
+            self._ledger,
+            self._market,
+            self._last_success,
+            self._backfill_done_days,
+        ) = await self._store.async_load()
         self._calibrate(dt_util.utcnow())
 
     async def _async_update_data(self) -> SpotData:
@@ -98,12 +129,25 @@ class SpotForecastCoordinator(DataUpdateCoordinator[SpotData]):
 
     async def _async_update_locked(self) -> SpotData:
         now = dt_util.utcnow()
+        async_check_model_age(self.hass, self.config_entry.entry_id, self.model, self._today(now))
         try:
             await self._async_run(now)
         except (SourceError, InsufficientHistory) as err:
             if not self._market and self._latest_run() is None:
                 raise UpdateFailed(f"no forecast yet and nothing stored: {err}") from err
             _LOGGER.warning("Forecast run failed, keeping the last forecast: %s", err)
+        self._write_statistics()
+        self._ledger.prune()  # keeps 200 days: the 180-day backfill window and a margin
+        self._calibrate(now)
+        self._save()
+        return self._build(now)
+
+    def _write_statistics(self) -> None:
+        """Queue the rows of every newly complete day; ``finalize`` marks them written.
+
+        No ``await`` between finalize, the write and the save, so a cancelled task can never
+        leave days marked written that were not.
+        """
         long_term_statistics.async_write(
             self.hass,
             self._ledger.finalize(
@@ -113,10 +157,40 @@ class SpotForecastCoordinator(DataUpdateCoordinator[SpotData]):
                 default_p10=self.model.p10_offsets,
             ),
         )
-        self._ledger.prune()
-        self._calibrate(now)
-        self._store.async_save(self._ledger, self._market, self._last_success)
-        return self._build(now)
+
+    def _save(self) -> None:
+        self._store.async_save(
+            self._ledger, self._market, self._last_success, self._backfill_done_days
+        )
+
+    async def async_add_history(
+        self, runs: Sequence[Run], actual: Hourly | None = None
+    ) -> set[date]:
+        """Add backfilled runs and past prices (EUR/MWh) and write the statistics they complete.
+
+        Holds the run lock, so it never interleaves with a run. Returns the target days
+        that got forecast statistics.
+        """
+        async with self._run_lock:
+            if actual is not None:
+                self._ledger.record_actual(actual)
+            for run in runs:
+                self._ledger.add_run(run)
+            before = set(self._ledger.finalized)
+            self._write_statistics()
+            now = dt_util.utcnow()
+            self._calibrate(now)
+            self._save()
+            if self.data is not None:
+                self.data = self._build(now)
+                self.async_update_listeners()
+            return {day for day, series in self._ledger.finalized - before if series != PRICE}
+
+    @callback
+    def mark_backfill_done(self, days: int) -> None:
+        """Record that the backfill of a ``days`` window completed; it reruns only for wider."""
+        self._backfill_done_days = max(self._backfill_done_days, days)
+        self._save()
 
     async def _async_run(self, now: datetime) -> None:
         """Fetch prices and weather, forecast and record the run; raises on missing data.
@@ -155,6 +229,7 @@ class SpotForecastCoordinator(DataUpdateCoordinator[SpotData]):
             return
         self._ledger.add_run(Run(anchor, now, self.model.version, tuple(slots), False))
         self._last_success = now
+        self._ran = True
 
     def _calibrate(self, now: datetime) -> None:
         """Offsets for the latest run's anchor and the 30-day accuracy, from the ledger."""
@@ -220,6 +295,29 @@ class SpotForecastCoordinator(DataUpdateCoordinator[SpotData]):
             EVENT_HOMEASSISTANT_STOP, self._async_on_hass_stop
         )
         self.config_entry.async_on_unload(self._async_on_unload)
+        self._maybe_start_backfill()
+
+    @callback
+    def _maybe_start_backfill(self) -> None:
+        """Start the backfill in the background after this setup's first successful run.
+
+        Once per setup, and only while the option's window is wider than the one done.
+        """
+        days = int(self.config_entry.options.get(CONF_BACKFILL_DAYS, DEFAULT_BACKFILL_DAYS))
+        if (
+            self._backfill_started
+            or not self._started
+            or not self._ran
+            or days <= self._backfill_done_days
+        ):
+            return
+        self._backfill_started = True
+        self.config_entry.async_create_background_task(
+            self.hass, self._async_backfill(days), f"{self.name} backfill"
+        )
+
+    async def _async_backfill(self, days: int) -> None:
+        self.backfill_result = await run_backfill(self.hass, self, days)
 
     def _schedule_next_run(self, now: datetime) -> None:
         if not self._started:  # a run that was still going during unload
@@ -245,6 +343,7 @@ class SpotForecastCoordinator(DataUpdateCoordinator[SpotData]):
     async def _async_scheduled_run(self) -> None:
         await self.async_refresh()
         self._schedule_next_run(dt_util.utcnow())
+        self._maybe_start_backfill()
 
     @callback
     def _async_tick(self, _now: datetime) -> None:

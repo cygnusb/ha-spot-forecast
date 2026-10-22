@@ -1,3 +1,4 @@
+from dataclasses import replace
 from datetime import UTC, date, datetime, time, timedelta
 import gzip
 import json
@@ -57,6 +58,34 @@ def test_last_run_per_anchor_wins():
     later = make_run(a, median=3.0, issued=datetime(2026, 3, 10, 10, tzinfo=UTC))
     led.add_run(later)
     assert led.runs[a].slots[0].median == 3.0
+
+
+def test_backfill_never_replaces_live_run():
+    led = Ledger()
+    a = date(2026, 3, 10)
+    live = make_run(a, median=1.0, issued=datetime(2026, 3, 10, 4, tzinfo=UTC))
+    led.add_run(live)
+    later_backfill = replace(make_run(a, median=2.0), backfill=True)  # issued 06:00 local
+    assert later_backfill.issued_at > live.issued_at
+    led.add_run(later_backfill)
+    assert led.runs[a] is live  # what the user saw wins
+
+    b = date(2026, 3, 11)
+    backfilled = replace(make_run(b, median=3.0), backfill=True)
+    led.add_run(backfilled)
+    earlier_live = make_run(b, median=4.0, issued=backfilled.issued_at - timedelta(hours=2))
+    led.add_run(earlier_live)
+    assert led.runs[b] is earlier_live
+
+
+def test_backfill_run_replaces_backfill_run_of_same_issue_time():
+    """A re-import with a wider window completes the stored run of an anchor."""
+    led = Ledger()
+    a = date(2026, 3, 10)
+    led.add_run(replace(make_run(a, hs=[5, 6]), backfill=True))
+    wider = replace(make_run(a), backfill=True)
+    led.add_run(wider)
+    assert led.runs[a] is wider
 
 
 def _ledger_with_residuals(anchor: date, before: float, after: float) -> Ledger:
@@ -298,3 +327,15 @@ def test_finalize_emits_forecast_rows_for_runs_added_after_price_rows():
     assert fin(led) == []
     again = Ledger.from_json(json.loads(json.dumps(led.to_json())))
     assert fin(again) == []
+
+
+def test_finalize_waits_for_a_run_that_holds_the_horizon():
+    """A backfill run holding only some horizons leaves the others open for a later merge."""
+    day = date(2026, 6, 10)
+    anchor = day - timedelta(days=4)
+    led = Ledger()
+    led.record_actual(hourly_for([day], 80.0))
+    led.add_run(replace(make_run(anchor, hs=[1, 2]), backfill=True))
+    assert not [r for r in fin(led) if "_h4" in r.statistic_id]
+    led.add_run(replace(make_run(anchor), backfill=True))
+    assert len([r for r in fin(led) if r.statistic_id.endswith("forecast_h4")]) == 24
