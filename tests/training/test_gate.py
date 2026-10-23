@@ -7,6 +7,7 @@ from datetime import date, timedelta
 import numpy as np
 import pytest
 
+pytest.importorskip("pandas")
 from core.features import FEATURE_NAMES
 from training.dataset import Dataset
 from training.gate import evaluate_gate, month_metrics, previous_model_predictions

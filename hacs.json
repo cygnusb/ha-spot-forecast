@@ -1,0 +1,7 @@
+{
+  "name": "Spot Forecast",
+  "render_readme": true,
+  "homeassistant": "2024.11.0",
+  "zip_release": true,
+  "filename": "spot_forecast.zip"
+}
