@@ -82,6 +82,26 @@ async def test_setup_creates_entities_with_expected_ids(
     )
 
 
+async def test_entity_ids_stay_english_on_a_german_instance(
+    hass_with_recorder: HomeAssistant, set_up: SetUp
+) -> None:
+    """The cards and Smart Battery Pilot use these ids; the language must not change them."""
+    hass = hass_with_recorder
+    hass.config.language = "de"
+    await set_up()
+
+    for entity_id in (
+        PRICE,
+        PEAK,
+        NEGATIVE,
+        "sensor.spot_forecast_de_lu_backfill_status",
+        "sensor.spot_forecast_de_lu_forecast_error",
+    ):
+        assert hass.states.get(entity_id) is not None, entity_id
+    # The names do follow the language.
+    assert hass.states.get(PRICE).attributes["friendly_name"] == "Spot Forecast DE-LU Preis"
+
+
 async def test_price_attribute_has_market_then_forecast_and_sbp_keys(
     hass_with_recorder: HomeAssistant, set_up: SetUp, recorded
 ) -> None:

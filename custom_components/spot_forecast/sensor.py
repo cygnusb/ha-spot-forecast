@@ -38,7 +38,13 @@ async def async_setup_entry(
     )
 
 
-class PriceSensor(SpotEntity, SensorEntity):
+class _SpotSensor(SpotEntity, SensorEntity):
+    """A sensor of the zone's device."""
+
+    _entity_domain = "sensor"
+
+
+class PriceSensor(_SpotSensor):
     """Current market price; the ``prices`` attribute holds market then forecast slots."""
 
     _attr_native_unit_of_measurement = UNIT
@@ -68,7 +74,7 @@ class PriceSensor(SpotEntity, SensorEntity):
         }
 
 
-class LastRunSensor(SpotEntity, SensorEntity):
+class LastRunSensor(_SpotSensor):
     """When the last forecast run succeeded."""
 
     _attr_device_class = SensorDeviceClass.TIMESTAMP
@@ -82,7 +88,7 @@ class LastRunSensor(SpotEntity, SensorEntity):
         return self.coordinator.data.last_success
 
 
-class ModelVersionSensor(SpotEntity, SensorEntity):
+class ModelVersionSensor(_SpotSensor):
     """Version of the active model, with its source, training cutoff and backtest metrics."""
 
     _attr_entity_category = EntityCategory.DIAGNOSTIC
@@ -104,7 +110,7 @@ class ModelVersionSensor(SpotEntity, SensorEntity):
         }
 
 
-class ForecastErrorSensor(SpotEntity, SensorEntity):
+class ForecastErrorSensor(_SpotSensor):
     """Mean absolute error of the median forecast over the last 30 days, all horizons."""
 
     _attr_native_unit_of_measurement = UNIT
@@ -124,7 +130,7 @@ class ForecastErrorSensor(SpotEntity, SensorEntity):
         return {k: accuracy.get(k) for k in ("mae_h", "peak_mae", "n")}
 
 
-class BackfillSensor(SpotEntity, SensorEntity):
+class BackfillSensor(_SpotSensor):
     """Whether past forecasts were reconstructed for the look-back, and how many."""
 
     _attr_device_class = SensorDeviceClass.ENUM
@@ -132,7 +138,7 @@ class BackfillSensor(SpotEntity, SensorEntity):
     _attr_entity_category = EntityCategory.DIAGNOSTIC
 
     def __init__(self, coordinator: SpotForecastCoordinator) -> None:
-        super().__init__(coordinator, "backfill")
+        super().__init__(coordinator, "backfill", "backfill_status")
 
     @property
     def native_value(self) -> str:
@@ -150,7 +156,7 @@ class BackfillSensor(SpotEntity, SensorEntity):
         }
 
 
-class DaySensor(SpotEntity, SensorEntity):
+class DaySensor(_SpotSensor):
     """Mean price of the local day ``offset`` days from today; min, max, P90/P10 as attributes."""
 
     _attr_native_unit_of_measurement = UNIT
