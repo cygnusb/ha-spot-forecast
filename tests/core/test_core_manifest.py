@@ -8,7 +8,7 @@ import hashlib
 
 import pytest
 
-from core.manifest import ManifestEntry, parse_manifest, wants_download
+from core.manifest import Manifest, ManifestEntry, parse_manifest, wants_download
 from training.manifest import manifest_entry, merge_manifest
 
 BASE = "https://example.org/releases/download/models/"
@@ -24,25 +24,61 @@ def doc(tiny_model_file) -> dict:
     return merge_manifest(None, "de_lu", manifest_entry(b"model", b"backfill", model, BASE))
 
 
+TODAY = date(2026, 11, 3)
+
+
 def test_parse_manifest_and_wants_download(doc, tiny_model_file):
-    entries = parse_manifest(doc)
-    assert entries == {
-        "de_lu": ManifestEntry(
-            version="de_lu-2026-11",
-            feature_schema=tiny_model_file.feature_schema,
-            train_cutoff=date(2026, 11, 1),
-            model_url=BASE + "de_lu-2026-11.json.gz",
-            model_sha256=hashlib.sha256(b"model").hexdigest(),
-            backfill_url=BASE + "de_lu-2026-11.backfill.json.gz",
-            backfill_sha256=hashlib.sha256(b"backfill").hexdigest(),
-        )
-    }
-    entry = entries["de_lu"]
+    manifest = parse_manifest(doc)
+    assert manifest == Manifest(
+        entries={
+            "de_lu": ManifestEntry(
+                version="de_lu-2026-11",
+                feature_schema=tiny_model_file.feature_schema,
+                train_cutoff=date(2026, 11, 1),
+                model_url=BASE + "de_lu-2026-11.json.gz",
+                model_sha256=hashlib.sha256(b"model").hexdigest(),
+                backfill_url=BASE + "de_lu-2026-11.backfill.json.gz",
+                backfill_sha256=hashlib.sha256(b"backfill").hexdigest(),
+            )
+        },
+        revoked=frozenset(),  # the key is optional
+    )
+    entry = manifest.entries["de_lu"]
     schema = tiny_model_file.feature_schema
-    assert wants_download(entry, date(2026, 10, 1), schema)
-    assert not wants_download(entry, date(2026, 11, 1), schema)  # same cutoff: not newer
-    assert not wants_download(entry, date(2026, 12, 1), schema)
-    assert not wants_download(entry, date(2026, 10, 1), schema + 1)
+    assert wants_download(entry, date(2026, 10, 1), schema, today=TODAY)
+    assert not wants_download(entry, date(2026, 11, 1), schema, today=TODAY)  # not newer
+    assert not wants_download(entry, date(2026, 12, 1), schema, today=TODAY)
+    assert not wants_download(entry, date(2026, 10, 1), schema + 1, today=TODAY)
+
+
+def test_wants_download_refuses_revoked_versions(doc, tiny_model_file):
+    entry = parse_manifest(doc).entries["de_lu"]
+    schema = tiny_model_file.feature_schema
+    other = frozenset({"de_lu-2026-10"})
+    assert wants_download(entry, date(2026, 10, 1), schema, today=TODAY, revoked=other)
+    revoked = frozenset({"de_lu-2026-11"})
+    assert not wants_download(entry, date(2026, 10, 1), schema, today=TODAY, revoked=revoked)
+
+
+def test_wants_download_refuses_a_cutoff_more_than_a_week_ahead(doc, tiny_model_file):
+    entry = parse_manifest(doc).entries["de_lu"]  # cutoff 2026-11-01
+    schema = tiny_model_file.feature_schema
+    assert wants_download(entry, date(2026, 10, 1), schema, today=date(2026, 10, 25))
+    assert not wants_download(entry, date(2026, 10, 1), schema, today=date(2026, 10, 24))
+
+
+def test_parse_manifest_reads_revoked(doc):
+    doc["revoked"] = ["de_lu-2026-10", "at-2026-09", "de_lu-2026-10"]
+    assert parse_manifest(doc).revoked == {"de_lu-2026-10", "at-2026-09"}
+    doc["revoked"] = []
+    assert parse_manifest(doc).revoked == frozenset()
+
+
+@pytest.mark.parametrize("revoked", [None, "de_lu-2026-10", {"de_lu-2026-10": True}, [1], [None]])
+def test_parse_manifest_rejects_malformed_revoked(doc, revoked):
+    doc["revoked"] = revoked
+    with pytest.raises(ValueError, match="revoked"):
+        parse_manifest(doc)
 
 
 def test_parse_manifest_rejects_wrong_format(doc):

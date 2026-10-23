@@ -30,6 +30,9 @@ MAX_DOWNLOADED_MODELS = 3  # versions kept per zone
 MAX_MANIFEST_BYTES = 256 * 1024
 MAX_MODEL_BYTES = 32 * 1024 * 1024
 MAX_BACKFILL_BYTES = 16 * 1024 * 1024
+# data sources; the largest bodies (a backfill's prices, a month of previous runs) are ~2 MB
+MAX_PRICES_BYTES = 16 * 1024 * 1024
+MAX_WEATHER_BYTES = 16 * 1024 * 1024
 
 STORE_VERSION = 1
 STORE_KEY = f"{DOMAIN}.{{entry_id}}"  # STORE_KEY.format(entry_id=entry.entry_id)

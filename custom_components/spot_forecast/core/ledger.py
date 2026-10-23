@@ -9,7 +9,6 @@ from __future__ import annotations
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from datetime import UTC, date, datetime, time, timedelta
-import gzip
 import json
 import math
 from zoneinfo import ZoneInfo
@@ -18,6 +17,7 @@ import numpy as np
 
 from .features import HORIZONS, Hourly
 from .forecast import Slot, conformal_offset, low_price, peak_risk
+from .model import MAX_BACKFILL_JSON_BYTES, gunzip_limited
 
 CALIBRATION_DAYS = 56  # trailing target days used for the conformal offsets
 BACKFILL_FORMAT = 1
@@ -300,7 +300,7 @@ def runs_from_backfill_file(data: bytes, model_version: str, tz: str) -> list[Ru
     The runs carry the model version the file names, else ``model_version``: a
     downloaded model without its own file uses the bundled one, made by another model.
     """
-    doc = json.loads(gzip.decompress(data))
+    doc = json.loads(gunzip_limited(data, MAX_BACKFILL_JSON_BYTES))
     if doc.get("format") != BACKFILL_FORMAT:
         raise ValueError(f"unsupported backfill format {doc.get('format')!r}")
     version = doc.get("model_version") or model_version
