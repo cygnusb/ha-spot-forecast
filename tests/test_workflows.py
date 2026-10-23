@@ -173,6 +173,25 @@ def test_train_workflow_publishes_only_on_pass():
     assert upload["run"].index("sha256sum -c") < upload["run"].index("gh release upload")
 
 
+def test_train_workflow_override_only_by_hand():
+    wf = _load("train.yml")
+    (name,) = _on(wf)["workflow_dispatch"]["inputs"]
+    assert name == "accept_incomparable"
+    field = _on(wf)["workflow_dispatch"]["inputs"][name]
+    assert field["type"] == "boolean" and field["default"] is False
+    assert "feature-schema change" in field["description"]
+    ci = _step(_steps(wf, "train"), "python -m training.ci")
+    assert ci["env"]["ACCEPT_INCOMPARABLE"] == (
+        "${{ github.event_name == 'workflow_dispatch' && inputs.accept_incomparable == true }}"
+    )
+    run = ci["run"]
+    assert 'if [ "$ACCEPT_INCOMPARABLE" = true ]; then' in run
+    assert run.index("args+=(--accept-incomparable)") < run.index("python -m training.ci")
+    # the input reaches nothing else
+    text = (WORKFLOWS / "train.yml").read_text()
+    assert text.count("inputs.accept_incomparable") == 1
+
+
 def test_train_workflow_hands_its_files_to_publish():
     wf = _load("train.yml")
     train, publish = _steps(wf, "train"), _steps(wf, "publish")

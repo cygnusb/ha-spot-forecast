@@ -398,3 +398,95 @@ def test_ci_fails_when_the_outputs_do_not_load(trained, monkeypatch, tmp_path, c
 
     assert "would not load in the integration" in capsys.readouterr().err
     assert not (out / "gate.json").exists() and not (out / "manifest.json").exists()
+
+
+def _scores(monkeypatch, scores: dict[str, dict | None]) -> list[Path]:
+    """Fake ``_score_previous``: per file name, the month metrics or None (not comparable)."""
+
+    def fake(path, zone, ds, month, candidate_rows):
+        version = path.name.removesuffix(".json.gz")
+        m = scores[version]
+        return version, m, "" if m is not None else f"{version} feature schema 2 != 1"
+
+    monkeypatch.setattr(ci, "_score_previous", fake)
+    return [Path(f"{v}.json.gz") for v in scores]
+
+
+def _prev(paths, published, accept):
+    return ci._previous_metrics(
+        paths, published, frozenset(), "de_lu", None, date(2025, 9, 1), 100, accept
+    )
+
+
+GOOD = {"rows": 100, "mae": 20.0, "naive_mae": 30.0, "skill": 0.33}
+
+
+def test_without_the_override_an_incomparable_published_model_fails(monkeypatch):
+    paths = _scores(monkeypatch, {"de_lu-2025-09": None, "de_lu-2025-08": GOOD})
+    metrics, note, comparable = _prev(paths, "de_lu-2025-09", accept=False)
+    assert (metrics, comparable) == (None, False)
+    assert "OVERRIDE" not in note
+
+
+def test_the_override_falls_back_to_skill_only(monkeypatch):
+    paths = _scores(monkeypatch, {"de_lu-2025-09": None})
+    metrics, note, comparable = _prev(paths, "de_lu-2025-09", accept=True)
+    assert (metrics, comparable) == (None, True)
+    assert note.startswith(ci.OVERRIDE)
+    assert "de_lu-2025-09 cannot be compared (de_lu-2025-09 feature schema 2 != 1)" in note
+    assert note.endswith("no other previous model is comparable: skill only")
+
+
+def test_the_override_keeps_the_bar_of_a_comparable_model(monkeypatch):
+    paths = _scores(monkeypatch, {"de_lu-2025-09": None, "de_lu-2025-08": GOOD})
+    metrics, note, comparable = _prev(paths, "de_lu-2025-09", accept=True)
+    assert (metrics, comparable) == (GOOD, True)
+    assert note.startswith(ci.OVERRIDE)
+    assert "compared with de_lu-2025-08" in note
+
+
+def test_the_override_changes_nothing_when_the_published_model_compares(monkeypatch):
+    paths = _scores(monkeypatch, {"de_lu-2025-09": GOOD})
+    assert _prev(paths, "de_lu-2025-09", True) == _prev(paths, "de_lu-2025-09", False)
+    assert "OVERRIDE" not in _prev(paths, "de_lu-2025-09", True)[1]
+
+
+@needs_raw
+@pytest.mark.parametrize("older", [False, True])
+def test_ci_accept_incomparable_after_a_schema_change(run_ci, trained, tmp_path, capsys, older):
+    # The first run after a FEATURE_SCHEMA bump: the published model cannot load.
+    published = tmp_path / "de_lu-2025-09.json.gz"
+    _previous_file("schema", trained, published)
+    paths = ["--previous-model", str(published)]
+    if older:
+        aug = replace(trained.model, version="de_lu-2025-08", train_cutoff=date(2025, 8, 1))
+        (tmp_path / "de_lu-2025-08.json.gz").write_bytes(dump_model(aug))
+        paths += ["--previous-model", str(tmp_path / "de_lu-2025-08.json.gz")]
+    manifest = _manifest(tmp_path / "manifest.json", de_lu="de_lu-2025-09")
+
+    out, code = run_ci("--previous-manifest", str(manifest), *paths, "--accept-incomparable")
+
+    assert code == 0
+    gate = json.loads((out / "gate.json").read_text())
+    assert gate["override"] is True
+    assert ci.OVERRIDE in gate["reason"] and "feature schema" in gate["reason"]
+    if older:  # the comparable older model still sets the bar
+        assert gate["previous"]["rows"] == gate["candidate"]["rows"]
+        assert "compared with de_lu-2025-08" in gate["reason"]
+        bar = gate["previous"]["mae"] + 1.0
+        assert gate["passed"] is (
+            gate["candidate"]["skill"] > 0 and gate["candidate"]["mae"] <= bar
+        )
+    else:
+        assert gate["previous"] is None
+        assert gate["passed"] is (gate["candidate"]["skill"] > 0)
+    notes = (out / "release-notes.md").read_text()
+    assert "**Manual override:**" in notes and "--accept-incomparable" in notes
+    assert "::warning::gate run with --accept-incomparable" in capsys.readouterr().out
+
+
+@needs_raw
+def test_ci_without_the_override_records_none(run_ci, tmp_path):
+    out, code = run_ci("--previous-manifest", str(tmp_path / "no"))
+    assert code == 0
+    assert json.loads((out / "gate.json").read_text())["override"] is False

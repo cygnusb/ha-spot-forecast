@@ -5,9 +5,9 @@ python -m training.ci --raw DIR --out DIR --cutoff YYYY-MM-DD
 
 Besides the training outputs (see ``training.train``) it writes to ``--out``:
 
-- ``gate.json``: the gate result, plus the candidate ``version``, the gate ``month`` and
-  ``already_published``;
-- ``release-notes.md``: the accuracy report and the gate table;
+- ``gate.json``: the gate result, plus the candidate ``version``, the gate ``month``,
+  ``already_published`` and ``override`` (whether ``--accept-incomparable`` was used);
+- ``release-notes.md``: the accuracy report and the gate table (and the override, if used);
 - ``manifest.json``: the previous manifest with this zone's new entry, only if the gate passed;
 - ``issue.md``: the issue body, only if the gate failed.
 
@@ -18,7 +18,9 @@ other three files is written.
 The gate month is the last full month before the cutoff. The candidate is compared with
 the best of the previous models (``--previous-model``, repeatable): the model the manifest
 lists for the zone must be one of them and comparable, or the gate fails; only a manifest
-without a model for the zone (the first run) lets the candidate pass on skill alone.
+without a model for the zone (the first run) lets the candidate pass on skill alone. The
+one exception is ``--accept-incomparable``, set by hand for the first run after a
+feature-schema change (the published model cannot load then): see ``_previous_metrics``.
 
 Before the gate, the model file and backfill written to ``--out`` are loaded the way the
 integration loads them (``load_model``, zone, sample check, backfill parser); a file that
@@ -47,6 +49,7 @@ from .manifest import manifest_entry, merge_manifest, revoked_versions
 from .train import DataLag
 
 MODELS_BASE_URL = "https://github.com/cygnusb/ha-spot-forecast/releases/download/models"
+OVERRIDE = "OVERRIDE --accept-incomparable (set by hand):"
 FUTURE_CUTOFF_DAYS = 7  # the integration rejects a model trained up to a later day too
 
 
@@ -90,6 +93,7 @@ def _previous_metrics(
     ds: Dataset,
     month: date,
     candidate_rows: int,
+    accept_incomparable: bool = False,
 ) -> tuple[dict | None, str, bool]:
     """The month metrics of the best (lowest MAE) previous model, a note for the gate reason
     and whether the gate may go on.
@@ -99,6 +103,10 @@ def _previous_metrics(
     without a model for the zone lets the candidate pass on skill alone. The other previous
     models (train.yml downloads up to three) count when they can be compared and are
     skipped otherwise, as are revoked ones.
+
+    ``accept_incomparable`` is the manual override for the first run after a feature-schema
+    change, when the published model cannot load: an incomparable published model then does
+    not fail the gate, the note says so, and the comparable others (if any) still set the bar.
     """
     scored: dict[str, dict] = {}
     skipped: list[str] = []
@@ -111,16 +119,23 @@ def _previous_metrics(
         else:
             scored[version] = metrics
     required = published if published is not None and published not in revoked else None
+    head = ""
     if required is not None and required not in scored:
         why = "; ".join(skipped) or "it was not given"
-        return None, f"the published model {required} cannot be compared ({why})", False
+        problem = f"the published model {required} cannot be compared ({why})"
+        if not accept_incomparable:
+            return None, problem, False
+        head = f"{OVERRIDE} {problem}, accepted; "
+        skipped = []  # already named
     tail = f"; skipped: {'; '.join(skipped)}" if skipped else ""
     if not scored:
+        if head:
+            return None, f"{head}no other previous model is comparable: skill only", True
         if published is None:
             return None, f"no previous model in the manifest{tail}", True
         return None, f"the published model {published} is revoked{tail}", True
     best = min(scored, key=lambda v: scored[v]["mae"])
-    note = f"compared with {best}, the best of {', '.join(sorted(scored))}{tail}"
+    note = f"{head}compared with {best}, the best of {', '.join(sorted(scored))}{tail}"
     return scored[best], note, True
 
 
@@ -187,6 +202,12 @@ def _parse(argv: list[str]) -> argparse.Namespace:
         default=[],
         help="a previously published model; repeatable, the best of them is the bar",
     )
+    ap.add_argument(
+        "--accept-incomparable",
+        action="store_true",
+        help="manual override for the first run after a feature-schema change: a published "
+        "model that cannot be compared does not fail the gate (the reason says so)",
+    )
     ap.add_argument("--capacity-month", default=None, help="passed on to training.train")
     return ap.parse_args(argv)
 
@@ -230,6 +251,7 @@ def run(argv: list[str], max_iter: int = 600, today: date | None = None) -> int:
         result.dataset,
         month,
         candidate["rows"],
+        args.accept_incomparable,
     )
     if comparable:
         verdict = evaluate_gate(candidate, previous)
@@ -237,12 +259,15 @@ def run(argv: list[str], max_iter: int = 600, today: date | None = None) -> int:
     else:
         verdict = GateResult(False, candidate, None, note)
 
+    overridden = note.startswith(OVERRIDE)
+
     out: Path = args.out
     out.mkdir(parents=True, exist_ok=True)
     gate_doc = {
         "version": result.version,
         "month": f"{month:%Y-%m}",
         "already_published": already_published,
+        "override": overridden,
         **asdict(verdict),
     }
     (out / "gate.json").write_text(json.dumps(gate_doc, indent=2) + "\n")
@@ -261,6 +286,12 @@ def run(argv: list[str], max_iter: int = 600, today: date | None = None) -> int:
         )
         return 0
     notes = result.report_path.read_text() + "\n" + gate.render_markdown(verdict, month)
+    if overridden:
+        notes += (
+            "\n**Manual override:** this run was started with --accept-incomparable, so the "
+            "published model was not compared with. "
+            f"{note.removeprefix(OVERRIDE).strip()}\n"
+        )
     notes_path.write_text(notes)
     if verdict.passed:
         entry = manifest_entry(model_bytes, backfill_bytes, result.model, MODELS_BASE_URL)
@@ -273,6 +304,8 @@ def run(argv: list[str], max_iter: int = 600, today: date | None = None) -> int:
             f"Model training gate failed for {result.version}: nothing was published and "
             "the previous model stays active.\n\n" + notes
         )
+    if overridden:
+        print(f"::warning::gate run with --accept-incomparable: {note}")
     print(f"gate {'passed' if verdict.passed else 'FAILED'}: {verdict.reason}")
     return 0
 

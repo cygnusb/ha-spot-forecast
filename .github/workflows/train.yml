@@ -15,6 +15,14 @@ on:
     # The 3rd: the month before is complete in every source by then.
     - cron: "0 2 3 * *"
   workflow_dispatch:
+    inputs:
+      accept_incomparable:
+        description: >-
+          Only for the first run after a feature-schema change: let the gate pass although
+          the published model cannot be compared (it needs skill > 0, and the MAE bar of any
+          older model that can be). The release notes say the override was used.
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -150,11 +158,17 @@ jobs:
         env:
           PREVIOUS_MANIFEST: ${{ steps.previous.outputs.manifest }}
           PREVIOUS_MODELS: ${{ steps.previous.outputs.models }}
+          # Never on the schedule: only a run started by hand can set the override.
+          ACCEPT_INCOMPARABLE: ${{ github.event_name == 'workflow_dispatch' && inputs.accept_incomparable == true }}
         run: |
           mkdir -p out
           args=(--raw training/data/raw --out out --cutoff "$(date -u +%Y-%m-01)")
           if [ -n "$PREVIOUS_MANIFEST" ]; then args+=(--previous-manifest "$PREVIOUS_MANIFEST"); fi
           for model in $PREVIOUS_MODELS; do args+=(--previous-model "$model"); done
+          if [ "$ACCEPT_INCOMPARABLE" = true ]; then
+            echo "::warning::Started with accept_incomparable: an incomparable published model does not fail the gate"
+            args+=(--accept-incomparable)
+          fi
           rc=0
           python -m training.ci "${args[@]}" 2>out/ci-stderr.txt || rc=$?
           cat out/ci-stderr.txt >&2
