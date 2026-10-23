@@ -1,0 +1,14 @@
+{
+  "domain": "spot_forecast",
+  "name": "Spot Forecast",
+  "codeowners": ["@cygnusb"],
+  "config_flow": true,
+  "dependencies": ["recorder"],
+  "documentation": "https://github.com/cygnusb/ha-spot-forecast",
+  "integration_type": "service",
+  "iot_class": "cloud_polling",
+  "issue_tracker": "https://github.com/cygnusb/ha-spot-forecast/issues",
+  "loggers": ["custom_components.spot_forecast"],
+  "requirements": ["numpy"],
+  "version": "0.1.0"
+}

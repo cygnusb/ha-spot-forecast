@@ -1,0 +1,231 @@
+"""Verbatim copy of SBP's price-adapter code, for compatibility testing only.
+
+Source repo: ~/git/ha-smart-battery-pilot/custom_components/smart_battery_pilot/price_adapters/
+  - base.py   (PriceSlot, PriceAdapter, price_factor_from_attrs, _parse_dt,
+               slots_from_entries, merge_future_slots; ADAPTERS order and detect_adapter
+               reduced to the three adapters relevant here)
+  - entsoe.py (_entries, _matches, _parse)
+  - nordpool.py / epex.py (_matches only, renamed nordpool_matches / epex_matches)
+
+Never imported at runtime. Only change vs. the originals: the renames above and
+the adapter list below.
+"""
+
+from __future__ import annotations
+
+from collections.abc import Callable
+from dataclasses import dataclass
+from datetime import UTC, datetime, timedelta, tzinfo
+from typing import Any
+
+_UTC = UTC
+
+
+@dataclass(frozen=True, slots=True)
+class PriceSlot:
+    """A time slot with a market price in EUR/kWh."""
+
+    start: datetime
+    end: datetime
+    price: float
+
+    @property
+    def hours(self) -> float:
+        """Slot length in hours of real elapsed time.
+
+        Subtracting two aware datetimes that share one tzinfo object is
+        documented to ignore the timezone and compare the naive values, so a
+        slot spanning a DST change would report its wall-clock length. Going
+        through UTC gives the length the battery actually charges for.
+        """
+        start, end = self.start, self.end
+        if start.tzinfo is not None and end.tzinfo is not None:
+            start = start.astimezone(_UTC)
+            end = end.astimezone(_UTC)
+        return (end - start).total_seconds() / 3600.0
+
+
+@dataclass(frozen=True, slots=True)
+class PriceAdapter:
+    """A named parser converting entity attributes to price slots."""
+
+    name: str
+    matches: Callable[[dict[str, Any]], bool]
+    parse: Callable[[dict[str, Any], datetime], list[PriceSlot]]
+
+
+# Every spelling of "hundredth of a currency unit" this has met in the wild.
+# Matched as a prefix of the unit's numerator, not as the whole string: the
+# exact-match version this replaced let `Cent/kWh`, `cents/kWh` and `c€/kWh`
+# through as euros.
+_CENT_PREFIXES = ("ct", "cent", "c€", "ceur", "öre", "øre", "ore")
+
+
+def price_factor_from_attrs(attrs: dict[str, Any]) -> float:
+    """Scale factor turning an entity's price unit into EUR/kWh.
+
+    Lives here rather than in one adapter because every adapter that reads a
+    bare number needs it. A Nordpool sensor whose `raw_today` is momentarily
+    empty falls through to the generic `hourly_arrays` adapter, and that one
+    used to read the very same cents as euros - a plan built on prices a
+    hundred times too large charges the battery from the grid at every
+    opportunity.
+
+    Only the numerator is inspected, so a currency that merely begins with a
+    `c` - CZK, CHF, CAD - is not mistaken for cents.
+    """
+    if attrs.get("price_in_cents"):
+        return 0.01
+    unit = str(attrs.get("unit_of_measurement") or attrs.get("unit") or "").lower()
+    unit = unit.replace(" ", "")
+    # No currency code contains these, so they are safe to find anywhere.
+    if "öre" in unit or "øre" in unit:
+        return 0.01
+    numerator = unit.split("/", 1)[0]
+    if numerator.startswith(_CENT_PREFIXES):
+        return 0.01
+    return 1.0
+
+
+def _parse_dt(value: Any, default_tz: tzinfo | None = None) -> datetime:
+    """Parse an ISO timestamp (or datetime passthrough).
+
+    Timestamps without an offset - template sensors emit those - are read as
+    local time. Leaving them naive would blow up later when they meet the
+    timezone-aware `now`, and the traceback would say nothing useful.
+    """
+    parsed = (
+        value
+        if isinstance(value, datetime)
+        else datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+    )
+    if parsed.tzinfo is None and default_tz is not None:
+        return parsed.replace(tzinfo=default_tz)
+    return parsed
+
+
+def slots_from_entries(
+    entries: list[dict[str, Any]],
+    start_key: str,
+    end_key: str | None,
+    price_key: str,
+    price_factor: float = 1.0,
+    default_tz: tzinfo | None = None,
+) -> list[PriceSlot]:
+    """Build slots from a list of {start, end, price} style dicts.
+
+    If end_key is None the end of each slot is the start of the next one;
+    the last slot inherits the length of the one before it.
+    """
+    parsed: list[tuple[datetime, datetime | None, float]] = []
+    for entry in entries:
+        price = entry.get(price_key)
+        if price is None:
+            continue
+        start = _parse_dt(entry[start_key], default_tz)
+        end = _parse_dt(entry[end_key], default_tz) if end_key and entry.get(end_key) else None
+        parsed.append((start, end, float(price) * price_factor))
+
+    parsed.sort(key=lambda item: item[0])
+    slots: list[PriceSlot] = []
+    for i, (start, end, price) in enumerate(parsed):
+        if end is None:
+            if i + 1 < len(parsed):
+                end = parsed[i + 1][0]
+            elif slots:
+                end = start + (slots[-1].end - slots[-1].start)
+            else:
+                end = start + timedelta(hours=1)
+        slots.append(PriceSlot(start=start, end=end, price=price))
+    return slots
+
+
+def merge_future_slots(slots: list[PriceSlot], now: datetime) -> list[PriceSlot]:
+    """Drop past slots (keep the one containing `now`), dedupe and sort.
+
+    Keyed on the absolute instant, not the datetime object: two aware
+    datetimes sharing one tzinfo compare by their naive values, which would
+    silently merge the two 02:00 slots of an autumn DST day into one.
+    """
+    now_ts = now.timestamp()
+    seen: dict[float, PriceSlot] = {}
+    for slot in slots:
+        if slot.end.timestamp() <= now_ts:
+            continue
+        seen[slot.start.timestamp()] = slot
+    return [seen[key] for key in sorted(seen)]
+
+
+def _entries(attrs: dict[str, Any]) -> list[dict[str, Any]]:
+    if isinstance(attrs.get("prices"), list) and attrs["prices"]:
+        return list(attrs["prices"])
+    entries: list[dict[str, Any]] = []
+    for key in ("prices_today", "prices_tomorrow"):
+        if isinstance(attrs.get(key), list):
+            entries += attrs[key]
+    return entries
+
+
+def _matches(attrs: dict[str, Any]) -> bool:
+    entries = _entries(attrs)
+    return (
+        len(entries) > 0
+        and isinstance(entries[0], dict)
+        and "time" in entries[0]
+        and "price" in entries[0]
+    )
+
+
+def _parse(attrs: dict[str, Any], now: datetime) -> list[PriceSlot]:
+    slots = slots_from_entries(
+        _entries(attrs),
+        "time",
+        None,
+        "price",
+        price_factor=price_factor_from_attrs(attrs),
+        default_tz=now.tzinfo,
+    )
+    return merge_future_slots(slots, now)
+
+
+def nordpool_matches(attrs: dict[str, Any]) -> bool:
+    raw = attrs.get("raw_today")
+    return (
+        isinstance(raw, list)
+        and len(raw) > 0
+        and isinstance(raw[0], dict)
+        and "value" in raw[0]
+        and "start" in raw[0]
+    )
+
+
+def epex_matches(attrs: dict[str, Any]) -> bool:
+    data = attrs.get("data")
+    return (
+        isinstance(data, list)
+        and len(data) > 0
+        and isinstance(data[0], dict)
+        and "start_time" in data[0]
+        and any(
+            key in data[0] for key in ("price_eur_per_mwh", "price_ct_per_kwh", "price_per_kwh")
+        )
+    )
+
+
+ENTSOE_ADAPTER = PriceAdapter(name="entsoe", matches=_matches, parse=_parse)
+NORDPOOL_MATCHES_ADAPTER = PriceAdapter(name="nordpool", matches=nordpool_matches, parse=_parse)
+EPEX_MATCHES_ADAPTER = PriceAdapter(name="epex_spot", matches=epex_matches, parse=_parse)
+
+# Order as in SBP: nordpool, epex, entsoe (parse of the first two is not exercised).
+ADAPTERS: list[PriceAdapter] = [NORDPOOL_MATCHES_ADAPTER, EPEX_MATCHES_ADAPTER, ENTSOE_ADAPTER]
+
+
+def detect_adapter(attributes: dict[str, Any]) -> PriceAdapter | None:
+    """Return the first adapter whose format matches the entity attributes."""
+    for adapter in ADAPTERS:
+        try:
+            if adapter.matches(attributes):
+                return adapter
+        except (TypeError, KeyError, ValueError):
+            continue
+    return None

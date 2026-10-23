@@ -1,0 +1,5 @@
+# Environment for the suite that runs against a real Home Assistant:
+#   uv venv --python 3.13 .venv-ha && uv pip install --python .venv-ha/bin/python -r tests_ha/requirements.txt
+#   .venv-ha/bin/python -m pytest tests_ha -o asyncio_mode=auto
+pytest-homeassistant-custom-component
+numpy

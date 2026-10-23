@@ -93,9 +93,10 @@ hours above 21 ct at the cost of false alarms.
   large chunks, backoff. Both sources must be credited in the README, the
   website and the integration's attribution attribute.
 - **Hardware:** Raspberry Pi 4 class. A forecast run must finish in a few
-  seconds and stay well under 100 MB extra memory. `numpy` is available from
-  Home Assistant core; no other runtime requirement (`manifest.json`
-  `requirements: []`).
+  seconds and stay well under 100 MB extra memory. `numpy` is the only runtime
+  requirement (`manifest.json` `requirements: ["numpy"]`, unpinned). Home
+  Assistant pins it in its package constraints and the default install already
+  has it, so this only matters for minimal core installs.
 - **Home Assistant:** minimum version 2024.11.0, as SBP.
 - **Training:** monthly in GitHub Actions (Ubuntu runner, Python 3.12, CPU
   only); the same pipeline runs locally on the owner's machines.
@@ -115,7 +116,7 @@ hours above 21 ct at the cost of false alarms.
 | what | source | when |
 |---|---|---|
 | Day-ahead prices DE-LU, last 35 days through the latest published day | Energy-Charts `/price?bzn=DE-LU` | every run; one request |
-| Weather forecast, hourly, 7 days, ECMWF IFS 0.25, at the 10 German and 12 neighbour points of `research/fetch.py` | Open-Meteo forecast API, `models=ecmwf_ifs025`, all points in one multi-location request | every run |
+| Weather forecast, hourly, 8 days, ECMWF IFS 0.25, at the 10 German and 12 neighbour points of `research/fetch.py` | Open-Meteo forecast API, `models=ecmwf_ifs025`, all points in one multi-location request | every run |
 | Installed wind/solar capacity | shipped in the model file (last training value) | — |
 | Public holidays DE | computed in the integration (fixed dates plus Easter offsets) | — |
 

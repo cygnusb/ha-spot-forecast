@@ -1,10 +1,17 @@
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, timedelta
 
 import numpy as np
 import pytest
 
-from core.features import build_features, daily_stats, decode
-from core.forecast import Slot, conformal_offset, low_price, peak_risk, run_forecast
+from core.features import Hourly, InsufficientHistory, build_features, daily_stats, decode
+from core.forecast import (
+    IncompleteAnchorDay,
+    Slot,
+    conformal_offset,
+    low_price,
+    peak_risk,
+    run_forecast,
+)
 from core.zones import DE_LU
 
 T = datetime(2026, 1, 1, tzinfo=UTC)
@@ -61,8 +68,36 @@ def test_conformal_offset_ignores_nan():
 
 
 def test_peak_risk_never_below_median():
-    assert peak_risk(Slot(T, 1, median=100, p90_raw=80, p10_raw=50), offset=5) == 100
+    assert peak_risk(Slot(T, 1, median=100, p90_raw=80, p10_raw=50, valid=True), offset=5) == 100
 
 
 def test_low_price_never_above_median():
-    assert low_price(Slot(T, 1, median=10, p90_raw=30, p10_raw=20), offset=-5) == 10
+    assert low_price(Slot(T, 1, median=10, p90_raw=30, p10_raw=20, valid=True), offset=-5) == 10
+
+
+def test_missing_weather_hours_are_invalid(golden, tiny_model_file):
+    case = golden[date(2025, 6, 15)]
+    ok = run_forecast(tiny_model_file, case.anchor, case.prices, case.weather, DE_LU, case.capacity)
+    assert all(s.valid for s in ok)
+    target = ok[5]
+    weather = {h: dict(series) for h, series in case.weather.items()}
+    for p in DE_LU.wind_points:  # blank that hour at every wind point
+        key = f"{p}__wind_speed_100m"
+        s = weather[target.h][key]
+        values = s.values.copy()
+        values[int((target.time - s.start) / timedelta(hours=1))] = np.nan
+        weather[target.h][key] = Hourly(s.start, values)
+    slots = run_forecast(tiny_model_file, case.anchor, case.prices, weather, DE_LU, case.capacity)
+    assert [s.valid for s in slots] == [s.time != target.time for s in slots]
+
+
+def test_incomplete_anchor_day_raises(golden, tiny_model_file):
+    case = golden[date(2025, 6, 15)]
+    values = case.prices.values.copy()
+    # last hour of the anchor day (local midnight 2025-06-15 +1 day = 2025-06-15 22:00 UTC)
+    i = int((datetime(2025, 6, 15, 21, tzinfo=UTC) - case.prices.start) / timedelta(hours=1))
+    values[i] = np.nan
+    prices = Hourly(case.prices.start, values)
+    with pytest.raises(IncompleteAnchorDay) as e:
+        run_forecast(tiny_model_file, case.anchor, prices, case.weather, DE_LU, case.capacity)
+    assert isinstance(e.value, InsufficientHistory)

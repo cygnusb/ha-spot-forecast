@@ -4,13 +4,25 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import dataclass
-from datetime import date, datetime
+from datetime import UTC, date, datetime, time, timedelta
+from zoneinfo import ZoneInfo
 
 import numpy as np
 
-from .features import Hourly, build_features, daily_stats, decode
+from .features import (
+    FEATURE_NAMES,
+    Hourly,
+    IncompleteAnchorDay,
+    build_features,
+    daily_stats,
+    decode,
+)
 from .model import ModelFile
 from .zones import Zone
+
+__all__ = ["IncompleteAnchorDay"]  # re-exported: raised by run_forecast
+
+_WIND_MEAN = FEATURE_NAMES.index("wind_mean")
 
 
 @dataclass(frozen=True)
@@ -22,6 +34,7 @@ class Slot:
     median: float
     p90_raw: float
     p10_raw: float
+    valid: bool  # False when the hour's weather inputs are missing
 
 
 def run_forecast(
@@ -34,8 +47,15 @@ def run_forecast(
 ) -> list[Slot]:
     """Median, raw P90 and raw P10 for every hour of anchor+1 … anchor+6.
 
-    Raises ``InsufficientHistory`` when ``prices`` is too short.
+    A slot is ``valid`` only when its ``wind_mean`` feature exists (weather present).
+    Raises ``InsufficientHistory`` when ``prices`` is too short and ``IncompleteAnchorDay``
+    (a subclass) when any hourly price of the anchor day is missing.
     """
+    tz = ZoneInfo(zone.tz)
+    day_start = datetime.combine(anchor, time(), tz).astimezone(UTC)
+    day_end = datetime.combine(anchor + timedelta(days=1), time(), tz).astimezone(UTC)
+    if np.isnan(prices.window(day_start, (day_end - day_start) // timedelta(hours=1))).any():
+        raise IncompleteAnchorDay(f"prices of {anchor} are not complete")
     fm = build_features(
         anchor,
         prices,
@@ -48,8 +68,10 @@ def run_forecast(
     p90 = decode(model.p90.predict(fm.X), fm)
     p10 = decode(model.p10.predict(fm.X), fm)
     return [
-        Slot(t, int(h), float(m), float(hi), float(lo))
-        for t, h, m, hi, lo in zip(fm.times, fm.h, median, p90, p10, strict=True)
+        Slot(t, int(h), float(m), float(hi), float(lo), not bool(np.isnan(wind)))
+        for t, h, m, hi, lo, wind in zip(
+            fm.times, fm.h, median, p90, p10, fm.X[:, _WIND_MEAN], strict=True
+        )
     ]
 
 

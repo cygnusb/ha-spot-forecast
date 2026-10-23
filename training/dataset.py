@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import date, timedelta
+from datetime import UTC, date, datetime, timedelta
+from functools import reduce
 import json
 from pathlib import Path
 
@@ -18,13 +19,14 @@ from core.features import (
     build_features,
     daily_stats,
 )
+from core.ingest import (
+    hourly_prices,
+    merge_hourly,
+    parse_energy_charts,
+    weather_by_horizon_from_previous_runs,
+)
 from core.zones import DE_LU
 
-from .constants import OFFSETS
-
-# Open-Meteo previous-runs radiation at lead offsets >= 6 days is wrong before this date
-# (shifted/scaled by 0.5-1.6x; ECMWF switches to coarser output steps at 144 h). Masked.
-RADIATION_BROKEN = {6: "2025-07-01", 7: "2025-07-01"}
 _COL = {name: i for i, name in enumerate(FEATURE_NAMES)}
 
 
@@ -50,21 +52,19 @@ class Dataset:
     p_lastweek: np.ndarray  # naive baseline
 
 
-def _hourly(s: pd.Series) -> Hourly:
-    idx = pd.date_range(s.index.min(), s.index.max(), freq="h")
-    return Hourly(s.index.min().to_pydatetime(), s.reindex(idx).to_numpy(float))
+def _merge_files(parts: list[Hourly]) -> Hourly:
+    """Merge series of files in name order; as in research, the earlier file wins on overlap."""
+    return reduce(
+        merge_hourly, reversed(parts), Hourly(datetime(1970, 1, 1, tzinfo=UTC), np.array([]))
+    )
 
 
 def _load_prices(raw: Path) -> Hourly:
-    parts = []
+    slots = {}
     for f in sorted((raw / "prices" / DE_LU.code).glob("*.json")):
-        d = json.loads(f.read_text())
-        idx = pd.to_datetime(d["unix_seconds"], unit="s", utc=True)
-        parts.append(pd.Series(d["price"], index=idx))
-    s = pd.concat(parts).sort_index()
-    s = s[~s.index.duplicated()].dropna()
-    # 15-min products since 2025-10-01: hourly means throughout
-    return _hourly(s.resample("h").mean().dropna())
+        for s in parse_energy_charts(json.loads(f.read_text())):
+            slots.setdefault(s.start, s)
+    return hourly_prices(sorted(slots.values(), key=lambda s: s.start))
 
 
 def _load_weather(raw: Path) -> dict[int, dict[str, Hourly]]:
@@ -72,22 +72,15 @@ def _load_weather(raw: Path) -> dict[int, dict[str, Hourly]]:
         **dict.fromkeys(DE_LU.points, DE_LU.weather_vars),
         **dict.fromkeys(DE_LU.neighbor_points, DE_LU.neighbor_vars),
     }
-    out: dict[int, dict[str, Hourly]] = {o: {} for o in OFFSETS}
+    out: dict[int, dict[str, Hourly]] = {h + 1: {} for h in HORIZONS}
     for name, variables in point_vars.items():
-        frames = []
-        for f in sorted((raw / "weather").glob(f"{name}_*.json")):
-            h = json.loads(f.read_text())["hourly"]
-            frames.append(
-                pd.DataFrame(h).assign(time=lambda x: pd.to_datetime(x["time"], utc=True))
-            )
-        df = pd.concat(frames).drop_duplicates("time").set_index("time").sort_index()
-        for o, until in RADIATION_BROKEN.items():
-            df.loc[
-                df.index < pd.Timestamp(until, tz="UTC"), f"shortwave_radiation_previous_day{o}"
-            ] = np.nan
-        for o in OFFSETS:
-            for v in variables:
-                out[o][f"{name}__{v}"] = _hourly(df[f"{v}_previous_day{o}"])
+        files = [
+            weather_by_horizon_from_previous_runs([json.loads(f.read_text())], [name], variables)
+            for f in sorted((raw / "weather").glob(f"{name}_*.json"))
+        ]
+        for h in HORIZONS:
+            for key in files[0][h]:
+                out[h + 1][key] = _merge_files([f[h][key] for f in files])
     return out
 
 

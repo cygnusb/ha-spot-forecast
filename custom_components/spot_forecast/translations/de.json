@@ -1,0 +1,95 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Spot Forecast",
+        "description": "Prognostiziert die Day-Ahead-Strompreise der nächsten Tage. Preise kommen von Energy-Charts, Wetter von Open-Meteo; Konto oder API-Schlüssel sind nicht nötig.",
+        "data": {
+          "zone": "Gebotszone"
+        },
+        "data_description": {
+          "zone": "Day-Ahead-Marktgebiet, dessen Preise prognostiziert werden."
+        }
+      }
+    },
+    "abort": {
+      "already_configured": "Diese Gebotszone ist bereits eingerichtet."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Spot Forecast Optionen",
+        "data": {
+          "peak_threshold": "Schwelle für Preisspitzen",
+          "backfill_days": "Rückwirkender Zeitraum (Tage)"
+        },
+        "data_description": {
+          "peak_threshold": "Börsenpreis, ab dem eine Stunde als Preisspitze gilt, in ct/kWh ohne Steuern und Netzentgelte. Der Standardwert stammt aus den Trainingsdaten des Modells.",
+          "backfill_days": "Für wie viele vergangene Tage beim ersten Start Prognosen nachberechnet werden, damit die Genauigkeitsstatistik Verlauf hat. 0 schaltet das ab."
+        }
+      }
+    }
+  },
+  "entity": {
+    "sensor": {
+      "price": {
+        "name": "Preis"
+      },
+      "last_run": {
+        "name": "Letzter Lauf"
+      },
+      "model_version": {
+        "name": "Modellversion"
+      },
+      "forecast_error": {
+        "name": "Prognosefehler"
+      },
+      "backfill": {
+        "name": "Backfill-Status",
+        "state": {
+          "off": "Aus",
+          "pending": "Ausstehend",
+          "running": "Läuft",
+          "done": "Fertig",
+          "failed": "Fehlgeschlagen"
+        }
+      },
+      "day_0": {
+        "name": "Tag 0"
+      },
+      "day_1": {
+        "name": "Tag 1"
+      },
+      "day_2": {
+        "name": "Tag 2"
+      },
+      "day_3": {
+        "name": "Tag 3"
+      },
+      "day_4": {
+        "name": "Tag 4"
+      },
+      "day_5": {
+        "name": "Tag 5"
+      },
+      "day_6": {
+        "name": "Tag 6"
+      }
+    },
+    "binary_sensor": {
+      "peak_risk": {
+        "name": "Preisspitzen-Risiko"
+      },
+      "negative_price": {
+        "name": "Negativer Preis"
+      }
+    }
+  },
+  "issues": {
+    "model_outdated": {
+      "title": "Spot-Forecast-Modell ist veraltet",
+      "description": "Das mitgelieferte Prognosemodell {version} wurde mit Daten bis {cutoff} trainiert, also vor mehr als {max_age} Tagen. Je weiter sich der Markt verändert, desto ungenauer werden die Prognosen. Aktualisiere die Integration Spot Forecast, um ein neueres Modell zu erhalten."
+    }
+  }
+}
