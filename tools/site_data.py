@@ -14,7 +14,8 @@ research data:
 
     SPOT_RESEARCH_DIR=… .venv/bin/python tools/site_data.py
 
-Format: ``t`` local wall-clock hours ("YYYY-MM-DD HH:MM"), ``actual`` and
+Format: ``t`` the hours as local ISO times with their UTC offset
+("YYYY-MM-DDTHH:MM+02:00", unique also on the day the clocks go back), ``actual`` and
 ``forecast["1"…"6"]`` in ct/kWh on that grid (null where unknown), plus the model
 version, the zone and the peak threshold in ct/kWh.
 
@@ -28,7 +29,7 @@ training/report.py) and ``skill`` = 1 − mae ÷ naive_mae.
 from __future__ import annotations
 
 import argparse
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 import json
 from pathlib import Path
 import sys
@@ -44,6 +45,32 @@ from core.zones import DE_LU, Zone
 OUT = cs.REPO / "site" / "data"
 BACKFILL_DAYS = 180  # what the training ships before its cutoff
 _HOUR = timedelta(hours=1)
+
+
+def timestamps(hours: list[datetime], tz: ZoneInfo) -> list[str]:
+    """``hours`` (UTC) as local ISO times with the offset, e.g. "2026-10-25T02:00+01:00"."""
+    return [t.astimezone(tz).isoformat(timespec="minutes") for t in hours]
+
+
+def trailing_errors(
+    h: int, actual: list[float | None], forecast: list[float | None], recent: list[int]
+) -> dict:
+    """MAE, naive MAE (the same hour a week before) and skill of D+``h`` over the hour
+    indices ``recent``, on the hours that have all three values."""
+    pairs = [
+        (abs(forecast[k] - actual[k]), abs(actual[k - 168] - actual[k]))
+        for k in recent
+        if k >= 168 and None not in (actual[k], forecast[k], actual[k - 168])
+    ]
+    if not pairs:
+        raise SystemExit(f"D+{h}: no trailing hour has a forecast and the prices it needs")
+    mae = sum(e for e, _ in pairs) / len(pairs)
+    naive = sum(e for _, e in pairs) / len(pairs)
+    return {
+        "mae": round(mae, 3),
+        "naive_mae": round(naive, 3),
+        "skill": round(1 - mae / naive, 4) if naive else None,
+    }
 
 
 def backtest(zone: Zone = DE_LU) -> dict:
@@ -81,21 +108,10 @@ def backtest(zone: Zone = DE_LU) -> dict:
     local = [t.astimezone(tz) for t in hours]
     trailing_from = date.fromisoformat(model.metrics["trailing_3m_from"])
     recent = [k for k, t in enumerate(local) if t.date() >= trailing_from]
-    trailing = {}
-    for h in HORIZONS:
-        actual, forecast = series["price"], series[f"forecast_h{h}"]
-        pairs = [
-            (abs(forecast[k] - actual[k]), abs(actual[k - 168] - actual[k]))
-            for k in recent
-            if k >= 168 and None not in (actual[k], forecast[k], actual[k - 168])
-        ]
-        mae = sum(e for e, _ in pairs) / len(pairs)
-        naive = sum(e for _, e in pairs) / len(pairs)
-        trailing[str(h)] = {
-            "mae": round(mae, 3),
-            "naive_mae": round(naive, 3),
-            "skill": round(1 - mae / naive, 4),
-        }
+    trailing = {
+        str(h): trailing_errors(h, series["price"], series[f"forecast_h{h}"], recent)
+        for h in HORIZONS
+    }
     rounded = {k: [None if v is None else round(v, 2) for v in vs] for k, vs in series.items()}
     return {
         "zone": zone.code,
@@ -111,7 +127,7 @@ def backtest(zone: Zone = DE_LU) -> dict:
             "until": (cutoff - timedelta(days=1)).isoformat(),
             "horizons": trailing,
         },
-        "t": [t.strftime("%Y-%m-%d %H:%M") for t in local],
+        "t": timestamps(hours, tz),
         "actual": rounded["price"],
         "forecast": {str(h): rounded[f"forecast_h{h}"] for h in HORIZONS},
     }
