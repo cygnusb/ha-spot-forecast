@@ -102,3 +102,36 @@ def test_chunk_fetched_while_open_is_refetched_later(tmp_path, monkeypatch):
     assert requested == ["2026-07-01", "2027-01-01"]  # the 2026-01 half-year stays cached
     doc = json.loads((tmp_path / "prices" / "DE-LU" / "2026-07_6m.json").read_text())
     assert datetime.fromtimestamp(doc["unix_seconds"][-1], UTC) == datetime(2027, 1, 1, tzinfo=UTC)
+
+
+class _Ok:
+    status_code = 200
+
+    @staticmethod
+    def json() -> dict:
+        return {"ok": True}
+
+
+def test_get_retries_a_timeout(monkeypatch: pytest.MonkeyPatch) -> None:
+    calls: list[int] = []
+
+    def flaky(*_args, **_kwargs):
+        calls.append(1)
+        if len(calls) == 1:
+            raise fetch.requests.Timeout("read timed out")
+        return _Ok()
+
+    monkeypatch.setattr(fetch.requests, "get", flaky)
+    monkeypatch.setattr(fetch.time, "sleep", lambda _s: None)
+    assert fetch._get("https://example.org", {}) == {"ok": True}
+    assert len(calls) == 2
+
+
+def test_get_gives_up_after_the_last_timeout(monkeypatch: pytest.MonkeyPatch) -> None:
+    def down(*_args, **_kwargs):
+        raise fetch.requests.ConnectionError("unreachable")
+
+    monkeypatch.setattr(fetch.requests, "get", down)
+    monkeypatch.setattr(fetch.time, "sleep", lambda _s: None)
+    with pytest.raises(fetch.requests.ConnectionError):
+        fetch._get("https://example.org", {}, retries=3)
