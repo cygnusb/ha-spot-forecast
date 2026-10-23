@@ -307,3 +307,94 @@ def test_ci_compares_with_the_best_previous_model(run_ci, trained, tiny_model_fi
     aug_m = ci.month_metrics(ci.previous_model_predictions(aug, trained.dataset, month), month)
     assert gate["previous"] == aug_m
     assert aug_m["mae"] < sept_m["mae"]
+
+
+def _backfill(version: str = "de_lu-2026-11", rows: list | None = None) -> bytes:
+    rows = [["2026-10-31T23:00:00+00:00", 1, 80.0, 90.0, 70.0]] if rows is None else rows
+    doc = {"format": 1, "model_version": version, "rows": rows}
+    return gzip.compress(json.dumps(doc).encode(), mtime=0)
+
+
+def test_check_outputs_loads_the_files_as_the_integration(tiny_model_file):
+    model = ci.check_outputs(
+        dump_model(tiny_model_file), _backfill(), "de_lu", "de_lu-2026-11", date(2026, 11, 3)
+    )
+    assert model.version == "de_lu-2026-11"
+
+
+def _flipped(data: bytes) -> bytes:
+    """``data`` with one byte of the deflate stream changed."""
+    i = len(data) // 2
+    return data[:i] + bytes([data[i] ^ 0xFF]) + data[i + 1 :]
+
+
+@pytest.mark.parametrize(
+    ("case", "why"),
+    [
+        ("model corrupt", "corrupt"),
+        ("other zone", "not 'de_lu'"),
+        ("other version", "expected de_lu-2026-11"),
+        ("implausible", "sample predictions"),
+        ("future cutoff", "more than 7 days after today"),
+        ("backfill corrupt", "does not parse"),
+        ("backfill format", "does not parse"),
+        ("backfill empty", "has no rows"),
+        ("backfill version", "names another model version"),
+    ],
+)
+def test_check_outputs_rejects(tiny_model_file, case, why):
+    model, backfill, today = tiny_model_file, _backfill(), date(2026, 11, 3)
+    if case == "other zone":
+        model = replace(model, zone="at")
+    elif case == "other version":
+        model = replace(model, version="de_lu-2026-10")
+    elif case == "implausible":
+        model = replace(model, median=replace(model.median, value=model.median.value * 1e6))
+    elif case == "future cutoff":
+        today = date(2026, 10, 24)  # the cutoff 2026-11-01 is 8 days ahead
+    elif case == "backfill corrupt":
+        backfill = _flipped(backfill)
+    elif case == "backfill format":
+        backfill = gzip.compress(json.dumps({"format": 2, "rows": []}).encode())
+    elif case == "backfill empty":
+        backfill = _backfill(rows=[])
+    elif case == "backfill version":
+        backfill = _backfill(version="de_lu-2026-10")
+    data = b"not a model" if case == "model corrupt" else dump_model(model)
+    with pytest.raises(ValueError, match=why):
+        ci.check_outputs(data, backfill, "de_lu", "de_lu-2026-11", today)
+
+
+def test_check_outputs_allows_a_cutoff_up_to_7_days_ahead(tiny_model_file):
+    ci.check_outputs(
+        dump_model(tiny_model_file), _backfill(), "de_lu", "de_lu-2026-11", date(2026, 10, 25)
+    )
+
+
+def test_ci_refuses_a_cutoff_in_the_future(monkeypatch, tmp_path, capsys):
+    def never(argv, max_iter=600):
+        raise AssertionError("trained")
+
+    monkeypatch.setattr(train, "run", never)
+    argv = ["--raw", "raw", "--out", str(tmp_path / "out"), "--cutoff", "2026-11-01"]
+    assert ci.run(argv, today=date(2026, 10, 24)) == 1
+    assert "more than 7 days after today" in capsys.readouterr().err
+
+
+@needs_raw
+@pytest.mark.parametrize("broken", ["model", "backfill"])
+def test_ci_fails_when_the_outputs_do_not_load(trained, monkeypatch, tmp_path, capsys, broken):
+    bad = tmp_path / "bad.json.gz"
+    bad.write_bytes(
+        _flipped((trained.model_path if broken == "model" else trained.backfill_path).read_bytes())
+    )
+    result = replace(trained, **{f"{broken}_path": bad})
+    monkeypatch.setattr(train, "run", lambda argv, max_iter=600: result)
+    out = tmp_path / "out"
+    out.mkdir()
+    (out / "manifest.json").write_text("from an earlier run")
+
+    assert ci.run(["--raw", "raw", "--out", str(out), "--cutoff", CUTOFF]) == 1
+
+    assert "would not load in the integration" in capsys.readouterr().err
+    assert not (out / "gate.json").exists() and not (out / "manifest.json").exists()

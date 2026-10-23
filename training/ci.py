@@ -20,19 +20,25 @@ the best of the previous models (``--previous-model``, repeatable): the model th
 lists for the zone must be one of them and comparable, or the gate fails; only a manifest
 without a model for the zone (the first run) lets the candidate pass on skill alone.
 
-Exit 0 whether or not the gate passed, 2 on a data lag.
+Before the gate, the model file and backfill written to ``--out`` are loaded the way the
+integration loads them (``load_model``, zone, sample check, backfill parser); a file that
+does not load, or a cutoff more than ``FUTURE_CUTOFF_DAYS`` in the future, exits 1 and
+writes nothing else. Exit 0 whether or not the gate passed, 2 on a data lag.
 """
 
 from __future__ import annotations
 
 import argparse
 from dataclasses import asdict, replace
-from datetime import date, timedelta
+from datetime import UTC, date, datetime, timedelta
 import json
 from pathlib import Path
 import sys
+import zlib
 
-from core.model import ModelMismatch, load_model
+from core.ledger import runs_from_backfill_file
+from core.model import ModelFile, ModelMismatch, load_model, sample_check
+from core.zones import ZONES
 
 from . import gate, train
 from .dataset import Dataset
@@ -41,6 +47,7 @@ from .manifest import manifest_entry, merge_manifest, revoked_versions
 from .train import DataLag
 
 MODELS_BASE_URL = "https://github.com/cygnusb/ha-spot-forecast/releases/download/models"
+FUTURE_CUTOFF_DAYS = 7  # the integration rejects a model trained up to a later day too
 
 
 def gate_month(cutoff: date) -> date:
@@ -117,6 +124,42 @@ def _previous_metrics(
     return scored[best], note, True
 
 
+def _future_cutoff(cutoff: date, today: date) -> str | None:
+    limit = today + timedelta(days=FUTURE_CUTOFF_DAYS)
+    if cutoff > limit:
+        return f"cutoff {cutoff} is more than {FUTURE_CUTOFF_DAYS} days after today ({today})"
+    return None
+
+
+def check_outputs(
+    model_bytes: bytes, backfill_bytes: bytes, zone: str, version: str, today: date
+) -> ModelFile:
+    """Load the files to publish as the integration does; ``ValueError`` if one fails.
+
+    The model: ``load_model``, the zone and the sample check (``model_loader.load_checked``),
+    its version and a cutoff at most ``FUTURE_CUTOFF_DAYS`` ahead. The backfill: the
+    integration's parser (``runs_from_backfill_file``), at least one run, all of ``version``.
+    """
+    model = load_model(model_bytes)
+    if model.zone != zone:
+        raise ModelMismatch(f"model {model.version} is for zone {model.zone!r}, not {zone!r}")
+    sample_check(model)
+    if model.version != version:
+        raise ValueError(f"model file says version {model.version}, expected {version}")
+    if (why := _future_cutoff(model.train_cutoff, today)) is not None:
+        raise ValueError(f"model {model.version}: {why}")
+    tz = next(z.tz for z in ZONES.values() if z.slug == zone)
+    try:
+        runs = runs_from_backfill_file(backfill_bytes, version, tz)
+    except (OSError, EOFError, zlib.error, ValueError, KeyError, TypeError) as e:
+        raise ValueError(f"backfill of {version} does not parse: {type(e).__name__}: {e}") from e
+    if not runs:
+        raise ValueError(f"backfill of {version} has no rows")
+    if {r.model_version for r in runs} != {version}:
+        raise ValueError(f"backfill of {version} names another model version")
+    return model
+
+
 def _previous_manifest(path: Path | None) -> dict | None:
     if path is None or not path.exists():
         print("no previous manifest: starting a new one")
@@ -148,9 +191,14 @@ def _parse(argv: list[str]) -> argparse.Namespace:
     return ap.parse_args(argv)
 
 
-def run(argv: list[str], max_iter: int = 600) -> int:
-    """Exit code: 0 whether or not the gate passed, 2 on ``DataLag``."""
+def run(argv: list[str], max_iter: int = 600, today: date | None = None) -> int:
+    """Exit code: 0 whether or not the gate passed, 1 on files that would not load in the
+    integration, 2 on ``DataLag``. ``today`` (UTC) is for tests."""
     args = _parse(argv)
+    today = today or datetime.now(UTC).date()
+    if (why := _future_cutoff(args.cutoff, today)) is not None:
+        print(f"refusing to train: {why}", file=sys.stderr)
+        return 1
     train_argv = ["--raw", args.raw, "--out", str(args.out), "--cutoff", args.cutoff.isoformat()]
     if args.capacity_month:
         train_argv += ["--capacity-month", args.capacity_month]
@@ -159,6 +207,15 @@ def run(argv: list[str], max_iter: int = 600) -> int:
     except DataLag as e:
         print(e, file=sys.stderr)
         return 2
+    model_bytes = result.model_path.read_bytes()
+    backfill_bytes = result.backfill_path.read_bytes()
+    try:
+        check_outputs(model_bytes, backfill_bytes, result.model.zone, result.version, today)
+    except ValueError as e:
+        print(f"the trained files would not load in the integration: {e}", file=sys.stderr)
+        for name in ("gate.json", "release-notes.md", "manifest.json", "issue.md"):
+            (args.out / name).unlink(missing_ok=True)  # nothing of an earlier run either
+        return 1
 
     old_manifest = _previous_manifest(args.previous_manifest)
     published = _published_version(old_manifest, result.model.zone)
@@ -206,12 +263,7 @@ def run(argv: list[str], max_iter: int = 600) -> int:
     notes = result.report_path.read_text() + "\n" + gate.render_markdown(verdict, month)
     notes_path.write_text(notes)
     if verdict.passed:
-        entry = manifest_entry(
-            result.model_path.read_bytes(),
-            result.backfill_path.read_bytes(),
-            result.model,
-            MODELS_BASE_URL,
-        )
+        entry = manifest_entry(model_bytes, backfill_bytes, result.model, MODELS_BASE_URL)
         manifest = merge_manifest(old_manifest, result.model.zone, entry)
         manifest_path.write_text(json.dumps(manifest, indent=2) + "\n")
         issue_path.unlink(missing_ok=True)
