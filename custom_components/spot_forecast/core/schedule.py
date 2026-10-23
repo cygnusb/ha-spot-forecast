@@ -15,7 +15,9 @@ POLL_START = time(13, 0)  # local; day-ahead prices appear around 13:00
 POLL_END = time(16, 0)  # local, exclusive
 POLL_STEP = timedelta(minutes=15)
 ROLLOVER = time(0, 5)  # local
-STALE_AFTER = timedelta(hours=36)
+# more than the longest regular gap between runs (6 h between weather refreshes)
+STALE_AFTER = timedelta(hours=7)
+DROP_AFTER = timedelta(hours=36)  # the forecast is no longer shown
 
 
 def _local_midnight(day: date, zone: ZoneInfo) -> datetime:
@@ -66,6 +68,11 @@ def next_run(now: datetime, anchor_is_tomorrow: bool, tz: str) -> datetime:
     return min(c.astimezone(UTC) for c in candidates if c.astimezone(UTC) > now)
 
 
-def is_stale(last_success: datetime | None, now: datetime) -> bool:
-    """True without a success or when the last one is more than 36 h old."""
-    return last_success is None or now - last_success > STALE_AFTER
+def is_stale(last_success: datetime | None, now: datetime, last_attempt_failed: bool) -> bool:
+    """True when the last run attempt failed, without a success, or when it is over 7 h old."""
+    return last_attempt_failed or last_success is None or now - last_success > STALE_AFTER
+
+
+def is_expired(last_success: datetime | None, now: datetime) -> bool:
+    """True without a success or when the last one is more than 36 h old: drop the forecast."""
+    return last_success is None or now - last_success > DROP_AFTER

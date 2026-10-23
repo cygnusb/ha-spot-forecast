@@ -12,7 +12,7 @@ from ..core.features import HORIZONS, Hourly
 from ..core.ingest import merge_hourly, parse_open_meteo, weather_by_horizon_from_previous_runs
 from ..core.zones import Point, Zone
 from . import http
-from .http import SourceError, get_json
+from .http import RunBlocking, SourceError, decode_json, get_body
 
 FORECAST_URL = "https://api.open-meteo.com/v1/forecast"
 PREVIOUS_RUNS_URL = "https://previous-runs-api.open-meteo.com/v1/forecast"
@@ -34,8 +34,9 @@ def _locations(points: Mapping[str, Point]) -> dict[str, str]:
     }
 
 
-def _parse[T](parse: Callable[..., T], payload: Any, *args: Any) -> T:
-    """``parse(docs, *args)``; a single location comes back as a bare document."""
+def _parse[T](parse: Callable[..., T], body: bytes, url: str, *args: Any) -> T:
+    """``parse(docs, *args)`` of a JSON body (blocking); one location is a bare document."""
+    payload = decode_json(body, url)
     docs = payload if isinstance(payload, list) else [payload]
     try:
         return parse(docs, *args)
@@ -52,14 +53,17 @@ def _month_chunks(start: date, end: date) -> Iterator[tuple[date, date]]:
         cur = next_month
 
 
-async def fetch_forecast(session: aiohttp.ClientSession, zone: Zone) -> dict[str, Hourly]:
+async def fetch_forecast(
+    session: aiohttp.ClientSession, zone: Zone, *, run_blocking: RunBlocking
+) -> dict[str, Hourly]:
     """``"{point}__{var}"`` hourly forecast series from today 00:00 GMT for ``FORECAST_DAYS``.
 
     Two requests: the zone's points and its neighbour points, each with its variable set.
+    Bodies are decoded and parsed via ``run_blocking``.
     """
     out: dict[str, Hourly] = {}
     for points, variables in _point_sets(zone):
-        payload = await get_json(
+        body = await get_body(
             session,
             FORECAST_URL,
             {
@@ -70,18 +74,26 @@ async def fetch_forecast(session: aiohttp.ClientSession, zone: Zone) -> dict[str
                 "timezone": "GMT",
             },
         )
-        out |= _parse(parse_open_meteo, payload, list(points), variables)
+        out |= await run_blocking(
+            _parse, parse_open_meteo, body, FORECAST_URL, list(points), variables
+        )
     return out
 
 
 async def fetch_previous_runs(
-    session: aiohttp.ClientSession, zone: Zone, start: date, end: date
+    session: aiohttp.ClientSession,
+    zone: Zone,
+    start: date,
+    end: date,
+    *,
+    run_blocking: RunBlocking,
 ) -> dict[int, dict[str, Hourly]]:
     """Archived forecasts per horizon h for the target days ``start`` through ``end``.
 
     ``out[h]["{point}__{var}"]`` comes from the run h + 1 days before each target day
     (see ``weather_by_horizon_from_previous_runs``). One request per calendar month and
-    point set, ``REQUEST_PAUSE`` apart.
+    point set, ``REQUEST_PAUSE`` apart; each body is decoded, parsed and merged via
+    ``run_blocking``.
     """
     out: dict[int, dict[str, Hourly]] = {h: {} for h in HORIZONS}
     first = True
@@ -90,7 +102,7 @@ async def fetch_previous_runs(
             if not first:
                 await http.pause(REQUEST_PAUSE)
             first = False
-            payload = await get_json(
+            body = await get_body(
                 session,
                 PREVIOUS_RUNS_URL,
                 {
@@ -102,11 +114,18 @@ async def fetch_previous_runs(
                     "timezone": "GMT",
                 },
             )
-            chunk = _parse(weather_by_horizon_from_previous_runs, payload, list(points), variables)
-            for h, series in chunk.items():
-                for key, s in series.items():
-                    out[h][key] = merge_hourly(out[h][key], s) if key in out[h] else s
+            await run_blocking(_add_chunk, out, body, list(points), variables)
     return out
+
+
+def _add_chunk(
+    out: dict[int, dict[str, Hourly]], body: bytes, names: list[str], variables: Sequence[str]
+) -> None:
+    """Merge one previous-runs body into ``out`` (blocking; ``out`` belongs to one fetch)."""
+    chunk = _parse(weather_by_horizon_from_previous_runs, body, PREVIOUS_RUNS_URL, names, variables)
+    for h, series in chunk.items():
+        for key, s in series.items():
+            out[h][key] = merge_hourly(out[h][key], s) if key in out[h] else s
 
 
 def _previous_columns(variables: Sequence[str]) -> str:

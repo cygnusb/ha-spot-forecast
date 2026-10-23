@@ -14,6 +14,7 @@ from .coordinator import SpotForecastCoordinator
 from .core.model import ModelFile, ModelMismatch
 from .core.zones import ZONES
 from .model_loader import load_bundled
+from .store import ForecastStore
 
 PLATFORMS = [Platform.SENSOR, Platform.BINARY_SENSOR]
 
@@ -58,3 +59,8 @@ async def _async_reload_on_update(hass: HomeAssistant, entry: SpotForecastConfig
 async def async_unload_entry(hass: HomeAssistant, entry: SpotForecastConfigEntry) -> bool:
     """Remove the entities; timers, Store flush and listener go via ``async_on_unload``."""
     return await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
+
+
+async def async_remove_entry(hass: HomeAssistant, entry: SpotForecastConfigEntry) -> None:
+    """Delete the entry's Store file; its long-term statistics stay in the recorder."""
+    await ForecastStore(hass, entry.entry_id).async_remove()

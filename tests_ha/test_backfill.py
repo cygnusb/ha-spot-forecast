@@ -26,6 +26,7 @@ from pytest_homeassistant_custom_component.test_util.aiohttp import AiohttpClien
 
 from custom_components.spot_forecast import backfill as backfill_module
 from custom_components.spot_forecast.const import CONF_BACKFILL_DAYS, DOMAIN
+from custom_components.spot_forecast.coordinator import LEDGER_KEEP_DAYS
 from custom_components.spot_forecast.core.ledger import Ledger
 from custom_components.spot_forecast.model_loader import MODELS_DIR
 
@@ -359,9 +360,9 @@ async def test_unload_stops_a_running_backfill(
     release = asyncio.Event()
     fetch = backfill_module.fetch_previous_runs
 
-    async def held(*args: Any) -> Any:
+    async def held(*args: Any, **kwargs: Any) -> Any:
         await release.wait()
-        return await fetch(*args)
+        return await fetch(*args, **kwargs)
 
     monkeypatch.setattr(backfill_module, "fetch_previous_runs", held)
     entry = await set_up({CONF_BACKFILL_DAYS: 30}, wait=False)
@@ -378,3 +379,83 @@ async def test_unload_stops_a_running_backfill(
     assert coordinator.backfill_done_days == 30
     assert coordinator.backfill_result.recomputed > 0
     assert hass.states.get(BACKFILL).state == "done"
+
+
+async def test_failed_backfill_is_retried_a_day_later(
+    hass_with_recorder: HomeAssistant,
+    set_up: SetUp,
+    sources: Sources,
+    freezer: FrozenDateTimeFactory,
+    aioclient_mock: AiohttpClientMocker,
+) -> None:
+    """After a successful run, at most once per 24 h; no restart needed."""
+    hass = hass_with_recorder
+    sources.serve(previous_runs_status=500)
+    entry = await set_up({CONF_BACKFILL_DAYS: 30})
+    coordinator = entry.runtime_data.coordinator
+    assert hass.states.get(BACKFILL).state == "failed"
+
+    sources.serve()
+    await advance(hass, freezer, T10 + timedelta(minutes=15))  # a successful run
+    assert hass.states.get(BACKFILL).state == "failed"
+    assert _previous_runs_calls(aioclient_mock) == 0
+
+    sources.serve("energy_charts_price_tomorrow.json")  # 2026-10-23 complete: its run works
+    await advance(hass, freezer, T10 + timedelta(days=1, minutes=15))
+    assert _previous_runs_calls(aioclient_mock) > 0
+    assert hass.states.get(BACKFILL).state == "done"
+    assert coordinator.backfill_done_days == 30
+    assert coordinator.backfill_error is None
+
+
+async def test_afternoon_install_recomputes_anchor_today(
+    hass_with_recorder: HomeAssistant,
+    set_up: SetUp,
+    sources: Sources,
+    freezer: FrozenDateTimeFactory,
+) -> None:
+    """At 14:30 the live run is anchored on tomorrow; today's anchor comes from the backfill."""
+    freezer.move_to(datetime(2026, 10, 22, 14, 30, tzinfo=BERLIN))
+    sources.serve("energy_charts_price_tomorrow.json")
+    entry = await set_up({CONF_BACKFILL_DAYS: 10})
+    coordinator = entry.runtime_data.coordinator
+
+    assert not coordinator.ledger.runs[TODAY + timedelta(days=1)].backfill  # the live run
+    run = coordinator.ledger.runs[TODAY]
+    assert run.backfill
+    assert {s.h for s in run.slots} == set(range(1, 7))
+    assert run.issued_at == datetime(2026, 10, 22, 6, tzinfo=BERLIN)
+    assert coordinator.backfill_result.recomputed == 17  # 2026-10-06 … 2026-10-22
+
+
+async def test_wide_backfill_is_pruned_and_not_redone(
+    hass_with_recorder: HomeAssistant,
+    set_up: SetUp,
+    sources: Sources,
+    aioclient_mock: AiohttpClientMocker,
+) -> None:
+    """180 days: old days get their rows, then the ledger keeps 70 days; a restart with the
+    same option does not backfill again, though the pruned runs are gone."""
+    hass = hass_with_recorder
+    entry = await set_up({CONF_BACKFILL_DAYS: 180})
+    coordinator = entry.runtime_data.coordinator
+    assert coordinator.backfill_done_days == 180
+    keep_from = TODAY - timedelta(days=LEDGER_KEEP_DAYS)
+    assert min(coordinator.ledger.runs) >= keep_from
+    assert min(d for d, _ in coordinator.ledger.finalized) >= keep_from
+    old = date(2026, 8, 5)  # bundled, inside the served prices, older than 70 days
+    assert old < keep_from
+    h1 = await stat_rows(hass, "spot_forecast:de_lu_forecast_h1")
+    assert _rows_of(h1, old) == pytest.approx(_bundled_medians(1, old))
+    runs = dict(coordinator.ledger.runs)
+
+    sources.serve()  # clears the call log
+    assert await hass.config_entries.async_reload(entry.entry_id)
+    await hass.async_block_till_done(wait_background_tasks=True)
+    coordinator = entry.runtime_data.coordinator
+    assert coordinator.backfill_done_days == 180
+    assert coordinator.backfill_result is None
+    assert _previous_runs_calls(aioclient_mock) == 0
+    assert {a for a, r in coordinator.ledger.runs.items() if r.backfill} == {
+        a for a, r in runs.items() if r.backfill
+    }

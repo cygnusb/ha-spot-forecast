@@ -86,13 +86,24 @@ def build_metadata(
     return meta  # type: ignore[return-value]
 
 
-@callback
-def async_write(hass: HomeAssistant, rows: list[StatRow]) -> None:
-    """Queue ``rows`` with the recorder, one import per statistic id."""
+Batch = tuple[StatisticMetaData, list[StatisticData]]  # one import of one statistic id
+
+
+def batches(rows: list[StatRow]) -> list[Batch]:
+    """``rows`` grouped into one import per statistic id, sorted by start (blocking)."""
     by_id = attrgetter("statistic_id")
+    out: list[Batch] = []
     for statistic_id, group in groupby(sorted(rows, key=by_id), key=by_id):
         stats = [
             StatisticData(start=r.start, mean=r.value, min=r.value, max=r.value, state=r.value)
             for r in sorted(group, key=attrgetter("start"))
         ]
-        async_add_external_statistics(hass, build_metadata(statistic_id), stats)
+        out.append((build_metadata(statistic_id), stats))
+    return out
+
+
+@callback
+def async_write(hass: HomeAssistant, imports: list[Batch]) -> None:
+    """Queue the ``batches`` with the recorder."""
+    for metadata, stats in imports:
+        async_add_external_statistics(hass, metadata, stats)

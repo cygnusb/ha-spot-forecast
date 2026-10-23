@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from datetime import UTC, date, datetime, timedelta
 import gzip
+import json
 import re
 
 from homeassistant.core import HomeAssistant
@@ -22,7 +23,7 @@ from custom_components.spot_forecast.sources.energy_charts import fetch_prices
 from custom_components.spot_forecast.sources.http import (
     SourceError,
     SourceRateLimited,
-    get_json,
+    get_body,
 )
 from custom_components.spot_forecast.sources.open_meteo import (
     fetch_forecast,
@@ -61,7 +62,11 @@ async def test_fetch_prices_parses_fixture(
     )
 
     slots = await fetch_prices(
-        async_get_clientsession(hass), "DE-LU", date(2026, 10, 19), date(2026, 10, 22)
+        async_get_clientsession(hass),
+        "DE-LU",
+        date(2026, 10, 19),
+        date(2026, 10, 22),
+        run_blocking=hass.async_add_executor_job,
     )
 
     assert aioclient_mock.call_count == 1
@@ -70,6 +75,21 @@ async def test_fetch_prices_parses_fixture(
     assert slots[-1].end == datetime(2026, 10, 22, 22, tzinfo=UTC)
     assert all(s.end - s.start == timedelta(minutes=15) for s in slots)
     assert all(isinstance(s.price, float) for s in slots)
+
+
+async def test_fetch_prices_invalid_body_is_source_error(
+    hass: HomeAssistant, aioclient_mock: AiohttpClientMocker
+) -> None:
+    aioclient_mock.get(EC_URL, text="<html>maintenance</html>")
+
+    with pytest.raises(SourceError, match="invalid JSON"):
+        await fetch_prices(
+            async_get_clientsession(hass),
+            "DE-LU",
+            date(2026, 10, 19),
+            date(2026, 10, 22),
+            run_blocking=hass.async_add_executor_job,
+        )
 
 
 async def test_fetch_forecast_two_requests_keys(
@@ -87,7 +107,9 @@ async def test_fetch_forecast_two_requests_keys(
         json=recorded("open_meteo_nb.json"),
     )
 
-    weather = await fetch_forecast(async_get_clientsession(hass), DE_LU)
+    weather = await fetch_forecast(
+        async_get_clientsession(hass), DE_LU, run_blocking=hass.async_add_executor_job
+    )
 
     assert aioclient_mock.call_count == 2
     hourly = [URL(str(url)).query["hourly"] for _, url, _, _ in aioclient_mock.mock_calls]
@@ -102,7 +124,7 @@ async def test_fetch_forecast_two_requests_keys(
     assert "nb_nl__precipitation" in weather
 
 
-async def test_get_json_retries_429_then_succeeds(
+async def test_get_body_retries_429_then_succeeds(
     hass: HomeAssistant, aioclient_mock: AiohttpClientMocker, pauses: list[float]
 ) -> None:
     statuses = iter([429, 200])
@@ -115,44 +137,44 @@ async def test_get_json_retries_429_then_succeeds(
 
     aioclient_mock.get(TEST_URL, side_effect=respond)
 
-    result = await get_json(async_get_clientsession(hass), TEST_URL, {"a": "1"})
+    result = await get_body(async_get_clientsession(hass), TEST_URL, {"a": "1"})
 
-    assert result == {"ok": True}
+    assert json.loads(result) == {"ok": True}
     assert aioclient_mock.call_count == 2
     assert pauses == [30]
 
 
-async def test_get_json_gives_up_after_three_attempts(
+async def test_get_body_gives_up_after_three_attempts(
     hass: HomeAssistant, aioclient_mock: AiohttpClientMocker, pauses: list[float]
 ) -> None:
     aioclient_mock.get(TEST_URL, status=503)
 
     with pytest.raises(SourceError) as err:
-        await get_json(async_get_clientsession(hass), TEST_URL, {})
+        await get_body(async_get_clientsession(hass), TEST_URL, {})
 
     assert not isinstance(err.value, SourceRateLimited)
     assert aioclient_mock.call_count == 3
     assert pauses == [2, 4]
 
 
-async def test_get_json_rate_limited_raises_subclass(
+async def test_get_body_rate_limited_raises_subclass(
     hass: HomeAssistant, aioclient_mock: AiohttpClientMocker, pauses: list[float]
 ) -> None:
     aioclient_mock.get(TEST_URL, status=429)
 
     with pytest.raises(SourceRateLimited):
-        await get_json(async_get_clientsession(hass), TEST_URL, {})
+        await get_body(async_get_clientsession(hass), TEST_URL, {})
 
     assert pauses == [30, 30]
 
 
-async def test_get_json_client_error_is_not_retried(
+async def test_get_body_client_error_is_not_retried(
     hass: HomeAssistant, aioclient_mock: AiohttpClientMocker, pauses: list[float]
 ) -> None:
     aioclient_mock.get(TEST_URL, status=400)
 
     with pytest.raises(SourceError):
-        await get_json(async_get_clientsession(hass), TEST_URL, {})
+        await get_body(async_get_clientsession(hass), TEST_URL, {})
 
     assert aioclient_mock.call_count == 1
     assert pauses == []
@@ -174,7 +196,11 @@ async def test_fetch_previous_runs_chunks_per_month(
     aioclient_mock.get(re.compile(re.escape(PREVIOUS_URL)), side_effect=respond)
 
     weather = await fetch_previous_runs(
-        async_get_clientsession(hass), DE_LU, date(2026, 9, 29), date(2026, 10, 2)
+        async_get_clientsession(hass),
+        DE_LU,
+        date(2026, 9, 29),
+        date(2026, 10, 2),
+        run_blocking=hass.async_add_executor_job,
     )
 
     ranges = [

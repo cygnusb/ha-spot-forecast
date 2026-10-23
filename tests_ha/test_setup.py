@@ -30,6 +30,7 @@ from pytest_homeassistant_custom_component.common import (
 from pytest_homeassistant_custom_component.test_util.aiohttp import AiohttpClientMocker
 
 from custom_components.spot_forecast import coordinator as coordinator_module
+from custom_components.spot_forecast import sensor
 from custom_components.spot_forecast.const import CONF_PEAK_THRESHOLD, CONF_ZONE, DOMAIN
 from custom_components.spot_forecast.core.ingest import parse_energy_charts
 
@@ -266,7 +267,7 @@ async def test_weather_outage_keeps_last_forecast(
     assert any("open-meteo" in str(url) for _, url, _, _ in aioclient_mock.mock_calls)
     state = hass.states.get(PRICE)
     assert state.state != STATE_UNAVAILABLE
-    assert state.attributes["stale"] is False
+    assert state.attributes["stale"] is True  # the old forecast is shown, marked stale
     assert state.attributes["issued_at"] == before["issued_at"]
     assert state.attributes["prices"] == before["prices"]
     assert hass.states.get(PEAK).state != STATE_UNAVAILABLE
@@ -285,6 +286,43 @@ async def test_weather_outage_keeps_last_forecast(
     prices = state.attributes["prices"]
     assert prices and {e["source"] for e in prices} == {"market"}
     assert hass.states.get(PEAK).state != STATE_UNAVAILABLE
+
+
+async def test_successful_run_clears_stale(
+    hass_with_recorder: HomeAssistant,
+    set_up: SetUp,
+    sources: Sources,
+    freezer: FrozenDateTimeFactory,
+) -> None:
+    hass = hass_with_recorder
+    await set_up()
+    sources.serve(weather_status=500)
+    await advance(hass, freezer, T10 + timedelta(minutes=15))  # weather run 08:15 UTC
+    assert hass.states.get(PRICE).attributes["stale"] is True
+
+    sources.serve()
+    await advance(hass, freezer, datetime(2026, 10, 22, 13, tzinfo=BERLIN))  # first poll
+    attrs = hass.states.get(PRICE).attributes
+    assert attrs["stale"] is False
+    assert datetime.fromisoformat(attrs["issued_at"]) == datetime(2026, 10, 22, 13, tzinfo=BERLIN)
+
+
+async def test_stale_after_7h_without_success(
+    hass_with_recorder: HomeAssistant,
+    set_up: SetUp,
+    freezer: FrozenDateTimeFactory,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """No run due (moved away): the quarter-hour tick alone turns the old forecast stale."""
+    hass = hass_with_recorder
+    monkeypatch.setattr(coordinator_module, "next_run", lambda now, *_: now + timedelta(days=3))
+    await set_up()
+    await advance(hass, freezer, T10 + timedelta(hours=7))
+    assert hass.states.get(PRICE).attributes["stale"] is False
+    await advance(hass, freezer, T10 + timedelta(hours=7, minutes=15))
+    attrs = hass.states.get(PRICE).attributes
+    assert attrs["stale"] is True
+    assert {e["source"] for e in attrs["prices"]} == {"market", "forecast"}
 
 
 async def test_restart_keeps_forecast_and_does_not_duplicate_statistics(
@@ -320,7 +358,7 @@ async def test_restart_keeps_forecast_and_does_not_duplicate_statistics(
     assert state.state != STATE_UNAVAILABLE
     assert state.attributes["prices"] == before["prices"]
     assert state.attributes["issued_at"] == before["issued_at"]
-    assert state.attributes["stale"] is False
+    assert state.attributes["stale"] is True  # the first refresh after the restart failed
     assert len(await stat_rows(hass, STAT_H1)) == h1_before
 
 
@@ -427,13 +465,13 @@ async def test_refreshes_never_interleave(
     active, peak = 0, 0
     fetch = coordinator_module.fetch_prices
 
-    async def counting_fetch(*args: Any) -> Any:
+    async def counting_fetch(*args: Any, **kwargs: Any) -> Any:
         nonlocal active, peak
         active += 1
         peak = max(peak, active)
         await asyncio.sleep(0)
         try:
-            return await fetch(*args)
+            return await fetch(*args, **kwargs)
         finally:
             active -= 1
 
@@ -442,3 +480,98 @@ async def test_refreshes_never_interleave(
     await asyncio.gather(coordinator._async_update_data(), coordinator._async_update_data())
 
     assert peak == 1
+
+
+async def test_outage_flag_is_stored(
+    hass_with_recorder: HomeAssistant,
+    set_up: SetUp,
+    sources: Sources,
+    freezer: FrozenDateTimeFactory,
+    hass_storage: dict[str, Any],
+) -> None:
+    """A restart during an outage starts stale, before its own first run fails too."""
+    hass = hass_with_recorder
+    entry = await set_up(entry_id="outage")
+    sources.serve(weather_status=500)
+    await advance(hass, freezer, T10 + timedelta(minutes=15))
+    assert await hass.config_entries.async_unload(entry.entry_id)
+    assert hass_storage[f"{DOMAIN}.outage"]["data"]["last_attempt_failed"] is True
+
+    sources.serve()
+    assert await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_block_till_done()
+    assert await hass.config_entries.async_unload(entry.entry_id)
+    assert hass_storage[f"{DOMAIN}.outage"]["data"]["last_attempt_failed"] is False
+
+
+async def test_removing_the_entry_deletes_its_store(
+    hass_with_recorder: HomeAssistant, set_up: SetUp, hass_storage: dict[str, Any]
+) -> None:
+    hass = hass_with_recorder
+    entry = await set_up(entry_id="gone")
+    assert await hass.config_entries.async_unload(entry.entry_id)
+    assert f"{DOMAIN}.gone" in hass_storage
+    rows = len(await stat_rows(hass, STAT_PRICE))
+
+    assert await hass.config_entries.async_remove(entry.entry_id)
+    await hass.async_block_till_done()
+
+    assert f"{DOMAIN}.gone" not in hass_storage
+    assert len(await stat_rows(hass, STAT_PRICE)) == rows > 0  # statistics are kept
+
+
+async def test_midnight_shifts_days_then_runs_at_0005(
+    hass_with_recorder: HomeAssistant,
+    set_up: SetUp,
+    sources: Sources,
+    freezer: FrozenDateTimeFactory,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    hass = hass_with_recorder
+    monkeypatch.setattr(sensor.DaySensor, "_attr_entity_registry_enabled_default", True)
+    await set_up()
+    sources.serve("energy_charts_price_tomorrow.json")
+    await advance(hass, freezer, T14)
+    await advance(hass, freezer, datetime(2026, 10, 22, 23, 50, tzinfo=BERLIN))
+
+    def days() -> list[str]:
+        return [hass.states.get(f"sensor.spot_forecast_de_lu_day_{i}").state for i in range(7)]
+
+    before = days()
+    attrs = hass.states.get(PRICE).attributes
+    assert attrs["prices"][0]["time"] == "2026-10-22T00:00:00+02:00"
+    issued = attrs["issued_at"]
+
+    await advance(hass, freezer, datetime(2026, 10, 23, 0, 0, tzinfo=BERLIN))  # the tick
+    attrs = hass.states.get(PRICE).attributes
+    assert attrs["prices"][0]["time"] == "2026-10-23T00:00:00+02:00"
+    assert attrs["issued_at"] == issued  # no run yet
+    assert days()[:6] == before[1:]
+
+    await advance(hass, freezer, datetime(2026, 10, 23, 0, 5, tzinfo=BERLIN))  # rollover run
+    attrs = hass.states.get(PRICE).attributes
+    assert datetime.fromisoformat(attrs["issued_at"]) == datetime(2026, 10, 23, 0, 5, tzinfo=BERLIN)
+    assert attrs["anchor_day"] == "2026-10-23"
+    assert attrs["prices"][0]["time"] == "2026-10-23T00:00:00+02:00"
+    assert attrs["stale"] is False
+
+
+async def test_runs_never_change_a_published_ledger(
+    hass_with_recorder: HomeAssistant,
+    set_up: SetUp,
+    sources: Sources,
+    freezer: FrozenDateTimeFactory,
+) -> None:
+    """The Store serialises a saved ledger in a worker thread: a run must swap, not change it."""
+    hass = hass_with_recorder
+    entry = await set_up()
+    coordinator = entry.runtime_data.coordinator
+    published = coordinator.ledger
+    saved = published.to_json()
+
+    sources.serve("energy_charts_price_tomorrow.json")
+    await advance(hass, freezer, T14)  # a new run, new actuals, new statistics
+
+    assert coordinator.ledger is not published
+    assert coordinator.ledger.to_json() != saved
+    assert published.to_json() == saved

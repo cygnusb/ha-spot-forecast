@@ -3,7 +3,7 @@ from itertools import pairwise
 from zoneinfo import ZoneInfo
 
 from core.ingest import MarketSlot
-from core.schedule import WEATHER_RUNS_UTC, choose_anchor, is_stale, next_run
+from core.schedule import WEATHER_RUNS_UTC, choose_anchor, is_expired, is_stale, next_run
 
 TZ = "Europe/Berlin"
 BERLIN = ZoneInfo(TZ)
@@ -131,9 +131,27 @@ def test_next_run_hits_weather_times():
     )
 
 
-def test_stale_after_36h():
+def test_stale_after_failed_attempt_or_7h():
     now = datetime(2026, 10, 22, 12, tzinfo=UTC)
-    assert is_stale(None, now)
-    assert not is_stale(now - timedelta(hours=36), now)
-    assert is_stale(now - timedelta(hours=36, seconds=1), now)
-    assert not is_stale(now - timedelta(hours=1), now)
+    assert is_stale(None, now, False)
+    assert not is_stale(now - timedelta(hours=1), now, False)
+    assert is_stale(now - timedelta(hours=1), now, True)
+    assert not is_stale(now - timedelta(hours=7), now, False)
+    assert is_stale(now - timedelta(hours=7, seconds=1), now, False)
+
+
+def test_regular_runs_never_go_stale():
+    """Every gap between scheduled runs stays under the stale limit."""
+    t = datetime(2026, 10, 20, 0, tzinfo=UTC)
+    while t < datetime(2026, 10, 27, tzinfo=UTC):
+        nxt = next_run(t, True, TZ)
+        assert not is_stale(t, nxt, False), (t, nxt)
+        t = nxt
+
+
+def test_expired_after_36h():
+    now = datetime(2026, 10, 22, 12, tzinfo=UTC)
+    assert is_expired(None, now)
+    assert not is_expired(now - timedelta(hours=36), now)
+    assert is_expired(now - timedelta(hours=36, seconds=1), now)
+    assert not is_expired(now - timedelta(hours=1), now)

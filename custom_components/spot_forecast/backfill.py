@@ -55,12 +55,14 @@ async def run_backfill(
     """Backfill forecasts for the target days in [today - ``days``, today).
 
     Bundled runs cover the target days before the training cutoff; the rest is recomputed,
-    from anchors up to six days before the first such target day through yesterday, and
-    keeps target days from today on, which complete later. The window's prices are recorded
-    together with the bundled runs, so every row is calibrated with all earlier rows of the
-    window. Anchors whose prices are too short, or whose forecast fails, are skipped. A
-    source error ends the pass with what was added so far (``error`` set); the window is
-    then not marked done, so the next start tries again.
+    from anchors up to six days before the first such target day through today, and keeps
+    target days from today on, which complete later. Anchor today is recomputed when no
+    live run holds it (an install after the day-ahead publication) and its prices are
+    complete; anchors whose prices are too short, or whose forecast fails, are skipped.
+    The window's prices are recorded together with the bundled runs, so every row is
+    calibrated with all earlier rows of the window; the ledger is pruned only at the end.
+    A source error ends the pass with what was added so far (``error`` set); the window is
+    then not marked done, and the coordinator tries again later.
     """
     model, zone = coordinator.model, coordinator.zone
     tz = ZoneInfo(zone.tz)
@@ -75,28 +77,35 @@ async def run_backfill(
         model.version,
         zone.tz,
     )
+    run_blocking = hass.async_add_executor_job
     try:
         market = await fetch_prices(
             session,
             zone.code,
             min(first, start - (_MAX_H + PRICE_HISTORY_DAYS) * _DAY),
             today,
+            run_blocking=run_blocking,
         )
     except SourceError as err:
         return _stopped(err, BackfillResult(0, 0, 0))
-    prices = hourly_prices(market)
+    prices = await run_blocking(hourly_prices, market)
     in_window = [r for r in (_targets_in(run, first, model.train_cutoff) for run in bundled) if r]
     imported, finalized = await coordinator.async_add_history(
         _merged(coordinator.ledger.runs, in_window), actual=_since(prices, _midnight(first, tz))
     )
 
-    candidates = [start + (i - _MAX_H) * _DAY for i in range((today - start).days + _MAX_H)]
+    # through today: _recompute skips today while its prices are incomplete
+    candidates = [start + (i - _MAX_H) * _DAY for i in range((today - start).days + _MAX_H + 1)]
     anchors = [a for a in candidates if _needs_recompute(coordinator.ledger.runs.get(a), start)]
     recomputed = 0
     if anchors:
         try:
             weather = await fetch_previous_runs(
-                session, zone, max(start - _DAY, anchors[0]), anchors[-1] + _MAX_H * _DAY
+                session,
+                zone,
+                max(start - _DAY, anchors[0]),
+                anchors[-1] + _MAX_H * _DAY,
+                run_blocking=run_blocking,
             )
         except SourceError as err:
             return _stopped(err, BackfillResult(imported, 0, len(finalized)))
@@ -112,14 +121,14 @@ async def run_backfill(
         )
         finalized |= days_written
 
-    coordinator.mark_backfill_done(days)
+    await coordinator.async_finish_backfill(days)
     result = BackfillResult(imported, recomputed, len(finalized))
     _LOGGER.debug("Backfill of %d days done: %s", days, result)
     return result
 
 
 def _stopped(err: SourceError, result: BackfillResult) -> BackfillResult:
-    _LOGGER.warning("Backfill stopped early, it is retried on the next start: %s", err)
+    _LOGGER.warning("Backfill stopped early, it is retried after a later run: %s", err)
     return replace(result, error=str(err))
 
 
