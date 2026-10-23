@@ -39,6 +39,7 @@ import sys
 import zlib
 
 from core.ledger import runs_from_backfill_file
+from core.manifest import MAX_CUTOFF_AHEAD
 from core.model import ModelFile, ModelMismatch, load_model, sample_check
 from core.zones import ZONES
 
@@ -50,7 +51,7 @@ from .train import DataLag
 
 MODELS_BASE_URL = "https://github.com/cygnusb/ha-spot-forecast/releases/download/models"
 OVERRIDE = "OVERRIDE --accept-incomparable (set by hand):"
-FUTURE_CUTOFF_DAYS = 7  # the integration rejects a model trained up to a later day too
+FUTURE_CUTOFF_DAYS = MAX_CUTOFF_AHEAD.days  # the integration rejects a later cutoff too
 
 
 def gate_month(cutoff: date) -> date:

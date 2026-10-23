@@ -114,3 +114,10 @@ def test_a_failed_release_check_fails(monkeypatch, release):
 @pytest.mark.parametrize("status", [403, 500])
 def test_other_download_errors_fail(monkeypatch, status):
     assert _run(monkeypatch, status=status) == 1
+
+
+def test_future_limit_matches_the_integration():
+    """The check is stdlib-only, so it keeps its own copy of the integration's limit."""
+    from core.manifest import MAX_CUTOFF_AHEAD
+
+    assert MAX_CUTOFF_AHEAD.days == cma.FUTURE_DAYS
