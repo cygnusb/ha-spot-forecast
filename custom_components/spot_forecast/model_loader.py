@@ -2,12 +2,12 @@
 
 from __future__ import annotations
 
-import gzip
-import json
+from datetime import UTC, date, datetime
 import logging
 from pathlib import Path
 
-from .core.ledger import BACKFILL_FORMAT
+from .core.ledger import runs_from_backfill_file
+from .core.manifest import MAX_CUTOFF_AHEAD, cutoff_ahead
 from .core.model import ModelCorrupt, ModelFile, ModelMismatch, load_model, sample_check
 from .core.zones import ZONES
 
@@ -53,16 +53,40 @@ def backfill_path(model_path: Path) -> Path:
     return model_path.with_name(model_path.name.removesuffix(MODEL_SUFFIX) + BACKFILL_SUFFIX)
 
 
-def load_checked(data: bytes, slug: str) -> ModelFile:
-    """``load_model`` plus the zone and the sample check (``ModelMismatch`` if one fails)."""
+class CutoffAhead(ModelMismatch):
+    """The model's training cutoff is more than ``MAX_CUTOFF_AHEAD`` after today."""
+
+
+def _utc_today() -> date:
+    return datetime.now(UTC).date()
+
+
+def load_checked(data: bytes, slug: str, *, today: date | None = None) -> ModelFile:
+    """``load_model`` plus the zone, the cutoff and the sample check.
+
+    ``ModelMismatch`` if one fails; its subclass ``CutoffAhead`` for a training cutoff more
+    than ``MAX_CUTOFF_AHEAD`` after ``today`` (default: the UTC date now).
+    """
     model = load_model(data)
     if model.zone != slug:
         raise ModelMismatch(f"model {model.version} is for zone {model.zone!r}, not {slug!r}")
+    today = _utc_today() if today is None else today
+    if cutoff_ahead(model.train_cutoff, today):
+        raise CutoffAhead(
+            f"model {model.version} has the training cutoff {model.train_cutoff}, more than "
+            f"{MAX_CUTOFF_AHEAD.days} days after today ({today})"
+        )
     sample_check(model)
     return model
 
 
-def load_active(zone_code: str, storage_dir: Path) -> tuple[ModelFile, bytes, str]:
+def load_active(
+    zone_code: str,
+    storage_dir: Path,
+    *,
+    today: date | None = None,
+    revoked: frozenset[str] = frozenset(),
+) -> tuple[ModelFile, bytes, str]:
     """The model to use for ``zone_code``, its backfill bytes and its source.
 
     The newest by training cutoff of the bundled model and the downloaded ones in
@@ -70,14 +94,19 @@ def load_active(zone_code: str, storage_dir: Path) -> tuple[ModelFile, bytes, st
     a tie goes to the bundled model. Downloads are tried newest first, and the first
     usable one newer than the bundled model is taken. A download that does not load or
     fails a check is deleted; only a bundled model that cannot be loaded raises (as
-    ``load_bundled``). A downloaded model whose backfill file is missing or unreadable
-    uses the bundled one, whose rows keep the bundled model's version (it is in the
-    file). Blocking file I/O: run it in the executor.
+    ``load_bundled``). A download in ``revoked`` or with a training cutoff too far after
+    ``today`` (default: the UTC date now; maybe the clock is wrong) is skipped and kept.
+    A downloaded model whose backfill file is missing or unreadable uses the bundled one,
+    whose rows keep the bundled model's version (it is in the file). Blocking file I/O:
+    run it in the executor.
     """
     bundled, bundled_backfill = load_bundled(zone_code)
     slug = ZONES[zone_code].slug
+    today = _utc_today() if today is None else today
     for path in reversed(downloaded_models(slug, storage_dir)):
-        candidate = _load_download(path, slug)
+        if path.name.removesuffix(MODEL_SUFFIX) in revoked:
+            continue
+        candidate = _load_download(path, slug, today)
         if candidate is None or candidate.train_cutoff <= bundled.train_cutoff:
             continue
         backfill = _read_backfill(backfill_path(path))
@@ -92,10 +121,12 @@ def load_active(zone_code: str, storage_dir: Path) -> tuple[ModelFile, bytes, st
     return bundled, bundled_backfill, SOURCE_BUNDLED
 
 
-def _load_download(path: Path, slug: str) -> ModelFile | None:
+def _load_download(path: Path, slug: str, today: date) -> ModelFile | None:
     """The downloaded model at ``path``, or None (deleted when it cannot be used)."""
     try:
-        return load_checked(path.read_bytes(), slug)
+        return load_checked(path.read_bytes(), slug, today=today)
+    except CutoffAhead as e:  # usable once the clock is right
+        _LOGGER.warning("Not using the downloaded model %s: %s", path.name, e)
     except ModelMismatch as e:  # corrupt, or e.g. made for another feature schema
         log = _LOGGER.warning if isinstance(e, ModelCorrupt) else _LOGGER.info
         log("Deleting the unusable downloaded model %s: %s", path.name, e)
@@ -111,15 +142,22 @@ def _load_download(path: Path, slug: str) -> ModelFile | None:
     return None
 
 
+def check_backfill(data: bytes) -> None:
+    """Raise ``ValueError`` unless ``data`` parses as a backfill file, rows included.
+
+    The parser the backfill pass uses, so a file that passes cannot break it later.
+    """
+    try:
+        runs_from_backfill_file(data, "", "UTC")
+    except Exception as e:  # not gzip, not JSON, nested too deep, another format or shape
+        raise ValueError(f"backfill file is unusable: {type(e).__name__}: {e}") from e
+
+
 def _read_backfill(path: Path) -> bytes | None:
-    """The backfill file's raw bytes if it is gzip JSON in the backfill format, else None."""
+    """The backfill file's raw bytes if ``check_backfill`` passes, else None."""
     try:
         data = path.read_bytes()
-        doc = json.loads(gzip.decompress(data))
-    except (OSError, EOFError, ValueError):  # missing, not gzip, not JSON
-        return None
-    if not isinstance(doc, dict) or doc.get("format") != BACKFILL_FORMAT:
-        return None
-    if not isinstance(doc.get("rows"), list):
+        check_backfill(data)
+    except (OSError, ValueError):  # missing, unreadable, or any error of the parser
         return None
     return data

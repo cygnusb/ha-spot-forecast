@@ -1,8 +1,8 @@
 """Output model: what the entities show.
 
 Builds the SBP-compatible ``prices`` attribute (market, then forecast), the
-current price, the same with a fixed surcharge (the total price), 48 h risk
-windows for the binary sensors and per-day summaries.
+current price, the total price (VAT on the exchange price plus a fixed gross
+surcharge), 48 h risk windows for the binary sensors and per-day summaries.
 Prices leave this module in EUR/kWh; the core works in EUR/MWh.
 """
 
@@ -65,12 +65,17 @@ def prices_attribute(
     return [by_instant[k] for k in sorted(by_instant)]
 
 
-def with_surcharge(entries: list[dict], surcharge: float) -> list[dict]:
-    """``prices`` entries with ``surcharge`` (EUR/kWh) added to ``price``, ``p90`` and ``p10``."""
+def total_price(price: float, surcharge: float, vat: float) -> float:
+    """``price`` (EUR/kWh) with ``vat`` percent on it plus the gross ``surcharge`` (EUR/kWh)."""
+    return round(price * (1 + vat / 100) + surcharge, _DECIMALS)
+
+
+def with_surcharge(entries: list[dict], surcharge: float, vat: float) -> list[dict]:
+    """``prices`` entries with ``total_price`` applied to ``price``, ``p90`` and ``p10``."""
     return [
         {
             **e,
-            **{k: round(e[k] + surcharge, _DECIMALS) for k in ("price", "p90", "p10") if k in e},
+            **{k: total_price(e[k], surcharge, vat) for k in ("price", "p90", "p10") if k in e},
         }
         for e in entries
     ]

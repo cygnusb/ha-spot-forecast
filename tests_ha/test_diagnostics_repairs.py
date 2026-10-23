@@ -52,6 +52,34 @@ async def test_model_outdated_issue_created_and_cleared(
     assert registry.async_get_issue(DOMAIN, issue_id) is None
 
 
+async def test_model_future_issue_for_a_cutoff_far_ahead(
+    hass_with_recorder: HomeAssistant, set_up: SetUp, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Today is 2026-10-22: a cutoff 8 days ahead raises the issue, 7 days ahead does not."""
+    hass = hass_with_recorder
+    model, backfill = load_bundled("DE-LU")
+    ahead = replace(model, train_cutoff=date(2026, 10, 30))
+    monkeypatch.setattr(integration, "load_active", lambda zone, _: (ahead, backfill, "bundled"))
+    entry = await set_up()
+    issue_id = f"model_outdated_{entry.entry_id}"
+    registry = ir.async_get(hass)
+
+    issue = registry.async_get_issue(DOMAIN, issue_id)
+    assert issue is not None
+    assert issue.translation_key == "model_future"
+    assert issue.severity is ir.IssueSeverity.WARNING
+    assert issue.translation_placeholders == {
+        "version": model.version,
+        "cutoff": "2026-10-30",
+        "max_ahead": "7",
+    }
+
+    coordinator = entry.runtime_data.coordinator
+    coordinator.model = replace(model, train_cutoff=date(2026, 10, 29))
+    await coordinator.async_refresh()
+    assert registry.async_get_issue(DOMAIN, issue_id) is None
+
+
 async def test_no_model_outdated_issue_for_a_current_model(
     hass_with_recorder: HomeAssistant, set_up: SetUp
 ) -> None:

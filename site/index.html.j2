@@ -531,21 +531,31 @@ footer.foot nav { display: flex; flex-wrap: wrap; gap: 6px 22px; }
     var n = parseInt(hex.replace("#", ""), 16);
     return "rgba(" + ((n >> 16) & 255) + "," + ((n >> 8) & 255) + "," + (n & 255) + "," + a + ")";
   }
-  function ms(s) { return Date.parse(s.replace(" ", "T") + ":00Z"); }
-  function wall(t) { return new Date(t).toISOString().slice(0, 16).replace("T", " "); }
+  // D.t holds ISO times with their UTC offset, unique also in the night the clocks go
+  // back. Everything that selects hours uses those instants (D.ms). Plotly has no time
+  // zones: its x values and range are the Berlin wall clock (D.x), on which the repeated
+  // 02:00 hour of that night shares its label with the first.
+  var BERLIN = new Intl.DateTimeFormat("en-CA", { timeZone: "Europe/Berlin", year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", hourCycle: "h23" });
+  function wall(t) {
+    var p = {};
+    BERLIN.formatToParts(new Date(t)).forEach(function (x) { p[x.type] = x.value; });
+    return p.year + "-" + p.month + "-" + p.day + " " + p.hour + ":" + p.minute;
+  }
   function label(h) { return (h === 1 ? T.forecast_one : T.forecast_many).replace("{h}", h); }
 
+  // The shown instants, [from, to).
   function range() {
-    var end = ms(D.t[D.t.length - 1]) + 3600e3;
-    return [wall(end - RANGE_DAYS[state.r] * 864e5), wall(end)];
+    var end = D.ms[D.ms.length - 1] + 3600e3;
+    return [end - RANGE_DAYS[state.r] * 864e5, end];
   }
+  function xrange() { var r = range(); return [wall(r[0]), wall(r[1])]; }
 
   // The y range of what the shown lines reach in the shown range, not of all data.
   function yrange() {
     var r = range(), lo = 0, hi = 0;
     var shown = [D.actual].concat([1, 2, 3, 4, 5, 6].filter(function (h) { return !state.h || state.h === h; }).map(function (h) { return D.forecast[h]; }));
     for (var i = 0; i < D.t.length; i++) {
-      if (D.t[i] < r[0] || D.t[i] >= r[1]) continue;
+      if (D.ms[i] < r[0] || D.ms[i] >= r[1]) continue;
       shown.forEach(function (s) { if (s[i] !== null) { lo = Math.min(lo, s[i]); hi = Math.max(hi, s[i]); } });
     }
     var pad = (hi - lo) * 0.05;
@@ -556,7 +566,7 @@ footer.foot nav { display: flex; flex-wrap: wrap; gap: 6px 22px; }
     var sum = 0, n = 0, f = D.forecast[h];
     for (var i = 0; i < D.t.length; i++) {
       var a = D.actual[i], p = f[i];
-      if (a === null || p === null || D.t[i] < lo || D.t[i] >= hi) continue;
+      if (a === null || p === null || D.ms[i] < lo || D.ms[i] >= hi) continue;
       if (peakOnly && a <= D.peak_threshold) continue;
       sum += Math.abs(p - a); n++;
     }
@@ -578,11 +588,11 @@ footer.foot nav { display: flex; flex-wrap: wrap; gap: 6px 22px; }
 
   function draw() {
     var c = { board: css("--board"), ink: css("--ink"), ink2: css("--ink-2"), grid: css("--grid"), rule: css("--rule"), risk: css("--risk") };
-    var traces = [{ x: D.t, y: D.actual, name: T.actual, mode: "lines", line: { color: c.ink, width: 1.6 }, hovertemplate: "%{y:.1f} ct<extra>" + T.actual + "</extra>" }];
+    var traces = [{ x: D.x, y: D.actual, name: T.actual, mode: "lines", line: { color: c.ink, width: 1.6 }, hovertemplate: "%{y:.1f} ct<extra>" + T.actual + "</extra>" }];
     for (var h = 1; h <= 6; h++) {
       var one = state.h === h;
-      traces.push({ x: D.t, y: D.actual, mode: "lines", line: { width: 0 }, hoverinfo: "skip", showlegend: false, visible: one });
-      traces.push({ x: D.t, y: D.forecast[h], name: label(h), mode: "lines", visible: one || state.h === 0,
+      traces.push({ x: D.x, y: D.actual, mode: "lines", line: { width: 0 }, hoverinfo: "skip", showlegend: false, visible: one });
+      traces.push({ x: D.x, y: D.forecast[h], name: label(h), mode: "lines", visible: one || state.h === 0,
         line: { color: css("--h" + h), width: 1.6 }, fill: one ? "tonexty" : "none", fillcolor: rgba(c.risk, 0.2),
         hovertemplate: "%{y:.1f} ct<extra>D+" + h + "</extra>" });
     }
@@ -594,7 +604,7 @@ footer.foot nav { display: flex; flex-wrap: wrap; gap: 6px 22px; }
       margin: { t: 8, r: 6, b: 8, l: 8 }, dragmode: false, hovermode: "x unified",
       hoverlabel: { bgcolor: c.board, bordercolor: c.rule, font: { color: c.ink } },
       legend: { orientation: "h", x: 0, y: -0.12, yanchor: "top", traceorder: "normal" },
-      xaxis: Object.assign({ type: "date", range: range(), tickformat: L.tick, hoverformat: L.hover, nticks: narrow ? 4 : 8 }, axis),
+      xaxis: Object.assign({ type: "date", range: xrange(), tickformat: L.tick, hoverformat: L.hover, nticks: narrow ? 4 : 8 }, axis),
       yaxis: Object.assign({ ticksuffix: " ct", zeroline: true, range: yrange() }, axis),
     };
     msg.hidden = true;
@@ -611,7 +621,7 @@ footer.foot nav { display: flex; flex-wrap: wrap; gap: 6px 22px; }
   document.querySelectorAll("#ranges button").forEach(function (b) {
     b.addEventListener("click", function () {
       state.r = +b.getAttribute("data-r"); press("#ranges", "data-r", state.r);
-      if (D) { Plotly.relayout(plot, { "xaxis.range": range(), "yaxis.range": yrange() }); updateReadout(); }
+      if (D) { Plotly.relayout(plot, { "xaxis.range": xrange(), "yaxis.range": yrange() }); updateReadout(); }
     });
   });
 
@@ -625,6 +635,8 @@ footer.foot nav { display: flex; flex-wrap: wrap; gap: 6px 22px; }
     document.head.appendChild(s);
     Promise.all([data, lib]).then(function (res) {
       D = res[0];
+      D.ms = D.t.map(function (s) { return Date.parse(s); });
+      D.x = D.t.map(function (s) { return s.slice(0, 16).replace("T", " "); });
       Plotly.register({ moduleType: "locale", name: "site", dictionary: {}, format: {
         days: L.days, shortDays: L.shortDays, months: L.months, shortMonths: L.shortMonths, date: L.date, decimal: L.decimal, thousands: L.thousands } });
       draw();

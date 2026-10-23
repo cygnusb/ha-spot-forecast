@@ -16,10 +16,11 @@ from homeassistant.util import dt as dt_util
 from . import SpotForecastConfigEntry
 from .const import DOMAIN
 from .coordinator import BACKFILL_STATES, SpotForecastCoordinator
-from .core.output import current_price, day_summaries, with_surcharge
+from .core.output import current_price, day_summaries, total_price, with_surcharge
 from .entity import SpotEntity
 
 UNIT = "EUR/kWh"
+PRECISION = 4  # EUR/kWh to 0.01 ct, as the surcharge option is kept
 WEATHER_ATTRIBUTION = "Open-Meteo (CC BY 4.0)"
 DAYS = 7
 
@@ -60,6 +61,7 @@ class PriceSensor(_SpotSensor):
     """Current market price; the ``prices`` attribute holds market then forecast slots."""
 
     _attr_native_unit_of_measurement = UNIT
+    _attr_suggested_display_precision = PRECISION
     _attr_state_class = SensorStateClass.MEASUREMENT
     _unrecorded_attributes = frozenset({"prices"})  # up to ~300 entries, above 16 KB
 
@@ -84,18 +86,21 @@ class PriceSensor(_SpotSensor):
             "model_version": data.model.version,
             "stale": data.stale,
             "surcharge": self.coordinator.surcharge,  # for the cards' total-price view
+            "vat": self.coordinator.vat,
         }
 
 
 class TotalPriceSensor(_SpotSensor):
-    """Market price plus the surcharge option; ``prices`` likewise, for SBP or automations.
+    """Market price with VAT plus the surcharge; ``prices`` likewise, for SBP or automations.
 
+    The surcharge is gross (VAT included), so VAT is added to the market price only.
     Only while a surcharge is set. Statistics, error figures and the risk sensors stay
     on the market price.
     """
 
     KEY = "total_price"
     _attr_native_unit_of_measurement = UNIT
+    _attr_suggested_display_precision = PRECISION
     _attr_state_class = SensorStateClass.MEASUREMENT
     _unrecorded_attributes = frozenset({"prices"})
 
@@ -108,15 +113,20 @@ class TotalPriceSensor(_SpotSensor):
     @property
     def native_value(self) -> float | None:
         price = current_price(self.coordinator.data.market, dt_util.utcnow())
-        return None if price is None else round(price + self.coordinator.surcharge, 5)
+        if price is None:
+            return None
+        return total_price(price, self.coordinator.surcharge, self.coordinator.vat)
 
     @property
     def extra_state_attributes(self) -> dict[str, Any]:
         data = self.coordinator.data
         return {
-            "prices": with_surcharge(data.entries, self.coordinator.surcharge),
+            "prices": with_surcharge(
+                data.entries, self.coordinator.surcharge, self.coordinator.vat
+            ),
             "unit": UNIT,
             "surcharge": self.coordinator.surcharge,
+            "vat": self.coordinator.vat,
             "issued_at": None if data.issued_at is None else data.issued_at.isoformat(),
             "anchor_day": data.anchor.isoformat(),
             "model_version": data.model.version,
@@ -164,6 +174,7 @@ class ForecastErrorSensor(_SpotSensor):
     """Mean absolute error of the median forecast over the last 30 days, all horizons."""
 
     _attr_native_unit_of_measurement = UNIT
+    _attr_suggested_display_precision = PRECISION
     _attr_state_class = SensorStateClass.MEASUREMENT
     _attr_entity_category = EntityCategory.DIAGNOSTIC
 
@@ -210,6 +221,7 @@ class DaySensor(_SpotSensor):
     """Mean price of the local day ``offset`` days from today; min, max, P90/P10 as attributes."""
 
     _attr_native_unit_of_measurement = UNIT
+    _attr_suggested_display_precision = PRECISION
     _attr_entity_registry_enabled_default = False
 
     def __init__(self, coordinator: SpotForecastCoordinator, offset: int) -> None:

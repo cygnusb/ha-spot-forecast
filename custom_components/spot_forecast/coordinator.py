@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import date, datetime, time, timedelta
 import logging
+import math
+from typing import Any
 from zoneinfo import ZoneInfo
 
 from homeassistant.config_entries import ConfigEntry
@@ -24,16 +26,18 @@ from .const import (
     CONF_BACKFILL_DAYS,
     CONF_PEAK_THRESHOLD,
     CONF_SURCHARGE,
+    CONF_VAT,
     CONF_ZONE,
     DEFAULT_BACKFILL_DAYS,
     DEFAULT_SURCHARGE,
+    DEFAULT_VAT,
     DOMAIN,
     PRICE_HISTORY_DAYS,
 )
 from .core.features import HORIZONS, Hourly, InsufficientHistory
 from .core.forecast import Slot, run_forecast
 from .core.ingest import MarketSlot, hourly_prices
-from .core.ledger import CALIBRATION_DAYS, PRICE, Ledger, Run
+from .core.ledger import CALIBRATION_DAYS, PRICE, Ledger, Run, statistic_id
 from .core.model import ModelFile
 from .core.output import prices_attribute
 from .core.schedule import choose_anchor, is_expired, is_stale, next_run
@@ -125,11 +129,13 @@ class SpotForecastCoordinator(DataUpdateCoordinator[SpotData]):
         self.model = model
         self.model_source = model_source  # "bundled" or "downloaded"
         self.backfill = backfill  # raw gzip bytes of the backfill file that fits ``model``
+        self.options: dict[str, Any] = dict(entry.options)  # the options this setup applies
         self._store = ForecastStore(hass, entry.entry_id)
         self._ledger = Ledger()
         self._market: list[MarketSlot] = []
         self._last_success: datetime | None = None
         self._last_attempt_failed = False  # the most recent run attempt failed
+        self._failures = 0  # failed run attempts in a row: retry backoff and log level
         self._p90_off = dict(model.p90_offsets)
         self._p10_off = dict(model.p10_offsets)
         self._accuracy: dict = {}
@@ -138,6 +144,7 @@ class SpotForecastCoordinator(DataUpdateCoordinator[SpotData]):
         self._unsub_stop: CALLBACK_TYPE | None = None
         self._run_lock = asyncio.Lock()  # runs, refreshes and backfill never interleave
         self._started = False  # between async_start and unload / HA stop
+        self._closed = False  # unloaded: nothing is published or saved any more
         self._ran = False  # a run succeeded since this setup
         self._backfill_done_days = 0  # the widest backfill window completed so far
         self._backfill_attempted: datetime | None = None  # start of this setup's last attempt
@@ -155,6 +162,26 @@ class SpotForecastCoordinator(DataUpdateCoordinator[SpotData]):
     def surcharge(self) -> float:
         """Grid fees and taxes in EUR/kWh added for the total price; 0 means none."""
         return float(self.config_entry.options.get(CONF_SURCHARGE, DEFAULT_SURCHARGE))
+
+    @property
+    def vat(self) -> float:
+        """VAT in percent, charged on the exchange part of the total price."""
+        return float(self.config_entry.options.get(CONF_VAT, DEFAULT_VAT))
+
+    async def async_apply_options(self, options: Mapping[str, Any]) -> None:
+        """Take over options that only change what is shown, without a reload.
+
+        Surcharge, VAT and peak threshold are read from the entry where they are used; the
+        30-day accuracy (its peak error) follows the new threshold, and the entities update
+        at once. Under the run lock, like every change of the shown data.
+        """
+        async with self._run_lock:
+            self.options = dict(options)
+            now = dt_util.utcnow()
+            self._p90_off, self._p10_off, self._accuracy = await self.hass.async_add_executor_job(
+                self._calibration, self._ledger, now, self.peak_threshold
+            )
+            self._rebuild(now)
 
     async def set_model(self, model: ModelFile, source: str, backfill: bytes) -> None:
         """Use ``model`` (with its backfill file) from the next run on.
@@ -210,14 +237,48 @@ class SpotForecastCoordinator(DataUpdateCoordinator[SpotData]):
         entry_id = self.config_entry.entry_id
         self.config_entry.async_on_unload(lambda: async_delete_model_issue(self.hass, entry_id))
         stored = await self._store.async_load()
-        self._ledger = stored.ledger
+        self._ledger = await self._async_reconciled(stored.ledger)
         self._market = list(stored.market)
         self._last_success = stored.last_success
         self._backfill_done_days = stored.backfill_done_days
         self._last_attempt_failed = stored.last_attempt_failed
+        self._failures = int(stored.last_attempt_failed)
         self._p90_off, self._p10_off, self._accuracy = await self.hass.async_add_executor_job(
             self._calibration, self._ledger, dt_util.utcnow(), self.peak_threshold
         )
+
+    async def _async_reconciled(self, ledger: Ledger) -> Ledger:
+        """``ledger`` with the days after the recorder's last price row marked unwritten.
+
+        A day counts as written once its statistics are queued with the recorder; a crash
+        before the recorder commits them, or a restored database, loses them while the
+        Store keeps the marks. The next ``finalize`` then writes those days again (the
+        import replaces rows of the same hour). One read of the recorder, at setup.
+        """
+        written = [day for day, series in ledger.finalized if series == PRICE]
+        if not written:
+            return ledger
+        try:
+            last = await long_term_statistics.async_last_start(
+                self.hass, statistic_id(DOMAIN, self.zone.slug, PRICE)
+            )
+        except Exception as err:  # noqa: BLE001 - the statistics stay as they are
+            _LOGGER.warning("Cannot read the last price statistic: %s: %s", type(err).__name__, err)
+            return ledger
+        last_day = None if last is None else last.astimezone(ZoneInfo(self.zone.tz)).date()
+        if last_day is not None and last_day >= max(written):
+            return ledger
+        _LOGGER.info(
+            "The recorder holds price statistics up to %s, the forecast data up to %s: "
+            "writing the missing days again",
+            last_day,
+            max(written),
+        )
+        ledger = ledger.copy()
+        ledger.finalized = {
+            f for f in ledger.finalized if last_day is not None and f[0] <= last_day
+        }
+        return ledger
 
     async def _async_update_data(self) -> SpotData:
         async with self._run_lock:
@@ -229,21 +290,40 @@ class SpotForecastCoordinator(DataUpdateCoordinator[SpotData]):
         ledger = self._ledger.copy()
         try:
             ran = await self._async_run(now, ledger)
-        except (SourceError, InsufficientHistory) as err:
+        except Exception as err:
             if not self._market and _latest_live_run(ledger) is None:
                 raise UpdateFailed(f"no forecast yet and nothing stored: {err}") from err
-            _LOGGER.warning("Forecast run failed, keeping the last forecast: %s", err)
+            # only the first failure in a row is a warning; the retries log at debug level
+            first = not self._failures
+            if isinstance(err, (SourceError, InsufficientHistory)):
+                log = _LOGGER.warning if first else _LOGGER.debug
+                log("Forecast run failed, keeping the last forecast: %s", err)
+            else:  # a bug: keep the last forecast all the same, the entities stay
+                log = _LOGGER.error if first else _LOGGER.debug
+                log("Forecast run failed, keeping the last forecast", exc_info=True)
             ran = False
-        # a backfill between its steps needs the old days it recorded: it prunes at its end
-        settled = await self.hass.async_add_executor_job(
-            self._settle, ledger, now, self.peak_threshold, not self._backfill_running
-        )
+        try:
+            # a backfill between its steps needs the old days it recorded: it prunes at its end
+            settled = await self.hass.async_add_executor_job(
+                self._settle, ledger, now, self.peak_threshold, not self._backfill_running
+            )
+        except Exception:  # a bug: keep the published ledger and what is shown
+            _LOGGER.exception("Updating the forecast ledger failed, keeping the last data")
+            self._record_attempt(ok=False)
+            return self._build(now)
         if ran:
             self._last_success = now
             self._ran = True
-        self._last_attempt_failed = not ran
+        self._record_attempt(ok=ran)
         self._adopt(settled)
         return self._build(now)
+
+    def _record_attempt(self, ok: bool) -> None:
+        """Note how a run attempt ended: failures in a row back off the retry."""
+        if ok and self._failures:
+            _LOGGER.info("Forecast run succeeded after %d failed attempts", self._failures)
+        self._failures = 0 if ok else self._failures + 1
+        self._last_attempt_failed = not ok
 
     def _settle(
         self, ledger: Ledger, now: datetime, peak_threshold: float, prune: bool
@@ -252,12 +332,13 @@ class SpotForecastCoordinator(DataUpdateCoordinator[SpotData]):
         rows = ledger.finalize(
             self.zone.tz,
             today=self._today(now),
+            domain=DOMAIN,
             zone_id=self.zone.slug,
             default_p90=self.model.p90_offsets,
             default_p10=self.model.p10_offsets,
         )
         if prune:
-            ledger.prune(LEDGER_KEEP_DAYS)
+            ledger.prune(LEDGER_KEEP_DAYS, tz=self.zone.tz)
         p90, p10, accuracy = self._calibration(ledger, now, peak_threshold)
         return _Settled(ledger, long_term_statistics.batches(rows), p90, p10, accuracy)
 
@@ -275,8 +356,12 @@ class SpotForecastCoordinator(DataUpdateCoordinator[SpotData]):
         """Publish a settled ledger: queue its statistics and save it.
 
         Called right after the executor job, with no ``await`` in between: a task cancelled
-        while the job ran drops the copy, so no day counts as written that was not.
+        while the job ran drops the copy, so no day counts as written that was not. After
+        unload it drops it too: the unload's flush stays the last write, so a removed entry's
+        file is not recreated by a refresh that outlived it.
         """
+        if self._closed:
+            return
         self._ledger = settled.ledger
         self._p90_off, self._p10_off = settled.p90_off, settled.p10_off
         self._accuracy = settled.accuracy
@@ -299,7 +384,8 @@ class SpotForecastCoordinator(DataUpdateCoordinator[SpotData]):
         Holds the run lock, so it never interleaves with a run; the work happens in the
         executor on a copy of the ledger (see ``_adopt``). Nothing is pruned: the backfill
         does that once at its end (``async_finish_backfill``). Returns how many of ``runs``
-        were stored and the target days that got forecast statistics.
+        were stored new or in place of a different run (a re-import of the same run does
+        not count), and the target days that got forecast statistics.
         """
         async with self._run_lock:
             now = dt_util.utcnow()
@@ -312,8 +398,11 @@ class SpotForecastCoordinator(DataUpdateCoordinator[SpotData]):
                     ledger.record_actual(actual)
                 stored = 0
                 for run in runs:
+                    old = ledger.runs.get(run.anchor)
                     ledger.add_run(run)
-                    stored += ledger.runs.get(run.anchor) is run
+                    stored += ledger.runs.get(run.anchor) is run and (
+                        old is None or _comparable(old) != _comparable(run)
+                    )
                 settled = self._settle(ledger, now, threshold, prune=False)
                 written = {day for day, series in ledger.finalized - before if series != PRICE}
                 return stored, written, settled
@@ -374,8 +463,9 @@ class SpotForecastCoordinator(DataUpdateCoordinator[SpotData]):
             )
         except InsufficientHistory:
             raise
-        except Exception:  # a bug in core: keep the last forecast, still show the prices
-            _LOGGER.exception("Forecast for %s failed, keeping the last forecast", anchor)
+        except Exception:  # noqa: BLE001 - a bug in core: keep the last forecast, show the prices
+            log = _LOGGER.error if not self._failures else _LOGGER.debug
+            log("Forecast for %s failed, keeping the last forecast", anchor, exc_info=True)
             return False
         ledger.add_run(Run(anchor, now, self.model.version, tuple(slots), False))
         return True
@@ -496,7 +586,7 @@ class SpotForecastCoordinator(DataUpdateCoordinator[SpotData]):
             self._unsub_run()
         run = self._latest_run()
         anchor_is_tomorrow = run is not None and run.anchor > self._today(now)
-        when = next_run(now, anchor_is_tomorrow, self.zone.tz)
+        when = next_run(now, anchor_is_tomorrow, self.zone.tz, failures=self._failures)
         self._unsub_run = async_track_point_in_utc_time(
             self.hass,
             HassJob(self._on_run_due, f"{self.name} run", cancel_on_shutdown=True),
@@ -506,7 +596,8 @@ class SpotForecastCoordinator(DataUpdateCoordinator[SpotData]):
     @callback
     def _on_run_due(self, _now: datetime) -> None:
         self._unsub_run = None
-        self.config_entry.async_create_task(
+        # a background task: unload cancels it rather than waiting for a slow API
+        self.config_entry.async_create_background_task(
             self.hass, self._async_scheduled_run(), f"{self.name} scheduled run"
         )
 
@@ -543,12 +634,28 @@ class SpotForecastCoordinator(DataUpdateCoordinator[SpotData]):
             self._unsub_stop = None
         # Let a run still in flight finish its save first, so the flush is the last write
         # (and a removed entry's file is not recreated). Bounded: unload must not hang on
-        # a slow API.
+        # a slow API; the scheduled run is cancelled meanwhile, and whatever ends later
+        # saves nothing (see ``_adopt``).
         try:
             async with asyncio.timeout(UNLOAD_WAIT), self._run_lock:
-                await self._store.async_flush()
+                pass
         except TimeoutError:
-            await self._store.async_flush()
+            pass
+        self._closed = True
+        await self._store.async_flush()
+
+
+def _comparable(run: Run) -> tuple:
+    """``run`` as a value ``==`` can compare: invalid slots hold NaN, which equals nothing."""
+
+    def value(x: float) -> float | None:
+        return None if math.isnan(x) else x
+
+    slots = sorted(
+        (s.time, s.h, s.valid, value(s.median), value(s.p90_raw), value(s.p10_raw))
+        for s in run.slots
+    )
+    return run.issued_at, run.model_version, run.backfill, slots
 
 
 def _latest_live_run(ledger: Ledger) -> Run | None:

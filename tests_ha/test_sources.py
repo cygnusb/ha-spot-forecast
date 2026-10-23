@@ -18,7 +18,7 @@ from yarl import URL
 
 from custom_components.spot_forecast.core.zones import DE_LU
 from custom_components.spot_forecast.model_loader import load_bundled
-from custom_components.spot_forecast.sources import http
+from custom_components.spot_forecast.sources import energy_charts, http, open_meteo
 from custom_components.spot_forecast.sources.energy_charts import fetch_prices
 from custom_components.spot_forecast.sources.http import (
     SourceError,
@@ -178,6 +178,97 @@ async def test_get_body_client_error_is_not_retried(
 
     assert aioclient_mock.call_count == 1
     assert pauses == []
+
+
+@pytest.mark.parametrize(
+    ("status", "retry_after", "expected"),
+    [
+        (429, "90", [90]),
+        (429, "5", [30]),  # never less than after a 429 without the header
+        (429, "3600", [120]),  # capped
+        (429, "Wed, 21 Oct 2026 07:28:00 GMT", [30]),  # the date form is not read
+        (503, "10", [10]),
+        (503, "1", [2]),  # the back-off when it is longer
+        (500, "10", [2]),  # only 429 and 503
+    ],
+)
+async def test_get_body_honours_retry_after(
+    hass: HomeAssistant,
+    aioclient_mock: AiohttpClientMocker,
+    pauses: list[float],
+    status: int,
+    retry_after: str,
+    expected: list[float],
+) -> None:
+    statuses = iter([status, 200])
+
+    async def respond(method, url, data):
+        code = next(statuses)
+        if code == 200:
+            return AiohttpClientMockResponse(method, url, json={"ok": True})
+        return AiohttpClientMockResponse(
+            method, url, status=code, headers={"Retry-After": retry_after}
+        )
+
+    aioclient_mock.get(TEST_URL, side_effect=respond)
+
+    assert json.loads(await get_body(async_get_clientsession(hass), TEST_URL, {})) == {"ok": True}
+    assert pauses == expected
+
+
+async def test_open_meteo_400_reason_is_in_the_error(
+    hass: HomeAssistant, aioclient_mock: AiohttpClientMocker, pauses: list[float]
+) -> None:
+    reason = "Cannot initialize WeatherVariable from invalid String value cloud_cover_previous_day9"
+    aioclient_mock.get(FORECAST_URL, status=400, json={"error": True, "reason": reason})
+
+    with pytest.raises(SourceError, match="HTTP 400: " + re.escape(reason)):
+        await fetch_forecast(
+            async_get_clientsession(hass), DE_LU, run_blocking=hass.async_add_executor_job
+        )
+
+    assert aioclient_mock.call_count == 1
+    assert pauses == []
+
+
+async def test_client_error_without_a_reason_keeps_the_plain_message(
+    hass: HomeAssistant, aioclient_mock: AiohttpClientMocker, pauses: list[float]
+) -> None:
+    aioclient_mock.get(TEST_URL, status=403, text="<html>" + "x" * 100_000 + "</html>")
+
+    with pytest.raises(SourceError) as err:
+        await get_body(async_get_clientsession(hass), TEST_URL, {})
+
+    assert str(err.value) == f"{TEST_URL}: HTTP 403"
+
+
+@pytest.mark.parametrize("source", ["prices", "forecast", "previous_runs"])
+async def test_sources_limit_the_body(
+    hass: HomeAssistant,
+    aioclient_mock: AiohttpClientMocker,
+    pauses: list[float],
+    monkeypatch: pytest.MonkeyPatch,
+    source: str,
+) -> None:
+    session, run_blocking = async_get_clientsession(hass), hass.async_add_executor_job
+    aioclient_mock.get(re.compile("^https://"), content=b"[" + b"0," * 1000 + b"0]")
+    if source == "prices":
+        monkeypatch.setattr(energy_charts, "MAX_PRICES_BYTES", 1000)
+        fetch = fetch_prices(
+            session, "DE-LU", date(2026, 10, 19), date(2026, 10, 22), run_blocking=run_blocking
+        )
+    else:
+        monkeypatch.setattr(open_meteo, "MAX_WEATHER_BYTES", 1000)
+        fetch = (
+            fetch_forecast(session, DE_LU, run_blocking=run_blocking)
+            if source == "forecast"
+            else fetch_previous_runs(
+                session, DE_LU, date(2026, 10, 1), date(2026, 10, 2), run_blocking=run_blocking
+            )
+        )
+
+    with pytest.raises(SourceError, match="limit"):
+        await fetch
 
 
 async def test_get_body_within_limit(

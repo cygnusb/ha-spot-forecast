@@ -2,12 +2,17 @@
 
 from __future__ import annotations
 
+from datetime import UTC, datetime
 from itertools import groupby
 from operator import attrgetter
 import re
 from typing import Any
 
-from homeassistant.components.recorder.statistics import async_add_external_statistics
+from homeassistant.components.recorder import get_instance
+from homeassistant.components.recorder.statistics import (
+    async_add_external_statistics,
+    get_last_statistics,
+)
 from homeassistant.core import HomeAssistant, callback
 
 from .const import DOMAIN
@@ -107,3 +112,12 @@ def async_write(hass: HomeAssistant, imports: list[Batch]) -> None:
     """Queue the ``batches`` with the recorder."""
     for metadata, stats in imports:
         async_add_external_statistics(hass, metadata, stats)
+
+
+async def async_last_start(hass: HomeAssistant, statistic_id: str) -> datetime | None:
+    """Start (UTC) of the newest row the recorder holds for ``statistic_id``; None if none."""
+    stats = await get_instance(hass).async_add_executor_job(
+        get_last_statistics, hass, 1, statistic_id, True, {"mean"}
+    )
+    rows = stats.get(statistic_id)
+    return datetime.fromtimestamp(rows[0]["start"], UTC) if rows else None

@@ -1,6 +1,7 @@
 """Verbatim copy of SBP's price-adapter code, for compatibility testing only.
 
-Source repo: ~/git/ha-smart-battery-pilot/custom_components/smart_battery_pilot/price_adapters/
+Source: https://github.com/cygnusb/ha-smart-battery-pilot at commit ae79a80
+(price_adapters/ last changed in 11ab4ea), custom_components/smart_battery_pilot/price_adapters/
   - base.py   (PriceSlot, PriceAdapter, price_factor_from_attrs, _parse_dt,
                slots_from_entries, merge_future_slots; ADAPTERS order and detect_adapter
                reduced to the three adapters relevant here)

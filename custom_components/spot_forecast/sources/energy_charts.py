@@ -6,6 +6,7 @@ from datetime import date
 
 import aiohttp
 
+from ..const import MAX_PRICES_BYTES
 from ..core.ingest import MarketSlot, parse_energy_charts
 from .http import RunBlocking, SourceError, decode_json, get_body
 
@@ -26,7 +27,10 @@ async def fetch_prices(
     without a price yet are left out. The body is decoded and parsed via ``run_blocking``.
     """
     body = await get_body(
-        session, PRICE_URL, {"bzn": zone, "start": start.isoformat(), "end": end.isoformat()}
+        session,
+        PRICE_URL,
+        {"bzn": zone, "start": start.isoformat(), "end": end.isoformat()},
+        MAX_PRICES_BYTES,
     )
     return await run_blocking(_parse, body)
 

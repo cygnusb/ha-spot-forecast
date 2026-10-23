@@ -9,7 +9,6 @@ from __future__ import annotations
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from datetime import UTC, date, datetime, time, timedelta
-import gzip
 import json
 import math
 from zoneinfo import ZoneInfo
@@ -18,12 +17,12 @@ import numpy as np
 
 from .features import HORIZONS, Hourly
 from .forecast import Slot, conformal_offset, low_price, peak_risk
+from .model import MAX_BACKFILL_JSON_BYTES, gunzip_limited
 
 CALIBRATION_DAYS = 56  # trailing target days used for the conformal offsets
 BACKFILL_FORMAT = 1
 ISSUE_HOUR = 6  # local hour a backfilled run is deemed to have been issued
 _HOUR = timedelta(hours=1)
-_PREFIX = "spot_forecast"
 PRICE = "price"  # series key in ``Ledger.finalized``; forecast series are "h1" … "h6"
 SERIES = (PRICE, *(f"h{h}" for h in HORIZONS))  # what a fully finalized day has
 GAP_GRACE_DAYS = 2  # a day with missing hours is written once it is this many days past
@@ -47,6 +46,11 @@ class StatRow:
     statistic_id: str
     start: datetime
     value: float
+
+
+def statistic_id(domain: str, zone_id: str, series: str) -> str:
+    """Id of a long-term statistic, e.g. ``spot_forecast:de_lu_forecast_h1``."""
+    return f"{domain}:{zone_id}_{series}"
 
 
 def _kwh(eur_per_mwh: float) -> float:
@@ -132,6 +136,7 @@ class Ledger:
         tz: str,
         *,
         today: date,
+        domain: str,
         zone_id: str,
         default_p90: Mapping[int, float],
         default_p10: Mapping[int, float],
@@ -145,6 +150,7 @@ class Ledger:
         horizon (so runs added or completed later, e.g. by the backfill, still produce their
         rows). ``default_*`` are the model's offsets, used by ``offsets`` while a horizon has
         too few residuals. Days whose every series is written are not looked at again.
+        Statistic ids are ``<domain>:<zone_id>_<series>``.
         """
         zone = ZoneInfo(tz)
         by_anchor: dict[date, tuple[dict[int, float], dict[int, float]]] = {}
@@ -158,7 +164,8 @@ class Ledger:
                 continue
             if (day, PRICE) not in self.finalized:
                 rows += [
-                    StatRow(f"{_PREFIX}:{zone_id}_price", t, _kwh(self.actual[t])) for t in known
+                    StatRow(statistic_id(domain, zone_id, PRICE), t, _kwh(self.actual[t]))
+                    for t in known
                 ]
                 self.finalized.add((day, PRICE))
             span = set(hours)
@@ -182,7 +189,7 @@ class Ledger:
                         f"low_h{h}": low_price(s, o10[h]),
                     }
                     rows += [
-                        StatRow(f"{_PREFIX}:{zone_id}_{name}", s.time, _kwh(v))
+                        StatRow(statistic_id(domain, zone_id, name), s.time, _kwh(v))
                         for name, v in cal.items()
                     ]
                 self.finalized.add((day, f"h{h}"))
@@ -226,14 +233,18 @@ class Ledger:
             "n": len(allerr),
         }
 
-    def prune(self, keep_days: int) -> None:
-        """Drop runs, actuals and finalized days older than ``keep_days`` before the newest one."""
+    def prune(self, keep_days: int, *, tz: str) -> None:
+        """Drop runs, actuals and finalized days older than ``keep_days`` before the newest one.
+
+        Days are local (``tz``), as anchors and finalized days are.
+        """
         newest = [max(self.actual)] if self.actual else []
         newest += [r.issued_at for r in self.runs.values()]
         if not newest:
             return
-        cutoff = max(newest).date() - timedelta(days=keep_days)
-        cut_t = datetime.combine(cutoff, time(), UTC)
+        zone = ZoneInfo(tz)
+        cutoff = max(newest).astimezone(zone).date() - timedelta(days=keep_days)
+        cut_t = datetime.combine(cutoff, time(), zone).astimezone(UTC)
         self.runs = {a: r for a, r in self.runs.items() if a >= cutoff}
         self.actual = {t: v for t, v in self.actual.items() if t >= cut_t}
         self.finalized = {f for f in self.finalized if f[0] >= cutoff}
@@ -300,7 +311,7 @@ def runs_from_backfill_file(data: bytes, model_version: str, tz: str) -> list[Ru
     The runs carry the model version the file names, else ``model_version``: a
     downloaded model without its own file uses the bundled one, made by another model.
     """
-    doc = json.loads(gzip.decompress(data))
+    doc = json.loads(gunzip_limited(data, MAX_BACKFILL_JSON_BYTES))
     if doc.get("format") != BACKFILL_FORMAT:
         raise ValueError(f"unsupported backfill format {doc.get('format')!r}")
     version = doc.get("model_version") or model_version

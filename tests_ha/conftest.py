@@ -52,6 +52,10 @@ from custom_components.spot_forecast.sources import http
 pytest_plugins = "pytest_homeassistant_custom_component"
 
 FIXTURES = Path(__file__).parent / "fixtures"
+# A copy of the model and backfill file the tests were written against. The integration's
+# own `models/` is replaced by every model refresh and by the release workflow; the dates
+# the tests freeze to and the backfill days they expect belong to this pair.
+MODEL_FIXTURES = FIXTURES / "model"
 
 
 def pytest_configure(config: pytest.Config) -> None:
@@ -62,6 +66,14 @@ def pytest_configure(config: pytest.Config) -> None:
     terminal between the progress dots.
     """
     logging.getLogger("sqlalchemy.engine").setLevel(logging.WARNING)
+
+
+@pytest.fixture(autouse=True)
+def _bundled_model_fixture(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Load the "bundled" model from `fixtures/model`, not from the integration's `models/`."""
+    from custom_components.spot_forecast import model_loader
+
+    monkeypatch.setattr(model_loader, "MODELS_DIR", MODEL_FIXTURES)
 
 
 @pytest.fixture
@@ -106,6 +118,22 @@ def _with_history(doc: dict) -> dict:
     return {"unix_seconds": stamps + doc["unix_seconds"], "price": prices + doc["price"]}
 
 
+def _extended(doc: dict, through: date) -> dict:
+    """The document with quarter hours appended up to the end of local day ``through``.
+
+    Each appended price repeats the one two days (UTC) before it, so the days after the
+    recording, a fall-back day with its 100 quarter hours included, look like recorded ones.
+    """
+    stamps, prices = list(doc["unix_seconds"]), list(doc["price"])
+    end = datetime.combine(through + timedelta(days=1), time(), BERLIN).timestamp()
+    by_stamp = dict(zip(stamps, prices, strict=True))
+    while stamps[-1] + 900 < end:
+        stamps.append(stamps[-1] + 900)
+        prices.append(by_stamp[stamps[-1] - 2 * 86400])
+        by_stamp[stamps[-1]] = prices[-1]
+    return {"unix_seconds": stamps, "price": prices}
+
+
 class Sources:
     """Serves the recorded payloads, or errors, for Energy-Charts and Open-Meteo.
 
@@ -133,17 +161,22 @@ class Sources:
         weather_status: int = 200,
         previous_runs_status: int = 200,
         price_overrides: dict[datetime, float] | None = None,
+        through: date | None = None,
     ) -> None:
         """Replace all registered responses (and the call log).
 
         ``price_overrides`` sets the price (EUR/MWh) of the quarter hours starting at the
-        given instants. Prices are cut to the requested ``start``/``end`` market days.
+        given instants. ``through`` extends the prices past the recording to the end of
+        that local day (see ``_extended``). Prices are cut to the requested
+        ``start``/``end`` market days.
         """
         self._mock.clear_requests()
         if prices_status != 200:
             self._mock.get(EC_URL, status=prices_status)
         else:
             doc = _with_history(self._recorded(prices))
+            if through is not None:
+                doc = _extended(doc, through)
             for at, price in (price_overrides or {}).items():
                 doc["price"][doc["unix_seconds"].index(int(at.timestamp()))] = price
 

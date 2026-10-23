@@ -3,7 +3,16 @@ from itertools import pairwise
 from zoneinfo import ZoneInfo
 
 from core.ingest import MarketSlot
-from core.schedule import WEATHER_RUNS_UTC, choose_anchor, is_expired, is_stale, next_run
+from core.schedule import (
+    RETRY_AFTER,
+    RETRY_MAX,
+    WEATHER_RUNS_UTC,
+    choose_anchor,
+    is_expired,
+    is_stale,
+    next_run,
+    retry_delay,
+)
 
 TZ = "Europe/Berlin"
 BERLIN = ZoneInfo(TZ)
@@ -129,6 +138,35 @@ def test_next_run_hits_weather_times():
     assert next_run(datetime(2026, 7, 1, 20, 15, tzinfo=UTC), True, TZ) == datetime(
         2026, 7, 1, 22, 5, tzinfo=UTC
     )
+
+
+def test_next_run_retries_20_min_after_a_failed_run():
+    assert timedelta(minutes=20) == RETRY_AFTER
+    # 10:15 local: the regular run is the 13:00 poll, the retry comes first
+    now = _local(2026, 10, 22, 10, 15)
+    assert next_run(now, False, TZ) == _local(2026, 10, 22, 13, 0).astimezone(UTC)
+    assert next_run(now, False, TZ, failures=1) == _local(2026, 10, 22, 10, 35).astimezone(UTC)
+    assert next_run(now, True, TZ, failures=1) == _local(2026, 10, 22, 10, 35).astimezone(UTC)
+    # a regular run sooner than the retry stays: the 15-minute poll
+    now = _local(2026, 10, 22, 13, 7)
+    assert next_run(now, False, TZ, failures=1) == _local(2026, 10, 22, 13, 15).astimezone(UTC)
+    # UTC-aware, like every other result
+    assert next_run(now, True, TZ, failures=1).utcoffset() == timedelta(0)
+
+
+def test_retry_delay_doubles_up_to_three_hours():
+    assert timedelta(hours=3) == RETRY_MAX
+    delays = [retry_delay(n) for n in range(1, 7)]
+    assert delays == [timedelta(minutes=m) for m in (20, 40, 80, 160, 180, 180)]
+    assert retry_delay(50) == RETRY_MAX  # no overflow after a long outage
+    # the second failure in a row at 10:15 local: 40 min, still before the 13:00 poll
+    now = _local(2026, 10, 22, 10, 15)
+    assert next_run(now, False, TZ, failures=2) == _local(2026, 10, 22, 10, 55).astimezone(UTC)
+    # a regular run always comes first when it is sooner: the 14:15 UTC weather refresh
+    now = _local(2026, 10, 22, 14, 0)
+    assert next_run(now, True, TZ, failures=6) == datetime(2026, 10, 22, 14, 15, tzinfo=UTC)
+    # no failure: no retry candidate at all
+    assert next_run(now, True, TZ, failures=0) == datetime(2026, 10, 22, 14, 15, tzinfo=UTC)
 
 
 def test_stale_after_failed_attempt_or_7h():

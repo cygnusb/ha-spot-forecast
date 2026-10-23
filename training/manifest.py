@@ -1,4 +1,17 @@
-"""Manifest of the rolling ``models`` release: the published model per zone."""
+"""Manifest of the rolling ``models`` release: the published model per zone.
+
+``manifest.json`` (``format`` 1) has ``updated``, ``zones`` (slug -> ``manifest_entry``)
+and optionally ``revoked``: a list of model versions (``de_lu-2026-11``) that must not be
+used any more. Clients from this version on never download a revoked version, delete it if
+they have it and fall back to the next usable model; release builds do not bundle it; the
+training gate does not compare against it. Older clients ignore the key.
+
+To revoke a model: download ``manifest.json`` from the ``models`` release, add the version to
+``"revoked"`` (create the list if it is missing), keep everything else as it is, and upload
+it again (``gh release upload models manifest.json --clobber``). The model's assets stay in
+the release: a published version is never replaced, and the next training publishes a new
+one. ``merge_manifest`` keeps the list on every later run.
+"""
 
 from __future__ import annotations
 
@@ -41,10 +54,25 @@ def manifest_entry(
     }
 
 
+def revoked_versions(manifest: dict | None) -> list[str]:
+    """The ``revoked`` list of ``manifest`` (empty without one); ``ValueError`` if malformed.
+
+    Optional, a list of model versions (``de_lu-2026-11``) that must not be used any more.
+    """
+    revoked = manifest.get("revoked", []) if manifest is not None else []
+    if not isinstance(revoked, list) or not all(isinstance(v, str) for v in revoked):
+        raise ValueError(f"manifest: revoked {revoked!r} is not a list of versions")
+    return revoked
+
+
 def merge_manifest(old: dict | None, slug: str, entry: dict) -> dict:
-    """``old`` (``None`` on the first run) with the zone ``slug`` set to ``entry``."""
+    """``old`` (``None`` on the first run) with the zone ``slug`` set to ``entry``; its
+    ``revoked`` list, if any, is kept."""
     if old is not None and old.get("format") != FORMAT:
         raise ValueError(f"unsupported manifest format {old.get('format')!r}")
     zones = dict(old["zones"]) if old is not None else {}
     zones[slug] = entry
-    return {"format": FORMAT, "updated": datetime.now(UTC).isoformat(), "zones": zones}
+    merged = {"format": FORMAT, "updated": datetime.now(UTC).isoformat(), "zones": zones}
+    if old is not None and "revoked" in old:
+        merged["revoked"] = list(revoked_versions(old))
+    return merged

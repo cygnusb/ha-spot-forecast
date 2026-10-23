@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 from typing import Any
 
 from homeassistant.components.binary_sensor import BinarySensorEntity
@@ -23,7 +24,10 @@ async def async_setup_entry(
 
 
 class _FlagSensor(SpotEntity, BinarySensorEntity):
-    """On if any slot in [now, now + 48 h) crosses the threshold: market price or forecast key."""
+    """On if any slot in [now, now + 48 h) crosses the threshold: market price or forecast key.
+
+    Unknown while no slot lies in the window (forecast dropped and the known prices ended).
+    """
 
     _entity_domain = "binary_sensor"
 
@@ -36,18 +40,23 @@ class _FlagSensor(SpotEntity, BinarySensorEntity):
         """EUR/kWh."""
         raise NotImplementedError
 
-    def _flagged(self) -> tuple[list[dict], bool]:
+    def _flagged(self, threshold: float | None = None) -> tuple[list[dict], bool]:
         return flag_window(
             self.coordinator.data.entries,
             dt_util.utcnow(),
             key=self._key,
-            threshold=self.threshold,
+            threshold=self.threshold if threshold is None else threshold,
             above=self._above,
         )
 
     @property
-    def is_on(self) -> bool:
-        return bool(self._flagged()[0])
+    def is_on(self) -> bool | None:
+        if self._flagged()[0]:
+            return True
+        # every slot crosses an infinite threshold: nothing flagged means no slot in the window
+        if not self._flagged(-math.inf if self._above else math.inf)[0]:
+            return None
+        return False
 
     @property
     def extra_state_attributes(self) -> dict[str, Any]:

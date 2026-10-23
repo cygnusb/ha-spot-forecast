@@ -53,8 +53,8 @@ class TrainResult:
 def build_training_data(raw: RawData, cutoff: date) -> Dataset:
     """All rows with a target day before ``cutoff``, in research row order (horizon, time).
 
-    The row order matters only for the early-stopping validation split, which then
-    matches research ``walk_forward``.
+    The order does not change the fitted trees (``fit`` holds no rows out); it only keeps
+    the rows, and the backfill built from them, in a stable, readable order.
     """
     ds = build_dataset(raw, raw.prices.start.date(), cutoff - timedelta(days=1))
     keep = np.flatnonzero(ds.target_date < cutoff)
@@ -63,7 +63,12 @@ def build_training_data(raw: RawData, cutoff: date) -> Dataset:
 
 
 def fit(ds: Dataset, quantile: float | None, max_iter: int = 600) -> HistGradientBoostingRegressor:
-    """Median (``None``) or quantile model on the scaled target, all features numeric."""
+    """Median (``None``) or quantile model on the scaled target, all features numeric.
+
+    No early stopping: scikit-learn's ``"auto"`` holds out a *shuffled* 10 % of the rows
+    above 10,000, which leaks neighbouring hours into the validation score, so it never
+    stopped (every ensemble ran to ``max_iter``) and only cost the model those rows.
+    """
     model = HistGradientBoostingRegressor(
         loss="absolute_error" if quantile is None else "quantile",
         quantile=quantile,
@@ -72,6 +77,7 @@ def fit(ds: Dataset, quantile: float | None, max_iter: int = 600) -> HistGradien
         max_leaf_nodes=31,
         min_samples_leaf=40,
         l2_regularization=1.0,
+        early_stopping=False,
         random_state=0,
     )
     return model.fit(ds.X, (ds.y_price - ds.mean7) / ds.scale)

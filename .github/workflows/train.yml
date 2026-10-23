@@ -4,16 +4,28 @@ name: Train
 # of the month and publishes to the rolling `models` release only if the candidate passes the
 # quality gate (training/gate.py). A failed gate or input data that is not published yet opens
 # an issue and publishes nothing; any other error fails the run, which notifies the owner.
+#
+# Two jobs, so the token that can write never meets third-party code: `train` installs the
+# hash-locked training dependencies and runs the training with a read-only token; `publish`
+# installs nothing and checks nothing out, it only takes train's files (workflow artifacts)
+# to the releases and the issues.
 
 on:
   schedule:
     # The 3rd: the month before is complete in every source by then.
     - cron: "0 2 3 * *"
   workflow_dispatch:
+    inputs:
+      accept_incomparable:
+        description: >-
+          Only for the first run after a feature-schema change: let the gate pass although
+          the published model cannot be compared (it needs skill > 0, and the MAE bar of any
+          older model that can be). The release notes say the override was used.
+        type: boolean
+        default: false
 
 permissions:
-  contents: write
-  issues: write
+  contents: read
 
 concurrency:
   group: train
@@ -25,6 +37,16 @@ env:
 jobs:
   train:
     runs-on: ubuntu-latest
+    timeout-minutes: 120
+    permissions:
+      contents: read
+    outputs:
+      archived: ${{ steps.archive.outputs.archived }}
+      rc: ${{ steps.ci.outputs.rc }}
+      passed: ${{ steps.gate.outputs.passed }}
+      already_published: ${{ steps.gate.outputs.already_published }}
+      version: ${{ steps.gate.outputs.version }}
+      manifest: ${{ steps.gate.outputs.manifest }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -34,8 +56,9 @@ jobs:
         with:
           python-version: "3.12"
           cache: pip
-          cache-dependency-path: training/requirements.txt
-      - run: pip install -r training/requirements.txt
+          cache-dependency-path: training/requirements.lock
+      # Every package pinned with its hashes (training/requirements.txt says how to update).
+      - run: pip install --require-hashes -r training/requirements.lock
 
       - name: Restore the raw-data archive
         # Only a missing release (HTTP 404) or a release without the archive means a first
@@ -64,23 +87,26 @@ jobs:
         run: python -m training.fetch --raw training/data/raw
 
       - name: Archive the raw data
+        id: archive
         # A whitelist: the public archive holds only the openly licensed (CC BY) inputs from
         # Energy-Charts and Open-Meteo, never research-only files that may not be shared.
-        env:
-          GH_TOKEN: ${{ github.token }}
+        # The publish job uploads it, also when the training below fails.
         run: |
           tar -czf raw.tar.gz -C training/data raw/prices/ raw/weather/ raw/installed_power.json
-          if ! gh release view training-data >/dev/null 2>&1; then
-            gh release create training-data --title "Training data" --latest=false --prerelease --notes "Raw inputs of the monthly model training, refreshed by the Train workflow: day-ahead prices and installed capacity from Energy-Charts (price data: Bundesnetzagentur | SMARD.de, CC BY 4.0) and weather forecasts from Open-Meteo (CC BY 4.0)."
-          fi
-          # Also a release created by hand (the bootstrap): HACS must never offer it.
-          gh release edit training-data --prerelease --latest=false
-          gh release upload training-data raw.tar.gz --clobber
+          echo "archived=true" >> "$GITHUB_OUTPUT"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: raw-data
+          path: raw.tar.gz
+          retention-days: 1
 
-      - name: Download the published manifest and model
+      - name: Download the published manifest and models
         id: previous
         # Same rule as the archive: only a missing release or manifest means a first run. A
         # manifest that cannot be read must never be replaced by one without the other zones.
+        # Besides the manifest's model (checked against its SHA-256), up to two older ones
+        # that are not revoked: the gate compares with the best of them, so a run of models,
+        # each a little worse than the one before, cannot pass.
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -93,8 +119,6 @@ jobs:
             404) echo "::notice::No models release yet: first run"; exit 0 ;;
             *) echo "::error::GitHub answered HTTP $code for the models release"; exit 1 ;;
           esac
-          # Also a release created by hand (the bootstrap): HACS must never offer it.
-          gh release edit models --prerelease --latest=false
           if ! jq -e '.assets | any(.name == "manifest.json")' "$RUNNER_TEMP/models.json" >/dev/null; then
             echo "::notice::The models release has no manifest.json: first run"
             exit 0
@@ -110,20 +134,41 @@ jobs:
           sha=$(jq -r --arg z "$zone" '.zones[$z].model.sha256' previous/manifest.json)
           gh release download models -p "$name" -D previous
           echo "$sha  previous/$name" | sha256sum -c -
-          echo "model=previous/$name" >> "$GITHUB_OUTPUT"
+          models="previous/$name"
+          older=$(jq -r --arg z "$zone" --arg n "$name" --slurpfile m previous/manifest.json '
+            [.assets[]
+              | select(.name | test("^" + $z + "-[0-9]{4}-[0-9]{2}\\.json\\.gz$"))
+              | select(.name < $n)
+              | select((.name | rtrimstr(".json.gz")) as $v
+                  | ($m[0].revoked // []) | index($v) | not)]
+            | sort_by(.name) | .[-2:][] | "\(.name) \(.digest // "")"' "$RUNNER_TEMP/models.json")
+          while read -r asset digest; do
+            [ -n "$asset" ] || continue
+            gh release download models -p "$asset" -D previous
+            # GitHub's own checksum of the asset, where it has one
+            if [ -n "$digest" ]; then echo "${digest#sha256:}  previous/$asset" | sha256sum -c -; fi
+            models="$models previous/$asset"
+          done <<< "$older"
+          echo "models=$models" >> "$GITHUB_OUTPUT"
 
       - name: Train and run the quality gate
         id: ci
-        # Exit 2 is a data lag (an input is not published yet): reported as an issue below.
-        # Every other non-zero exit fails the job.
+        # Exit 2 is a data lag (an input is not published yet): reported as an issue by the
+        # publish job. Every other non-zero exit fails the job.
         env:
           PREVIOUS_MANIFEST: ${{ steps.previous.outputs.manifest }}
-          PREVIOUS_MODEL: ${{ steps.previous.outputs.model }}
+          PREVIOUS_MODELS: ${{ steps.previous.outputs.models }}
+          # Never on the schedule: only a run started by hand can set the override.
+          ACCEPT_INCOMPARABLE: ${{ github.event_name == 'workflow_dispatch' && inputs.accept_incomparable == true }}
         run: |
           mkdir -p out
           args=(--raw training/data/raw --out out --cutoff "$(date -u +%Y-%m-01)")
           if [ -n "$PREVIOUS_MANIFEST" ]; then args+=(--previous-manifest "$PREVIOUS_MANIFEST"); fi
-          if [ -n "$PREVIOUS_MODEL" ]; then args+=(--previous-model "$PREVIOUS_MODEL"); fi
+          for model in $PREVIOUS_MODELS; do args+=(--previous-model "$model"); done
+          if [ "$ACCEPT_INCOMPARABLE" = true ]; then
+            echo "::warning::Started with accept_incomparable: an incomparable published model does not fail the gate"
+            args+=(--accept-incomparable)
+          fi
           rc=0
           python -m training.ci "${args[@]}" 2>out/ci-stderr.txt || rc=$?
           cat out/ci-stderr.txt >&2
@@ -153,18 +198,69 @@ jobs:
             echo "manifest=$manifest"
           } >> "$GITHUB_OUTPUT"
 
+      - uses: actions/upload-artifact@v4
+        if: steps.ci.outputs.rc == '0' || steps.ci.outputs.rc == '2'
+        with:
+          name: out
+          path: out/
+          retention-days: 7
+
+  publish:
+    # No checkout and no installs: only gh, jq and sha256sum from the runner image touch the
+    # files with a token that can write.
+    needs: train
+    if: always() && needs.train.outputs.archived == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: write
+      issues: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: raw-data
+      - uses: actions/download-artifact@v4
+        if: needs.train.outputs.rc == '0' || needs.train.outputs.rc == '2'
+        with:
+          name: out
+          path: out
+
+      - name: Upload the raw-data archive
+        run: |
+          if ! gh release view training-data >/dev/null 2>&1; then
+            gh release create training-data --title "Training data" --latest=false --prerelease --notes "Raw inputs of the monthly model training, refreshed by the Train workflow: day-ahead prices and installed capacity from Energy-Charts (price data: Bundesnetzagentur | SMARD.de, CC BY 4.0) and weather forecasts from Open-Meteo (CC BY 4.0)."
+          fi
+          # Also a release created by hand (the bootstrap): HACS must never offer it.
+          gh release edit training-data --prerelease --latest=false
+          gh release upload training-data raw.tar.gz --clobber
+
+      - name: Keep the models release out of HACS
+        # Also a release created by hand (the bootstrap): HACS must never offer it.
+        run: |
+          if gh release view models >/dev/null 2>&1; then
+            gh release edit models --prerelease --latest=false
+          fi
+
       - name: Publish the model
         if: >-
-          steps.gate.outputs.passed == 'true'
-          && steps.gate.outputs.already_published != 'true'
-          && steps.gate.outputs.manifest == 'true'
+          needs.train.outputs.passed == 'true'
+          && needs.train.outputs.already_published != 'true'
+          && needs.train.outputs.manifest == 'true'
         # The versioned assets are immutable: uploaded without --clobber, so an existing name
         # fails the step. The manifest goes up last, so it never names an asset that is not
-        # there yet. The release notes get the new report on top of the earlier ones.
+        # there yet, and only if it names these very files. The release notes get the new
+        # report on top of the earlier ones.
         env:
-          VERSION: ${{ steps.gate.outputs.version }}
-          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ needs.train.outputs.version }}
         run: |
+          zone="${VERSION%-[0-9][0-9][0-9][0-9]-[0-9][0-9]}"
+          for kind in model backfill; do
+            jq -er --arg z "$zone" --arg k "$kind" \
+              '.zones[$z][$k] | "\(.sha256)  out/\(.name)"' out/manifest.json | sha256sum -c -
+          done
           if ! gh release view models >/dev/null 2>&1; then
             gh release create models --title "Models" --latest=false --prerelease --notes "Rolling release of the published models. manifest.json lists the current model of every zone."
           fi
@@ -180,12 +276,11 @@ jobs:
 
       - name: Open an issue for the failed gate
         if: >-
-          steps.ci.outputs.rc == '0'
-          && steps.gate.outputs.passed != 'true'
-          && steps.gate.outputs.already_published != 'true'
+          needs.train.outputs.rc == '0'
+          && needs.train.outputs.passed != 'true'
+          && needs.train.outputs.already_published != 'true'
         env:
-          VERSION: ${{ steps.gate.outputs.version }}
-          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ needs.train.outputs.version }}
         run: |
           title="Model training gate failed for $VERSION"
           open=$(gh issue list --state open --search "in:title \"$title\"" --json number,title \
@@ -197,9 +292,7 @@ jobs:
           gh issue create --title "$title" --body-file out/issue.md
 
       - name: Open an issue for the data lag
-        if: steps.ci.outputs.rc == '2'
-        env:
-          GH_TOKEN: ${{ github.token }}
+        if: needs.train.outputs.rc == '2'
         run: |
           {
             echo "The monthly training stopped before training: an input is not published yet."
@@ -225,9 +318,10 @@ jobs:
     # GitHub switches scheduled workflows off after 60 days without repository activity.
     # Re-enabling this workflow at the end of every run keeps the monthly schedule alive; the
     # daily model-age check in validate.yml turns red if it stops anyway.
-    needs: train
+    needs: [train, publish]
     if: always()
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     permissions:
       actions: write
     steps:

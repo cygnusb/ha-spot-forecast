@@ -65,3 +65,11 @@ hourly={wind_speed_100m,shortwave_radiation,temperature_2m,precipitation}_previo
        (variable-major, as above)
 models=ecmwf_ifs025  start_date=2026-10-01  end_date=2026-10-22  timezone=GMT
 ```
+
+## Model
+
+`model/de_lu.json.gz` and `model/de_lu.backfill.json.gz` are copies of the bundled model
+`de_lu-2026-10` (training cutoff 2026-10-01) and its backfill file (target days
+2026-04-04 … 2026-09-30). `conftest` points `model_loader.MODELS_DIR` at them for every
+test, so a refreshed model in `custom_components/spot_forecast/models/` does not move the
+dates the tests depend on.

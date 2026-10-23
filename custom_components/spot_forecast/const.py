@@ -9,12 +9,15 @@ CONF_PEAK_THRESHOLD = "peak_threshold"  # ct/kWh
 CONF_BACKFILL_DAYS = "backfill_days"
 CONF_AUTO_UPDATE = "auto_update"
 CONF_SURCHARGE = "surcharge"  # EUR/kWh of grid fees and taxes, for the total price
+CONF_VAT = "vat"  # percent, charged on the exchange part of the total price
 
 DEFAULT_BACKFILL_DAYS = 60
 MAX_BACKFILL_DAYS = 180
 DEFAULT_PEAK_THRESHOLD = 15.0  # ct/kWh, used only while no model is loaded
 DEFAULT_SURCHARGE = 0.0  # no total-price sensor
 MAX_SURCHARGE = 1.0  # EUR/kWh
+DEFAULT_VAT = 19.0  # percent, Germany
+MAX_VAT = 30.0  # percent
 
 MODEL_MAX_AGE_DAYS = 60
 
@@ -27,6 +30,9 @@ MAX_DOWNLOADED_MODELS = 3  # versions kept per zone
 MAX_MANIFEST_BYTES = 256 * 1024
 MAX_MODEL_BYTES = 32 * 1024 * 1024
 MAX_BACKFILL_BYTES = 16 * 1024 * 1024
+# data sources; the largest bodies (a backfill's prices, a month of previous runs) are ~2 MB
+MAX_PRICES_BYTES = 16 * 1024 * 1024
+MAX_WEATHER_BYTES = 16 * 1024 * 1024
 
 STORE_VERSION = 1
 STORE_KEY = f"{DOMAIN}.{{entry_id}}"  # STORE_KEY.format(entry_id=entry.entry_id)

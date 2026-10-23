@@ -3,11 +3,14 @@ the look-back data it ships stays small, and the accuracy tables are the model's
 
 from __future__ import annotations
 
+from datetime import UTC, datetime, timedelta
 import gzip
+from itertools import pairwise
 import json
 from pathlib import Path
 import re
 import sys
+from zoneinfo import ZoneInfo
 
 import pytest
 
@@ -121,3 +124,40 @@ def test_accuracy_tables_match_model():
     full, rest = docs.split("### Last three months")
     assert _table_rows(full) == _expected_rows("full")
     assert _table_rows(rest.split("## Peaks")[0]) == _expected_rows("last3")
+
+
+def test_backtest_times_are_unique_instants_across_the_fall_back():
+    import site_data
+
+    # 2026-10-25 in Berlin: 25 hours, 02:00 twice (first +02:00, then +01:00)
+    start = datetime(2026, 10, 24, 22, tzinfo=UTC)
+    hours = [start + timedelta(hours=k) for k in range(25)]
+    t = site_data.timestamps(hours, ZoneInfo("Europe/Berlin"))
+    assert len(set(t)) == 25
+    assert t[:4] == [
+        "2026-10-25T00:00+02:00",
+        "2026-10-25T01:00+02:00",
+        "2026-10-25T02:00+02:00",
+        "2026-10-25T02:00+01:00",
+    ]
+    assert t[-1] == "2026-10-25T23:00+01:00"
+    assert [datetime.fromisoformat(s) for s in t] == hours
+
+
+def test_backtest_json_times_carry_their_offset():
+    doc = json.loads(build_site.BACKTEST.read_text(encoding="utf-8"))
+    pattern = re.compile(r"\d{4}-\d\d-\d\dT\d\d:00[+-]\d\d:\d\d")
+    assert all(pattern.fullmatch(t) for t in doc["t"])
+    instants = [datetime.fromisoformat(t) for t in doc["t"]]
+    assert all(b - a == timedelta(hours=1) for a, b in pairwise(instants))
+
+
+def test_trailing_errors_without_rows_fail_clearly():
+    import site_data
+
+    n = 200
+    actual = [10.0] * n
+    with pytest.raises(SystemExit, match="D\\+3: no trailing hour"):
+        site_data.trailing_errors(3, actual, [None] * n, list(range(n)))
+    got = site_data.trailing_errors(1, actual, [11.0] * n, list(range(n)))
+    assert got["mae"] == 1.0 and got["naive_mae"] == 0.0 and got["skill"] is None
