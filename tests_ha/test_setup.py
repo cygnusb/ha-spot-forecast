@@ -23,14 +23,16 @@ from homeassistant.config_entries import ConfigEntryState
 from homeassistant.const import STATE_OFF, STATE_ON, STATE_UNAVAILABLE, STATE_UNKNOWN
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import entity_registry as er
+from homeassistant.util import dt as dt_util
 import pytest
 from pytest_homeassistant_custom_component.common import (
     MockConfigEntry,
+    async_fire_time_changed,
 )
 from pytest_homeassistant_custom_component.test_util.aiohttp import AiohttpClientMocker
 
 from custom_components.spot_forecast import coordinator as coordinator_module
-from custom_components.spot_forecast import sensor
+from custom_components.spot_forecast import sensor, store
 from custom_components.spot_forecast.const import (
     CONF_PEAK_THRESHOLD,
     CONF_SURCHARGE,
@@ -646,6 +648,120 @@ async def test_removing_the_entry_deletes_its_store(
 
     assert f"{DOMAIN}.gone" not in hass_storage
     assert len(await stat_rows(hass, STAT_PRICE)) == rows > 0  # statistics are kept
+
+
+def _hold(monkeypatch: pytest.MonkeyPatch) -> tuple[asyncio.Event, ...]:
+    """Make the next price fetch wait: returns (fetch entered, release it, it was cancelled)."""
+    entered, release, cancelled = asyncio.Event(), asyncio.Event(), asyncio.Event()
+    fetch = coordinator_module.fetch_prices
+
+    async def held(*args: Any, **kwargs: Any) -> Any:
+        entered.set()
+        try:
+            await release.wait()
+        except asyncio.CancelledError:
+            cancelled.set()
+            raise
+        return await fetch(*args, **kwargs)
+
+    monkeypatch.setattr(coordinator_module, "fetch_prices", held)
+    return entered, release, cancelled
+
+
+async def _remove_while_held(hass: HomeAssistant, entry: MockConfigEntry) -> None:
+    """Remove ``entry`` while a run waits in a held fetch, past every unload timeout."""
+    coordinator = entry.runtime_data.coordinator
+    remove = hass.async_create_task(hass.config_entries.async_remove(entry.entry_id))
+    while coordinator._started:  # until the unload waits for the run lock
+        await asyncio.sleep(0)
+    await asyncio.sleep(0)
+    # the loop clock is frozen too: let the unload's waits run out (HA's own is 10 s)
+    async_fire_time_changed(
+        hass, dt_util.utcnow() + timedelta(seconds=coordinator_module.UNLOAD_WAIT + 11)
+    )
+    assert await remove
+
+
+async def _saves_flushed(hass: HomeAssistant) -> None:
+    """Let delayed Store saves fall due and be written."""
+    await hass.async_block_till_done(wait_background_tasks=True)
+    async_fire_time_changed(hass, dt_util.utcnow() + timedelta(seconds=store.SAVE_DELAY + 1))
+    await hass.async_block_till_done(wait_background_tasks=True)
+
+
+async def test_removing_the_entry_cancels_a_stalled_scheduled_run(
+    hass_with_recorder: HomeAssistant,
+    set_up: SetUp,
+    freezer: FrozenDateTimeFactory,
+    hass_storage: dict[str, Any],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A run stuck on a slow API must not write the Store file of a removed entry again."""
+    hass = hass_with_recorder
+    entry = await set_up(entry_id="stalled")
+    entered, release, cancelled = _hold(monkeypatch)
+    freezer.move_to(T10 + timedelta(minutes=15))  # weather run 08:15 UTC
+    async_fire_time_changed(hass, dt_util.utcnow())
+    await entered.wait()
+
+    await _remove_while_held(hass, entry)
+    assert cancelled.is_set()  # unload does not wait for the slow API
+    release.set()
+    await _saves_flushed(hass)
+
+    assert f"{DOMAIN}.stalled" not in hass_storage
+
+
+async def test_a_refresh_ending_after_removal_saves_nothing(
+    hass_with_recorder: HomeAssistant,
+    set_up: SetUp,
+    hass_storage: dict[str, Any],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A refresh not tied to the entry (e.g. ``homeassistant.update_entity``) outlives unload."""
+    hass = hass_with_recorder
+    entry = await set_up(entry_id="late")
+    coordinator = entry.runtime_data.coordinator
+    entered, release, _ = _hold(monkeypatch)
+    refresh = hass.async_create_background_task(coordinator.async_refresh(), "refresh")
+    await entered.wait()
+
+    await _remove_while_held(hass, entry)
+    release.set()
+    await refresh
+    await _saves_flushed(hass)
+
+    assert f"{DOMAIN}.late" not in hass_storage
+
+
+@pytest.mark.parametrize("step", ["_take_prices", "_settle"])
+async def test_a_bug_in_a_run_keeps_the_last_data(
+    hass_with_recorder: HomeAssistant,
+    set_up: SetUp,
+    freezer: FrozenDateTimeFactory,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+    step: str,
+) -> None:
+    hass = hass_with_recorder
+    entry = await set_up()
+    coordinator = entry.runtime_data.coordinator
+    before = hass.states.get(PRICE).attributes
+
+    def broken(*args: Any) -> None:
+        raise RuntimeError("bug")
+
+    monkeypatch.setattr(coordinator, step, broken)
+    await advance(hass, freezer, T10 + timedelta(minutes=15))  # weather run 08:15 UTC
+
+    assert coordinator.last_update_success
+    state = hass.states.get(PRICE)
+    assert state.state != STATE_UNAVAILABLE
+    assert state.attributes["stale"] is True
+    assert state.attributes["issued_at"] == before["issued_at"]
+    assert hass.states.get(PEAK).state in (STATE_ON, STATE_OFF)
+    errors = [r for r in caplog.records if r.levelno == logging.ERROR]
+    assert errors and errors[0].exc_info[0] is RuntimeError
 
 
 async def test_midnight_shifts_days_then_runs_at_0005(

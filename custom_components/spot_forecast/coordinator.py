@@ -138,6 +138,7 @@ class SpotForecastCoordinator(DataUpdateCoordinator[SpotData]):
         self._unsub_stop: CALLBACK_TYPE | None = None
         self._run_lock = asyncio.Lock()  # runs, refreshes and backfill never interleave
         self._started = False  # between async_start and unload / HA stop
+        self._closed = False  # unloaded: nothing is published or saved any more
         self._ran = False  # a run succeeded since this setup
         self._backfill_done_days = 0  # the widest backfill window completed so far
         self._backfill_attempted: datetime | None = None  # start of this setup's last attempt
@@ -229,15 +230,23 @@ class SpotForecastCoordinator(DataUpdateCoordinator[SpotData]):
         ledger = self._ledger.copy()
         try:
             ran = await self._async_run(now, ledger)
-        except (SourceError, InsufficientHistory) as err:
+        except Exception as err:
             if not self._market and _latest_live_run(ledger) is None:
                 raise UpdateFailed(f"no forecast yet and nothing stored: {err}") from err
-            _LOGGER.warning("Forecast run failed, keeping the last forecast: %s", err)
+            if isinstance(err, (SourceError, InsufficientHistory)):
+                _LOGGER.warning("Forecast run failed, keeping the last forecast: %s", err)
+            else:  # a bug: keep the last forecast all the same, the entities stay
+                _LOGGER.exception("Forecast run failed, keeping the last forecast")
             ran = False
-        # a backfill between its steps needs the old days it recorded: it prunes at its end
-        settled = await self.hass.async_add_executor_job(
-            self._settle, ledger, now, self.peak_threshold, not self._backfill_running
-        )
+        try:
+            # a backfill between its steps needs the old days it recorded: it prunes at its end
+            settled = await self.hass.async_add_executor_job(
+                self._settle, ledger, now, self.peak_threshold, not self._backfill_running
+            )
+        except Exception:  # a bug: keep the published ledger and what is shown
+            _LOGGER.exception("Updating the forecast ledger failed, keeping the last data")
+            self._last_attempt_failed = True
+            return self._build(now)
         if ran:
             self._last_success = now
             self._ran = True
@@ -275,8 +284,12 @@ class SpotForecastCoordinator(DataUpdateCoordinator[SpotData]):
         """Publish a settled ledger: queue its statistics and save it.
 
         Called right after the executor job, with no ``await`` in between: a task cancelled
-        while the job ran drops the copy, so no day counts as written that was not.
+        while the job ran drops the copy, so no day counts as written that was not. After
+        unload it drops it too: the unload's flush stays the last write, so a removed entry's
+        file is not recreated by a refresh that outlived it.
         """
+        if self._closed:
+            return
         self._ledger = settled.ledger
         self._p90_off, self._p10_off = settled.p90_off, settled.p10_off
         self._accuracy = settled.accuracy
@@ -506,7 +519,8 @@ class SpotForecastCoordinator(DataUpdateCoordinator[SpotData]):
     @callback
     def _on_run_due(self, _now: datetime) -> None:
         self._unsub_run = None
-        self.config_entry.async_create_task(
+        # a background task: unload cancels it rather than waiting for a slow API
+        self.config_entry.async_create_background_task(
             self.hass, self._async_scheduled_run(), f"{self.name} scheduled run"
         )
 
@@ -543,12 +557,15 @@ class SpotForecastCoordinator(DataUpdateCoordinator[SpotData]):
             self._unsub_stop = None
         # Let a run still in flight finish its save first, so the flush is the last write
         # (and a removed entry's file is not recreated). Bounded: unload must not hang on
-        # a slow API.
+        # a slow API; the scheduled run is cancelled meanwhile, and whatever ends later
+        # saves nothing (see ``_adopt``).
         try:
             async with asyncio.timeout(UNLOAD_WAIT), self._run_lock:
-                await self._store.async_flush()
+                pass
         except TimeoutError:
-            await self._store.async_flush()
+            pass
+        self._closed = True
+        await self._store.async_flush()
 
 
 def _latest_live_run(ledger: Ledger) -> Run | None:
