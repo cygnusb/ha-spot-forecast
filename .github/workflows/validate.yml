@@ -10,6 +10,10 @@ on:
     # commit. A failing scheduled run notifies the repository owner.
     - cron: "0 4 * * *"
 
+permissions:
+  contents: read
+
+
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
