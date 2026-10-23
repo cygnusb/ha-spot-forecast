@@ -485,6 +485,42 @@ async def test_failed_run_is_retried_20_min_later(
     assert aioclient_mock.call_count > 0
 
 
+async def test_failures_in_a_row_back_off_and_warn_once(
+    hass_with_recorder: HomeAssistant,
+    set_up: SetUp,
+    sources: Sources,
+    freezer: FrozenDateTimeFactory,
+    aioclient_mock: AiohttpClientMocker,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """A longer outage: retries 20, then 40 min apart, one warning, a note on recovery."""
+    caplog.set_level(logging.INFO, logger="custom_components.spot_forecast")
+    hass = hass_with_recorder
+    await set_up()
+    sources.serve(weather_status=500)
+    await advance(hass, freezer, T10 + timedelta(minutes=15))  # weather run 08:15 UTC fails
+    sources.serve(weather_status=500)
+    await advance(hass, freezer, T10 + timedelta(minutes=35))  # first retry fails too
+    assert aioclient_mock.call_count > 0
+
+    sources.serve()  # clears the call log
+    await advance(hass, freezer, T10 + timedelta(minutes=74))
+    assert aioclient_mock.call_count == 0  # not 20 min after the second failure
+    await advance(hass, freezer, T10 + timedelta(minutes=75))  # 40 min after it
+    assert aioclient_mock.call_count > 0
+    attrs = hass.states.get(PRICE).attributes
+    assert attrs["stale"] is False
+    assert datetime.fromisoformat(attrs["issued_at"]) == T10 + timedelta(minutes=75)
+
+    failed = [
+        r
+        for r in caplog.records
+        if r.getMessage().startswith("Forecast run failed") and r.levelno >= logging.WARNING
+    ]
+    assert len(failed) == 1
+    assert any("succeeded after 2 failed attempts" in r.getMessage() for r in caplog.records)
+
+
 async def test_stale_after_7h_without_success(
     hass_with_recorder: HomeAssistant,
     set_up: SetUp,

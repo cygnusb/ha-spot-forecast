@@ -135,6 +135,7 @@ class SpotForecastCoordinator(DataUpdateCoordinator[SpotData]):
         self._market: list[MarketSlot] = []
         self._last_success: datetime | None = None
         self._last_attempt_failed = False  # the most recent run attempt failed
+        self._failures = 0  # failed run attempts in a row: retry backoff and log level
         self._p90_off = dict(model.p90_offsets)
         self._p10_off = dict(model.p10_offsets)
         self._accuracy: dict = {}
@@ -241,6 +242,7 @@ class SpotForecastCoordinator(DataUpdateCoordinator[SpotData]):
         self._last_success = stored.last_success
         self._backfill_done_days = stored.backfill_done_days
         self._last_attempt_failed = stored.last_attempt_failed
+        self._failures = int(stored.last_attempt_failed)
         self._p90_off, self._p10_off, self._accuracy = await self.hass.async_add_executor_job(
             self._calibration, self._ledger, dt_util.utcnow(), self.peak_threshold
         )
@@ -291,10 +293,14 @@ class SpotForecastCoordinator(DataUpdateCoordinator[SpotData]):
         except Exception as err:
             if not self._market and _latest_live_run(ledger) is None:
                 raise UpdateFailed(f"no forecast yet and nothing stored: {err}") from err
+            # only the first failure in a row is a warning; the retries log at debug level
+            first = not self._failures
             if isinstance(err, (SourceError, InsufficientHistory)):
-                _LOGGER.warning("Forecast run failed, keeping the last forecast: %s", err)
+                log = _LOGGER.warning if first else _LOGGER.debug
+                log("Forecast run failed, keeping the last forecast: %s", err)
             else:  # a bug: keep the last forecast all the same, the entities stay
-                _LOGGER.exception("Forecast run failed, keeping the last forecast")
+                log = _LOGGER.error if first else _LOGGER.debug
+                log("Forecast run failed, keeping the last forecast", exc_info=True)
             ran = False
         try:
             # a backfill between its steps needs the old days it recorded: it prunes at its end
@@ -303,14 +309,21 @@ class SpotForecastCoordinator(DataUpdateCoordinator[SpotData]):
             )
         except Exception:  # a bug: keep the published ledger and what is shown
             _LOGGER.exception("Updating the forecast ledger failed, keeping the last data")
-            self._last_attempt_failed = True
+            self._record_attempt(ok=False)
             return self._build(now)
         if ran:
             self._last_success = now
             self._ran = True
-        self._last_attempt_failed = not ran
+        self._record_attempt(ok=ran)
         self._adopt(settled)
         return self._build(now)
+
+    def _record_attempt(self, ok: bool) -> None:
+        """Note how a run attempt ended: failures in a row back off the retry."""
+        if ok and self._failures:
+            _LOGGER.info("Forecast run succeeded after %d failed attempts", self._failures)
+        self._failures = 0 if ok else self._failures + 1
+        self._last_attempt_failed = not ok
 
     def _settle(
         self, ledger: Ledger, now: datetime, peak_threshold: float, prune: bool
@@ -450,8 +463,9 @@ class SpotForecastCoordinator(DataUpdateCoordinator[SpotData]):
             )
         except InsufficientHistory:
             raise
-        except Exception:  # a bug in core: keep the last forecast, still show the prices
-            _LOGGER.exception("Forecast for %s failed, keeping the last forecast", anchor)
+        except Exception:  # noqa: BLE001 - a bug in core: keep the last forecast, show the prices
+            log = _LOGGER.error if not self._failures else _LOGGER.debug
+            log("Forecast for %s failed, keeping the last forecast", anchor, exc_info=True)
             return False
         ledger.add_run(Run(anchor, now, self.model.version, tuple(slots), False))
         return True
@@ -572,7 +586,7 @@ class SpotForecastCoordinator(DataUpdateCoordinator[SpotData]):
             self._unsub_run()
         run = self._latest_run()
         anchor_is_tomorrow = run is not None and run.anchor > self._today(now)
-        when = next_run(now, anchor_is_tomorrow, self.zone.tz, retry=self._last_attempt_failed)
+        when = next_run(now, anchor_is_tomorrow, self.zone.tz, failures=self._failures)
         self._unsub_run = async_track_point_in_utc_time(
             self.hass,
             HassJob(self._on_run_due, f"{self.name} run", cancel_on_shutdown=True),

@@ -97,7 +97,11 @@ two to Open-Meteo.
 ## When a source fails
 
 A failed request keeps the last forecast. `stale: true` on the price sensor
-and its `issued_at` show that it is old. After 36 hours without a successful
+and its `issued_at` show that it is old. A failed run is tried again 20 minutes
+later; each further failure in a row doubles the wait, up to 3 hours, and a
+regular run that comes sooner always happens. Only the first failure of an
+outage is logged as a warning, the retries at debug level, and the first
+success after it at info level. After 36 hours without a successful
 run the forecast part is dropped and only the known prices remain, so an old
 forecast never looks like a fresh one.
 
