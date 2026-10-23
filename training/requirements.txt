@@ -1,3 +1,7 @@
+# The Train workflow and the tests-training job install requirements.lock (pinned, with
+# hashes), not this file. After a change here, regenerate it:
+#   uv pip compile --generate-hashes --python-platform linux --python-version 3.12 \
+#     training/requirements.txt -o training/requirements.lock
 numpy
 pandas
 pyarrow

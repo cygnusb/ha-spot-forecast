@@ -53,16 +53,56 @@ def test_train_workflow_triggers_and_permissions():
     on = _on(wf)
     assert on["schedule"] == [{"cron": "0 2 3 * *"}]
     assert "workflow_dispatch" in on
-    assert wf["permissions"] == {"contents": "write", "issues": "write"}
+    assert wf["permissions"] == {"contents": "read"}
     assert wf["concurrency"]["group"] == "train"
     assert wf["env"]["FORCE_JAVASCRIPT_ACTIONS_TO_NODE24"] is True
-    assert "permissions" not in wf["jobs"]["train"]  # no actions: write for the training
+    jobs = wf["jobs"]
+    # the training code and its third-party packages only ever see a read-only token
+    assert jobs["train"]["permissions"] == {"contents": "read"}
+    assert jobs["publish"]["permissions"] == {"contents": "write", "issues": "write"}
+    assert jobs["publish"]["needs"] == "train"
+
+
+def test_train_workflow_publish_job_runs_no_repository_code():
+    publish = _load("train.yml")["jobs"]["publish"]
+    uses = [s["uses"] for s in publish["steps"] if "uses" in s]
+    assert uses and all(u.startswith("actions/download-artifact@") for u in uses)
+    for step in publish["steps"]:
+        run = step.get("run", "")
+        for program in ("pip", "python", "python3", "uv", "npm"):
+            assert not _commands(run, program), (program, step.get("name"))
+    # without a checkout, gh needs to be told the repository
+    assert publish["env"]["GH_REPO"] == "${{ github.repository }}"
+
+
+def test_training_installs_the_hash_locked_requirements():
+    lock = (REPO / "training" / "requirements.lock").read_text()
+    assert "scikit-learn==1.9.1 \\\n    --hash=sha256:" in lock
+    pinned = [line for line in lock.splitlines() if line and not line.startswith((" ", "#"))]
+    assert pinned and all("==" in line and line.endswith("\\") for line in pinned)
+    train = _steps(_load("train.yml"), "train")
+    tests = _steps(_load("validate.yml"), "tests-training")
+    for steps in (train, tests):
+        step = _step(steps, "training/requirements.lock")
+        assert step["run"] == "pip install --require-hashes -r training/requirements.lock"
+        setup = next(s for s in steps if s.get("uses", "").startswith("actions/setup-python"))
+        assert setup["with"]["python-version"] == "3.12"  # what the lock is compiled for
+        assert setup["with"]["cache-dependency-path"] == "training/requirements.lock"
+    for wf in ("train.yml", "validate.yml", "release.yml"):
+        assert "-r training/requirements.txt" not in (WORKFLOWS / wf).read_text(), wf
+
+
+@pytest.mark.parametrize("workflow", ["train.yml", "validate.yml", "release.yml", "pages.yml"])
+def test_every_job_has_a_timeout(workflow):
+    for name, job in _load(workflow)["jobs"].items():
+        expected = 120 if (workflow, name) == ("train.yml", "train") else 30
+        assert job.get("timeout-minutes") == expected, name
 
 
 @pytest.mark.parametrize(
     ("workflow", "needs"),
     [
-        ("train.yml", "train"),
+        ("train.yml", ["train", "publish"]),
         (
             "validate.yml",
             [
@@ -93,7 +133,7 @@ def test_workflows_keep_their_schedule_enabled(workflow, needs):
 
 
 def test_train_workflow_keeps_data_releases_out_of_hacs():
-    steps = _steps(_load("train.yml"), "train")
+    steps = _steps(_load("train.yml"), "publish")
     for tag in ("models", "training-data"):
         create = [
             c
@@ -108,27 +148,61 @@ def test_train_workflow_keeps_data_releases_out_of_hacs():
 
 
 def test_train_workflow_publishes_only_on_pass():
-    steps = _steps(_load("train.yml"), "train")
-    ci = _step(steps, "python -m training.ci")
-    gate = _step(steps, "out/gate.json")
-    publish = _step(steps, "gh release upload models")
-    issue = _step(steps, "Model training gate failed")
+    wf = _load("train.yml")
+    train, publish = _steps(wf, "train"), _steps(wf, "publish")
+    ci = _step(train, "python -m training.ci")
+    gate = _step(train, "out/gate.json")
+    upload = _step(publish, "gh release upload models")
+    issue = _step(publish, "Model training gate failed")
     assert ci["id"] == "ci"
     assert gate["id"] == "gate"
     assert "steps.ci.outputs.rc == '0'" in gate["if"]
-    assert "steps.gate.outputs.passed == 'true'" in publish["if"]
-    assert "steps.gate.outputs.manifest == 'true'" in publish["if"]
-    assert "steps.gate.outputs.already_published != 'true'" in publish["if"]
-    assert "steps.gate.outputs.passed != 'true'" in issue["if"]
-    assert "steps.gate.outputs.already_published != 'true'" in issue["if"]
-    assert "steps.ci.outputs.rc == '0'" in issue["if"]
-    assert "--body-file out/issue.md" in issue["run"]
     assert "already_published" in gate["run"]
-    assert _index(steps, "python -m training.ci") < _index(steps, "gh release upload models")
+    outputs = wf["jobs"]["train"]["outputs"]
+    for name in ("passed", "already_published", "version", "manifest"):
+        assert outputs[name] == f"${{{{ steps.gate.outputs.{name} }}}}"
+    assert outputs["rc"] == "${{ steps.ci.outputs.rc }}"
+    assert "needs.train.outputs.passed == 'true'" in upload["if"]
+    assert "needs.train.outputs.manifest == 'true'" in upload["if"]
+    assert "needs.train.outputs.already_published != 'true'" in upload["if"]
+    assert "needs.train.outputs.passed != 'true'" in issue["if"]
+    assert "needs.train.outputs.already_published != 'true'" in issue["if"]
+    assert "needs.train.outputs.rc == '0'" in issue["if"]
+    assert "--body-file out/issue.md" in issue["run"]
+    # the manifest goes up only if it names the very files about to be uploaded
+    assert upload["run"].index("sha256sum -c") < upload["run"].index("gh release upload")
+
+
+def test_train_workflow_hands_its_files_to_publish():
+    wf = _load("train.yml")
+    train, publish = _steps(wf, "train"), _steps(wf, "publish")
+    uploads = {s["with"]["name"]: s for s in train if "upload-artifact" in s.get("uses", "")}
+    assert uploads["out"]["with"]["path"] == "out/"
+    assert uploads["out"]["if"] == "steps.ci.outputs.rc == '0' || steps.ci.outputs.rc == '2'"
+    assert uploads["raw-data"]["with"]["path"] == "raw.tar.gz"
+    assert train.index(uploads["raw-data"]) < _index(train, "python -m training.ci")
+    downloads = {s["with"]["name"] for s in publish if "download-artifact" in s.get("uses", "")}
+    assert downloads == {"out", "raw-data"}
+    # the archive goes up also when the training fails after it was made
+    assert wf["jobs"]["publish"]["if"] == "always() && needs.train.outputs.archived == 'true'"
+
+
+def test_train_workflow_compares_with_up_to_three_published_models():
+    train = _steps(_load("train.yml"), "train")
+    previous = _step(train, "releases/tags/models")
+    assert previous["id"] == "previous"
+    run = previous["run"]
+    assert 'echo "$sha  previous/$name" | sha256sum -c -' in run
+    assert ".[-2:]" in run and "revoked" in run  # two older ones, never a revoked one
+    ci = _step(train, "python -m training.ci")
+    assert ci["env"]["PREVIOUS_MODELS"] == "${{ steps.previous.outputs.models }}"
+    assert '--previous-model "$model"' in ci["run"]
+    # writes belong to the publish job
+    assert "gh release edit" not in "".join(s.get("run", "") for s in train)
 
 
 def test_train_workflow_never_replaces_a_published_version():
-    publish = _step(_steps(_load("train.yml"), "train"), "gh release upload models")
+    publish = _step(_steps(_load("train.yml"), "publish"), "gh release upload models")
     commands = _commands(publish["run"], "gh")
     uploads = [c for c in commands if c[:3] == ["gh", "release", "upload"]]
     assert len(uploads) == 2
@@ -145,7 +219,7 @@ def test_train_workflow_never_replaces_a_published_version():
 
 
 def test_train_workflow_prepends_the_report_to_the_release_notes():
-    publish = _step(_steps(_load("train.yml"), "train"), "gh release upload models")
+    publish = _step(_steps(_load("train.yml"), "publish"), "gh release upload models")
     run = publish["run"]
     earlier = run.index("gh release view models --json body -q .body")
     assert run.index("gh release upload models out/manifest.json") < earlier
@@ -155,25 +229,26 @@ def test_train_workflow_prepends_the_report_to_the_release_notes():
 
 @pytest.mark.parametrize("title", ["Model training gate failed", "Model training waiting for data"])
 def test_train_workflow_opens_an_issue_only_once(title):
-    run = _step(_steps(_load("train.yml"), "train"), title)["run"]
+    run = _step(_steps(_load("train.yml"), "publish"), title)["run"]
     assert run.index("gh issue list --state open --search") < run.index("gh issue create")
     assert "select(.title == $t)" in run
 
 
 def test_train_workflow_opens_data_lag_issue():
-    steps = _steps(_load("train.yml"), "train")
-    lag = _step(steps, "Model training waiting for data")
-    assert lag["if"] == "steps.ci.outputs.rc == '2'"
+    wf = _load("train.yml")
+    lag = _step(_steps(wf, "publish"), "Model training waiting for data")
+    assert lag["if"] == "needs.train.outputs.rc == '2'"
     assert "out/ci-stderr.txt" in lag["run"]
-    ci = _step(steps, "python -m training.ci")
+    ci = _step(_steps(wf, "train"), "python -m training.ci")
     # Exit 2 is the data lag; every other non-zero code fails the job.
     assert "2>out/ci-stderr.txt" in ci["run"].replace(" ", "")
     assert "--cutoff" in ci["run"]
 
 
 def test_train_workflow_archives_only_open_data():
-    steps = _steps(_load("train.yml"), "train")
-    archive = _step(steps, "gh release upload training-data")
+    wf = _load("train.yml")
+    steps = _steps(wf, "train")
+    archive = _step(steps, "tar -czf raw.tar.gz")
     (tar,) = _commands(archive["run"], "tar")
     assert tar[:4] == ["tar", "-czf", "raw.tar.gz", "-C"]
     assert tar[4] == "training/data"
@@ -184,6 +259,8 @@ def test_train_workflow_archives_only_open_data():
     ]
     fetch = _step(steps, "python -m training.fetch --raw training/data/raw")
     assert steps.index(fetch) < steps.index(archive)
+    upload = _step(_steps(wf, "publish"), "gh release upload training-data")
+    assert "gh release upload training-data raw.tar.gz --clobber" in upload["run"]
 
 
 def test_validate_workflow_has_matrix_floor_and_latest():
@@ -206,19 +283,36 @@ def test_validate_workflow_has_matrix_floor_and_latest():
     assert _step(ha_steps, "pypi.org/pypi/homeassistant")["if"] == "matrix.check_latest"
     _step(jobs["tests"]["steps"], "pip install -r tests/requirements.txt")
     _step(jobs["lint"]["steps"], "pip install ruff==0.16.5")
-    _step(jobs["model-age"]["steps"], "python tools/check_model_age.py")
+    age = _step(jobs["model-age"]["steps"], "python tools/check_model_age.py")
+    assert age["env"]["GH_TOKEN"] == "${{ github.token }}"  # the API check of the release
 
 
 def test_release_workflow_zips_after_model_fetch():
     wf = _load("release.yml")
     assert _on(wf)["release"]["types"] == ["published"]
+    assert wf["permissions"] == {"contents": "read"}
+    assert wf["jobs"]["zip"]["permissions"] == {"contents": "read"}
     steps = _steps(wf, "zip")
+    check = _index(steps, 'if [ "${TAG#v}" != "$version" ]')
+    install = _index(steps, "pip install --require-hashes -r training/requirements.lock")
     fetch = _index(steps, "tools/fetch_published_model.py custom_components/spot_forecast/models")
     zip_ = _index(steps, "zip -r")
-    upload = _index(steps, "gh release upload")
-    assert fetch < zip_ < upload
+    assert check < install < fetch < zip_
     assert "__pycache__" in steps[zip_]["run"]
-    assert "spot_forecast.zip" in steps[upload]["run"]
+    assert (
+        'zip -j "$GITHUB_WORKSPACE/spot_forecast.zip" "$GITHUB_WORKSPACE/LICENSE"'
+        in (steps[zip_]["run"])
+    )
+    assert "jq -r .version custom_components/spot_forecast/manifest.json" in steps[check]["run"]
+    # the token that can write the release only attaches the ZIP the read-only job built
+    upload = wf["jobs"]["upload"]
+    assert upload["needs"] == "zip"
+    assert upload["permissions"] == {"contents": "write"}
+    (attach,) = [s for s in upload["steps"] if "run" in s]
+    assert attach["run"] == 'gh release upload "$TAG" spot_forecast.zip --clobber'
+    assert [s["uses"].split("@")[0] for s in upload["steps"] if "uses" in s] == [
+        "actions/download-artifact"
+    ]
 
 
 def test_hacs_json_values():
