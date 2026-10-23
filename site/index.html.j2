@@ -1,0 +1,639 @@
+<!doctype html>
+{#- The project page, rendered once per language by tools/build_site.py.
+    Text comes from site/i18n/<lang>.json as `t`, the accuracy figures from the
+    bundled model as `m`; `root` leads back to the site root from the page. #}
+<html lang="{{ lang.code }}">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>{{ t.meta.title }}</title>
+<meta name="description" content="{{ t.meta.description }}">
+<link rel="canonical" href="{{ lang.url }}">
+{%- for other in languages %}
+<link rel="alternate" hreflang="{{ other.code }}" href="{{ other.url }}">
+{%- endfor %}
+<link rel="alternate" hreflang="x-default" href="{{ default_url }}">
+<meta property="og:title" content="{{ t.meta.og_title }}">
+<meta property="og:description" content="{{ t.meta.og_description }}">
+<meta property="og:type" content="website">
+<meta property="og:url" content="{{ lang.url }}">
+<meta property="og:locale" content="{{ lang.locale }}">
+{%- for other in languages if other.code != lang.code %}
+<meta property="og:locale:alternate" content="{{ other.locale }}">
+{%- endfor %}
+<meta property="og:image" content="{{ og_image }}">
+<meta name="theme-color" content="#f0f4f8" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#0d1520" media="(prefers-color-scheme: dark)">
+<link rel="icon" href="{{ root }}assets/icon.svg" type="image/svg+xml">
+<link rel="preload" href="{{ root }}assets/fonts/archivo-latin.woff2" as="font" type="font/woff2" crossorigin>
+<link rel="preload" href="{{ root }}assets/fonts/atkinson-next-latin.woff2" as="font" type="font/woff2" crossorigin>
+<link rel="stylesheet" href="{{ root }}assets/fonts/fonts.css">
+<script type="application/ld+json">{{ json_ld }}</script>
+{%- if lang.code == "en" %}
+<script>
+// A first visit with a browser set to German goes to the German page. A language
+// picked in the menu wins, and so does arriving from one of this site's own pages.
+(function () {
+  var pages = {{ languages | map(attribute="code") | list | tojson }};
+  function go(code) { if (code !== "en" && pages.indexOf(code) >= 0) location.replace(code + "/" + location.hash); }
+  try {
+    if (document.referrer && new URL(document.referrer).href.indexOf(new URL(".", location.href).href) === 0) return;
+    var chosen = localStorage.getItem("spot-forecast-lang");
+    if (chosen) return go(chosen);
+  } catch (e) { /* no storage: fall through to the browser languages */ }
+  var wanted = navigator.languages && navigator.languages.length ? navigator.languages : [navigator.language || ""];
+  for (var i = 0; i < wanted.length; i++) {
+    var code = String(wanted[i]).toLowerCase().split("-")[0];
+    if (pages.indexOf(code) >= 0) return go(code);
+  }
+})();
+</script>
+{%- endif %}
+<style>
+/* A forecast chart in print: cool chart paper, navy ink, the forecast's blue as the
+   one action colour and the hatched peak-risk red as the signature. The horizon
+   colours D+1 … D+6 are the cards' palette. */
+:root {
+  --paper: #f0f4f8;
+  --board: #ffffff;
+  --ink: #14233a;
+  --ink-2: #44566e;
+  --ink-3: #5a6b82;
+  --rule: #d2dbe6;
+  --grid: #e4eaf1;
+  --blue: #2a78d6;
+  --link: #1b5fb3;
+  --risk: #d03b3b;
+  --cheap: #1baf7a;
+  --btn: #1b5fb3;
+  --on-btn: #ffffff;
+  --focus: #1b5fb3;
+  --h1: #2a78d6; --h2: #eb6834; --h3: #1baf7a; --h4: #eda100; --h5: #e87ba4; --h6: #008300;
+  --display: "Archivo", "Arial Narrow", system-ui, sans-serif;
+  --body: "Atkinson Hyperlegible Next", "Segoe UI", system-ui, sans-serif;
+  color-scheme: light;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --paper: #0d1520;
+    --board: #142030;
+    --ink: #e4ebf3;
+    --ink-2: #a3b2c4;
+    --ink-3: #8a9aae;
+    --rule: #283a50;
+    --grid: #1c2a3b;
+    --blue: #4d93e6;
+    --link: #82b6f2;
+    --risk: #e25c5c;
+    --cheap: #2cc58e;
+    --btn: #4d93e6;
+    --on-btn: #0d1520;
+    --focus: #82b6f2;
+    color-scheme: dark;
+  }
+}
+*, *::before, *::after { box-sizing: border-box; }
+html { scroll-behavior: smooth; -webkit-text-size-adjust: 100%; }
+@media (prefers-reduced-motion: reduce) { html { scroll-behavior: auto; } }
+body { margin: 0; background: var(--paper); color: var(--ink); font-family: var(--body); font-size: 17px; line-height: 1.55; hyphens: auto; -webkit-hyphens: auto; hyphenate-limit-chars: 8 4 4; overflow-wrap: break-word; }
+img { max-width: 100%; height: auto; display: block; }
+a { color: var(--link); text-underline-offset: 3px; text-decoration-thickness: 1px; }
+code { font-size: 0.9em; background: var(--grid); padding: 0.05em 0.35em; border-radius: 4px; overflow-wrap: anywhere; hyphens: none; }
+:focus-visible { outline: 2px solid var(--focus); outline-offset: 3px; border-radius: 4px; }
+.wrap { max-width: 1240px; margin: 0 auto; padding-inline: 16px; }
+@media (min-width: 700px) { .wrap { padding-inline: 32px; } }
+h1, h2, h3 { font-family: var(--display); font-stretch: 75%; font-weight: 700; margin: 0; text-wrap: balance; overflow-wrap: anywhere; }
+p { margin: 0; }
+.num { font-family: var(--display); font-stretch: 75%; font-weight: 600; font-variant-numeric: tabular-nums lining-nums; }
+/* The peak-risk hatching of the cards and the icon. */
+.hatch { background: repeating-linear-gradient(135deg, var(--risk) 0 2px, transparent 2px 6px); }
+
+/* nav */
+nav.top { position: relative; display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px 24px; padding-block: 18px; }
+.brand { display: inline-flex; align-items: center; gap: 10px; text-decoration: none; color: var(--ink); font-family: var(--display); font-weight: 700; font-size: 19px; }
+.brand img { width: 30px; height: 30px; }
+.links { display: flex; flex-wrap: wrap; justify-content: flex-end; margin-left: auto; align-items: center; gap: 4px 22px; font-size: 15px; }
+.links > a:not(.btn) { text-decoration: none; color: var(--ink-2); padding-block: 8px; }
+.links > a:not(.btn):hover { color: var(--ink); text-decoration: underline; }
+.lang { font-size: 15px; }
+.lang summary { list-style: none; cursor: pointer; display: inline-flex; align-items: center; gap: 6px; padding: 7px 10px; border: 1px solid var(--rule); border-radius: 6px; color: var(--ink-2); }
+.lang summary::-webkit-details-marker { display: none; }
+.lang summary::after { content: ""; width: 6px; height: 6px; border-right: 1.5px solid currentColor; border-bottom: 1.5px solid currentColor; transform: translateY(-2px) rotate(45deg); }
+.lang[open] summary { color: var(--ink); border-color: var(--ink-3); }
+.lang ul { position: absolute; z-index: 5; right: 0; top: calc(100% - 8px); margin: 0; padding: 6px; list-style: none; min-width: 10rem; background: var(--board); border: 1px solid var(--rule); border-radius: 6px; box-shadow: 0 8px 24px rgba(20, 35, 58, 0.12); }
+.lang li a { display: block; padding: 6px 10px; border-radius: 4px; text-decoration: none; color: var(--ink); }
+.lang li a:hover, .lang li a[aria-current] { background: var(--paper); }
+@media (max-width: 1039px) { .links > a[href^="#"] { display: none; } }
+.btn { display: inline-flex; align-items: center; justify-content: center; min-height: 44px; padding: 10px 20px; border-radius: 6px; font-weight: 700; text-decoration: none; border: 1.5px solid var(--btn); }
+.btn-solid { background: var(--btn); color: var(--on-btn); }
+.btn-solid:hover { background: transparent; color: var(--ink); }
+.btn-line { color: var(--ink); border-color: var(--ink-3); }
+.btn-line:hover { background: var(--board); }
+.links .btn { min-height: 40px; padding: 7px 16px; }
+
+/* hero */
+.hero { padding-block: 24px 40px; }
+.hero-top { display: grid; grid-template-columns: minmax(0, 1fr); gap: 24px 56px; align-items: end; }
+@media (min-width: 960px) { .hero-top { grid-template-columns: minmax(0, 1.4fr) minmax(0, 1fr); } }
+.hero h1 { font-size: clamp(42px, 6vw, 84px); line-height: 0.95; letter-spacing: -0.005em; }
+.hero-side { display: flex; flex-direction: column; gap: 20px; max-width: 34em; }
+.hero-side > p { font-size: 18px; color: var(--ink-2); }
+.ctas { display: flex; flex-wrap: wrap; gap: 10px; }
+.facts { display: flex; flex-wrap: wrap; gap: 4px 18px; margin: 0; padding: 0; list-style: none; font-size: 14px; color: var(--ink-3); }
+.facts li { display: inline-flex; align-items: center; gap: 7px; }
+.facts li::before { content: ""; width: 5px; height: 5px; border-radius: 1px; background: var(--blue); }
+
+/* The day ruler: which days the sensor holds right now, known and forecast. */
+.ruler { margin: 40px 0 0; }
+.days { display: grid; grid-template-columns: repeat(8, minmax(0, 1fr)); margin: 0; padding: 0; list-style: none; }
+.days li { position: relative; display: flex; flex-direction: column; gap: 6px; padding: 0 8px 0 0; min-width: 0; }
+.days .bar { height: 30px; display: flex; flex-direction: column; justify-content: flex-end; }
+.days .bar::after { content: ""; display: block; height: 5px; background: var(--ink); }
+/* The hatched peak-risk band widens with the horizon, as the uncertainty does. */
+.days .fc .bar { background: repeating-linear-gradient(135deg, color-mix(in srgb, var(--risk) 70%, transparent) 0 1.5px, transparent 1.5px 6px); background-size: 100% calc(6px + var(--u, 1) * 3px); background-repeat: no-repeat; background-position: bottom 5px left 0; }
+.days .fc .bar::after { background: var(--blue); }
+.days .wait .bar::after { background: var(--rule); }
+.days .wait { color: var(--ink-3); }
+.days b { font-family: var(--display); font-stretch: 75%; font-weight: 700; font-size: 18px; line-height: 1.1; }
+.days span { font-size: 13px; color: var(--ink-3); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+/* "now, from here on forecast": the dotted line of the forecast card. */
+.days .first-fc::before { content: ""; position: absolute; left: -5px; top: -6px; bottom: -4px; border-left: 2px dotted var(--ink-3); }
+.ruler-foot { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 8px 24px; margin-top: 14px; font-size: 15px; color: var(--ink-2); }
+.ruler-key { display: flex; flex-wrap: wrap; gap: 4px 20px; margin: 0; padding: 0; list-style: none; }
+.ruler-key li { display: inline-flex; align-items: center; gap: 8px; }
+.ruler-key i { width: 22px; height: 12px; display: inline-block; border-bottom: 4px solid var(--ink); }
+.ruler-key i.f { border-bottom-color: var(--blue); }
+@media (max-width: 560px) {
+  .days { grid-template-columns: repeat(4, minmax(0, 1fr)); row-gap: 18px; }
+  .days b { font-size: 16px; }
+}
+
+.shot { margin: 32px 0 0; display: flex; flex-direction: column; gap: 10px; }
+.shot picture { display: block; border-radius: 10px; overflow: hidden; }
+.shot figcaption { color: var(--ink-2); font-size: 15px; max-width: 52em; }
+
+/* sections */
+.sec { padding-block: 80px 8px; display: flex; flex-direction: column; gap: 32px; }
+.lede { display: flex; flex-direction: column; gap: 12px; max-width: 44em; }
+.lede h2 { font-size: clamp(34px, 4.6vw, 56px); line-height: 1; }
+.lede p { color: var(--ink-2); font-size: 18px; }
+
+/* the look-back chart */
+.board { margin: 0; background: var(--board); border: 1px solid var(--rule); border-radius: 10px; padding: 18px 12px 14px; display: flex; flex-direction: column; gap: 14px; }
+@media (min-width: 700px) { .board { padding: 24px 28px 18px; } }
+.board-head { display: flex; flex-direction: column; gap: 2px; }
+.board-head strong { font-family: var(--display); font-stretch: 75%; font-weight: 700; font-size: 24px; line-height: 1.15; }
+.board-head span { color: var(--ink-2); font-size: 15px; }
+.controls { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 10px 24px; }
+.seg { display: flex; flex-wrap: wrap; gap: 6px; margin: 0; padding: 0; border: 0; }
+.seg button { all: unset; box-sizing: border-box; cursor: pointer; display: inline-flex; align-items: center; gap: 7px; min-height: 40px; padding: 6px 12px; border: 1px solid var(--rule); border-radius: 6px; color: var(--ink-2); font-size: 15px; font-variant-numeric: tabular-nums; }
+.seg button:hover { color: var(--ink); border-color: var(--ink-3); }
+.seg button[aria-pressed="true"] { color: var(--ink); font-weight: 700; border-color: var(--ink); box-shadow: inset 0 -3px 0 var(--k, var(--ink)); }
+.seg button:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+.seg .sw { width: 10px; height: 10px; border-radius: 2px; background: var(--k); }
+.readout { min-height: 26px; font-size: 15px; color: var(--ink-2); }
+.readout b { font-family: var(--display); font-stretch: 75%; font-weight: 700; font-size: 19px; color: var(--ink); font-variant-numeric: tabular-nums; }
+.readout .sep { display: inline-block; width: 18px; }
+.plot { position: relative; height: 440px; }
+@media (max-width: 600px) { .plot { height: 330px; } }
+.plot .msg[hidden] { display: none; }
+.plot .msg { position: absolute; inset: 0; display: grid; place-items: center; color: var(--ink-3); font-size: 15px; text-align: center; padding: 16px; }
+.board .src { font-size: 13px; color: var(--ink-3); border-top: 1px solid var(--rule); padding-top: 10px; }
+
+.facts-grid { display: grid; grid-template-columns: minmax(0, 1fr); gap: 32px 56px; align-items: start; }
+@media (min-width: 1000px) { .facts-grid { grid-template-columns: minmax(0, 1.35fr) minmax(0, 1fr); } }
+.table-wrap { overflow-x: auto; }
+table.acc { width: 100%; border-collapse: collapse; font-size: 15px; }
+table.acc caption { text-align: left; font-weight: 700; padding-bottom: 10px; }
+table.acc th, table.acc td { padding: 9px 0 9px 16px; text-align: right; border-bottom: 1px solid var(--rule); white-space: nowrap; }
+table.acc th:first-child, table.acc td:first-child { text-align: left; }
+table.acc thead th { font-weight: 400; color: var(--ink-2); vertical-align: bottom; border-bottom: 1px solid var(--ink); white-space: normal; }
+table.acc td { font-family: var(--display); font-stretch: 75%; font-weight: 600; font-size: 18px; font-variant-numeric: tabular-nums lining-nums; }
+table.acc td:first-child { font-family: var(--body); font-stretch: 100%; font-weight: 400; font-size: 15px; }
+table.acc td:first-child b { display: inline-flex; align-items: center; gap: 7px; font-family: var(--display); font-stretch: 75%; font-size: 18px; min-width: 3.2em; }
+table.acc td:first-child b::before { content: ""; width: 10px; height: 10px; border-radius: 2px; background: var(--k); }
+table.acc th:first-child, table.acc td:first-child { padding-left: 0; }
+table.acc td:first-child span { color: var(--ink-3); }
+@media (max-width: 600px) { table.acc td:first-child span { display: none; } table.acc th, table.acc td { padding-left: 10px; } }
+.note { margin-top: 12px; font-size: 14px; color: var(--ink-2); max-width: 46em; }
+.caveats { display: flex; flex-direction: column; gap: 26px; }
+.caveat { display: flex; flex-direction: column; gap: 6px; padding-left: 18px; position: relative; }
+.caveat::before { content: ""; position: absolute; left: 0; top: 4px; bottom: 4px; width: 8px; background: var(--grid); }
+.caveat.peak::before { background: repeating-linear-gradient(135deg, var(--risk) 0 2px, transparent 2px 6px); }
+.caveat h3 { font-size: 24px; line-height: 1.1; }
+.caveat p { color: var(--ink-2); font-size: 16px; }
+
+/* five steps of one forecast run, in order */
+.route { margin: 0; padding: 0; list-style: none; counter-reset: stop; display: grid; grid-template-columns: minmax(0, 1fr); }
+.route li { counter-increment: stop; position: relative; padding: 0 0 26px 52px; display: flex; flex-direction: column; gap: 4px; }
+.route li::before { content: counter(stop); position: absolute; left: 0; top: -2px; width: 32px; height: 32px; border-radius: 50%; border: 2px solid var(--blue); background: var(--paper); display: grid; place-items: center; font-family: var(--display); font-stretch: 75%; font-weight: 700; font-size: 16px; z-index: 1; }
+.route li::after { content: ""; position: absolute; left: 15px; top: 30px; bottom: 0; width: 2px; background: var(--blue); }
+.route li:last-child::after { display: none; }
+.route strong { font-family: var(--display); font-stretch: 75%; font-weight: 700; font-size: 21px; line-height: 1.15; padding-top: 2px; }
+.route span { color: var(--ink-2); font-size: 16px; }
+@media (min-width: 1040px) {
+  .route { grid-template-columns: repeat(5, minmax(0, 1fr)); column-gap: 28px; }
+  .route li { padding: 48px 0 0; }
+  .route li::before { top: 0; }
+  .route li::after { left: 32px; right: -28px; top: 15px; bottom: auto; width: auto; height: 2px; }
+}
+
+/* cards and entities */
+.duo { display: grid; grid-template-columns: minmax(0, 1fr); gap: 32px 56px; align-items: start; }
+@media (min-width: 960px) { .duo { grid-template-columns: minmax(0, 1.2fr) minmax(0, 1fr); } }
+.duo .shot { margin: 0; }
+.ents { display: flex; flex-direction: column; gap: 12px; }
+.ents h3 { font-size: 24px; }
+.ents ul { margin: 0; padding: 0; list-style: none; border-top: 1px solid var(--ink); }
+.ents li { display: flex; flex-direction: column; gap: 3px; padding: 13px 0 14px; border-bottom: 1px solid var(--rule); }
+.ents li strong { font-size: 15px; overflow-wrap: anywhere; hyphens: none; }
+.ents li span { color: var(--ink-2); font-size: 16px; }
+.sbp { margin-top: 8px; display: flex; flex-direction: column; gap: 8px; padding: 18px 20px; border: 1px solid var(--rule); border-left: 4px solid var(--blue); border-radius: 0 8px 8px 0; background: var(--board); }
+.sbp h3 { font-size: 22px; }
+.sbp p { color: var(--ink-2); font-size: 16px; }
+
+/* install */
+.install { margin-top: 88px; background: var(--board); border: 1px solid var(--rule); border-radius: 10px; padding: 28px 18px; display: grid; grid-template-columns: minmax(0, 1fr); gap: 28px 56px; }
+@media (min-width: 700px) { .install { padding: 40px; } }
+@media (min-width: 960px) { .install { grid-template-columns: minmax(0, 1fr) minmax(0, 1.3fr); } }
+.install .lede { align-self: start; }
+.install .ctas { margin-top: 8px; }
+.install ol { margin: 0; padding: 0; list-style: none; counter-reset: st; border-top: 1px solid var(--ink); }
+.install li { counter-increment: st; display: grid; grid-template-columns: 36px minmax(0, 1fr); gap: 12px; padding: 18px 0; border-bottom: 1px solid var(--rule); }
+.install li::before { content: counter(st); font-family: var(--display); font-stretch: 75%; font-weight: 700; font-size: 30px; line-height: 1; color: var(--blue); }
+.install li p + p { margin-top: 6px; color: var(--ink-2); font-size: 16px; }
+.install a, .sbp a, #cards a { hyphens: none; }
+
+.sources { margin: 0; display: grid; grid-template-columns: minmax(0, 1fr); border-top: 1px solid var(--ink); }
+.sources div { display: grid; grid-template-columns: minmax(0, 1fr); gap: 4px 24px; padding: 14px 0; border-bottom: 1px solid var(--rule); }
+@media (min-width: 700px) { .sources div { grid-template-columns: minmax(0, 13rem) minmax(0, 1fr); } }
+.sources dt { font-weight: 700; }
+.sources dd { margin: 0; color: var(--ink-2); }
+
+footer.foot { margin-top: 72px; border-top: 1px solid var(--rule); }
+footer.foot .wrap { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px 32px; padding-block: 24px 36px; font-size: 15px; color: var(--ink-2); }
+footer.foot nav { display: flex; flex-wrap: wrap; gap: 6px 22px; }
+</style>
+</head>
+<body>
+
+<div class="wrap">
+<nav class="top" aria-label="{{ t.nav.main_label }}">
+<a class="brand" href="#top"><img src="{{ root }}assets/icon.svg" alt="" width="30" height="30"><span>Spot Forecast</span></a>
+<div class="links">
+<a href="#accuracy">{{ t.nav.accuracy }}</a>
+<a href="#how">{{ t.nav.how }}</a>
+<a href="#cards">{{ t.nav.cards }}</a>
+<a href="#install">{{ t.nav.install }}</a>
+<a href="{{ root }}docs/" hreflang="en">{{ t.nav.docs }}</a>
+<details class="lang">
+<summary>{{ lang.name }}</summary>
+<ul aria-label="{{ t.nav.language_label }}">
+{%- for other in languages %}
+<li><a href="{{ (root ~ other.path) or './' }}" lang="{{ other.code }}" hreflang="{{ other.code }}"{% if other.code == lang.code %} aria-current="page"{% endif %}>{{ other.name }}</a></li>
+{%- endfor %}
+</ul>
+</details>
+<a class="btn btn-solid" href="{{ repo_url }}">GitHub</a>
+</div>
+</nav>
+</div>
+
+<main>
+<header id="top" class="wrap hero">
+<div class="hero-top">
+<h1>{{ t.hero.title }}</h1>
+<div class="hero-side">
+<p>{{ t.hero.lede }}</p>
+<div class="ctas">
+<a class="btn btn-solid" href="#install">{{ t.hero.cta_install }}</a>
+<a class="btn btn-line" href="#accuracy">{{ t.hero.cta_accuracy }}</a>
+</div>
+<ul class="facts">
+{%- for key in ["free", "keyless", "pi", "home_assistant"] %}
+<li>{{ t.hero.facts[key] }}</li>
+{%- endfor %}
+</ul>
+</div>
+</div>
+
+<figure class="ruler" aria-label="{{ t.ruler.label }}">
+<ol class="days" id="days">
+{%- for n in range(8) %}
+<li class="{{ 'known' if n < 2 else 'fc' }}{{ ' first-fc' if n == 2 else '' }}" style="--u:{{ n - 1 }}"><div class="bar"></div><b>{% if n == 0 %}{{ t.ruler.today }}{% elif n == 1 %}{{ t.ruler.tomorrow }}{% else %}{{ t.ruler.ahead | replace("{n}", n) }}{% endif %}</b><span>&nbsp;</span></li>
+{%- endfor %}
+</ol>
+<div class="ruler-foot">
+<ul class="ruler-key">
+<li><i></i>{{ t.ruler.known }}</li>
+<li><i class="f hatch"></i>{{ t.ruler.forecast }}</li>
+</ul>
+<figcaption id="ruler-caption">{{ t.ruler.caption_after }}</figcaption>
+</div>
+</figure>
+
+<figure class="shot">
+<picture><source media="(prefers-color-scheme: dark)" srcset="{{ root }}assets/screenshots/forecast_dark.png"><img src="{{ root }}assets/screenshots/forecast_light.png" alt="{{ t.hero.shot_alt }}" width="1296" height="1060"></picture>
+<figcaption>{{ t.hero.shot_caption }}</figcaption>
+</figure>
+</header>
+
+<section id="accuracy" class="wrap sec">
+<div class="lede">
+<h2>{{ t.accuracy.title }}</h2>
+<p>{{ t.accuracy.lede }}</p>
+</div>
+
+<figure class="board">
+<figcaption class="board-head"><strong>{{ t.chart.title }}</strong><span>{{ t.chart.subtitle }}</span></figcaption>
+<div class="controls">
+<div class="seg" role="group" aria-label="{{ t.chart.horizons_label }}" id="horizons">
+{%- for h in range(1, 7) %}
+<button type="button" data-h="{{ h }}" style="--k:var(--h{{ h }})" aria-pressed="{{ 'true' if h == 1 else 'false' }}"><i class="sw"></i>D+{{ h }}</button>
+{%- endfor %}
+<button type="button" data-h="0" aria-pressed="false">{{ t.chart.js.all }}</button>
+</div>
+<div class="seg" role="group" aria-label="{{ t.chart.ranges_label }}" id="ranges">
+{%- for label in t.chart.js.ranges %}
+<button type="button" data-r="{{ loop.index0 }}" aria-pressed="{{ 'true' if loop.index0 == 1 else 'false' }}">{{ label }}</button>
+{%- endfor %}
+</div>
+</div>
+<p class="readout" id="readout" aria-live="polite"></p>
+<div class="plot" id="plot"><p class="msg" id="plot-msg">{{ t.chart.loading }}</p></div>
+<p class="src">{{ t.chart.source }}</p>
+</figure>
+
+<div class="facts-grid">
+<div>
+<div class="table-wrap">
+<table class="acc">
+<caption>{{ t.accuracy.table_caption | replace("{version}", m.version) }}</caption>
+<thead><tr>
+<th scope="col">{{ t.accuracy.horizon }}</th>
+<th scope="col">{{ t.accuracy.full | replace("{from}", m.walk_forward_from | month) }}</th>
+<th scope="col">{{ t.accuracy.last3 }}</th>
+<th scope="col">{{ t.accuracy.naive }}</th>
+<th scope="col">{{ t.accuracy.skill }}</th>
+<th scope="col">{{ t.accuracy.p90 }}</th>
+</tr></thead>
+<tbody>
+{%- for r in m.rows %}
+<tr><td style="--k:var(--h{{ r.h }})"><b>D+{{ r.h }}</b> <span>{{ (t.accuracy.days_ahead_one if r.h == 1 else t.accuracy.days_ahead_many) | replace("{h}", r.h) }}</span></td><td>{{ r.mae | num(2) }}</td><td>{{ r.mae_3m | num(2) }}</td><td>{{ r.naive | num(2) }}</td><td>{{ r.skill | pct }}</td><td>{{ r.p90 | pct }}</td></tr>
+{%- endfor %}
+</tbody>
+</table>
+</div>
+<p class="note">{{ t.accuracy.table_note | replace("{from}", m.walk_forward_from | month) | replace("{from3}", m.trailing_3m_from | month) }}</p>
+</div>
+{%- set first = m.rows[0] %}
+{%- set last = m.rows[-1] %}
+<div class="caveats">
+<div class="caveat peak">
+<h3>{{ t.accuracy.peaks_title }}</h3>
+<p>{{ t.accuracy.peaks_text | replace("{t}", m.threshold | num(1)) | replace("{b1}", (-first.peak_bias) | num(1)) | replace("{b6}", (-last.peak_bias) | num(1)) | replace("{p}", first.p90 | pct) }}</p>
+</div>
+<div class="caveat">
+<h3>{{ t.accuracy.regime_title }}</h3>
+<p>{{ t.accuracy.regime_text | replace("{from3}", m.trailing_3m_from | month) | replace("{a}", first.mae_3m | num(1)) | replace("{b}", last.mae_3m | num(1)) }}</p>
+</div>
+</div>
+</div>
+</section>
+
+<section id="how" class="wrap sec">
+<div class="lede">
+<h2>{{ t.how.title }}</h2>
+<p>{{ t.how.lede }}</p>
+</div>
+<ol class="route">
+{%- for key in ["prices", "weather", "model", "calibrate", "publish"] %}
+<li><strong>{{ t.how["items"][key].title }}</strong><span>{{ t.how["items"][key].text }}</span></li>
+{%- endfor %}
+</ol>
+</section>
+
+<section id="cards" class="wrap sec">
+<div class="lede">
+<h2>{{ t.cards.title }}</h2>
+<p>{{ t.cards.lede }}</p>
+</div>
+<div class="duo">
+<figure class="shot">
+<picture><source media="(prefers-color-scheme: dark)" srcset="{{ root }}assets/screenshots/lookback_dark.png"><img src="{{ root }}assets/screenshots/lookback_light.png" alt="{{ t.cards.lookback_alt }}" width="1296" height="1080" loading="lazy"></picture>
+<figcaption>{{ t.cards.lookback_caption }}</figcaption>
+</figure>
+<div class="ents">
+<h3>{{ t.cards.entities_title }}</h3>
+<ul>
+{%- for key in ["price", "peak", "negative", "days"] %}
+<li><strong>{{ t.cards.entities[key].title }}</strong><span>{{ t.cards.entities[key].text }}</span></li>
+{%- endfor %}
+</ul>
+<div class="sbp">
+<h3>{{ t.sbp.title }}</h3>
+<p>{{ t.sbp.text }}</p>
+</div>
+</div>
+</div>
+</section>
+
+<div class="wrap">
+<section id="install" class="install">
+<div class="lede">
+<h2>{{ t.install.title }}</h2>
+<p>{{ t.install.lede }}</p>
+<div class="ctas">
+<a class="btn btn-solid" href="https://my.home-assistant.io/redirect/hacs_repository/?owner=cygnusb&amp;repository=ha-spot-forecast&amp;category=integration">{{ t.install.open_hacs }}</a>
+<a class="btn btn-line" href="https://my.home-assistant.io/redirect/config_flow_start/?domain=spot_forecast">{{ t.install.add_integration }}</a>
+</div>
+</div>
+<ol>
+<li><div><p>{{ t.install.repo }}</p><p>{{ t.install.repo_detail }}</p></div></li>
+<li><div><p>{{ t.install.download }}</p></div></li>
+<li><div><p>{{ t.install.setup }}</p><p>{{ t.install.setup_detail }}</p></div></li>
+<li><div><p>{{ t.install.cards }}</p><p>{{ t.install.cards_detail }}</p></div></li>
+</ol>
+</section>
+</div>
+
+<section id="sources" class="wrap sec">
+<div class="lede">
+<h2>{{ t.sources.title }}</h2>
+<p>{{ t.sources.lede }}</p>
+</div>
+<dl class="sources">
+<div><dt><a href="https://www.energy-charts.info/">{{ t.sources.prices_name }}</a></dt><dd>{{ t.sources.prices }}</dd></div>
+<div><dt><a href="https://open-meteo.com/">{{ t.sources.weather_name }}</a></dt><dd>{{ t.sources.weather }}</dd></div>
+</dl>
+</section>
+</main>
+
+<footer class="foot">
+<div class="wrap">
+<span>{{ t.footer.text }}</span>
+<nav aria-label="{{ t.footer.nav_label }}"><a href="{{ root }}docs/" hreflang="en">{{ t.nav.docs }}</a><a href="{{ root }}docs/changelog/" hreflang="en">{{ t.footer.changelog }}</a><a href="{{ repo_url }}/issues">{{ t.footer.issues }}</a><a href="{{ repo_url }}">GitHub</a></nav>
+</div>
+</footer>
+
+<script>
+(function () {
+  var T = {{ chart_text }};
+  var L = T.locale;
+
+  // The language picked in the menu, for the next visit to the English page.
+  document.querySelectorAll(".lang a[hreflang]").forEach(function (a) {
+    a.addEventListener("click", function () {
+      try { localStorage.setItem("spot-forecast-lang", a.getAttribute("hreflang")); } catch (e) { /* not remembered */ }
+    });
+  });
+
+  // The day ruler with today's dates: before the auction result (about 13:00 in
+  // Berlin) only today is known and the forecast runs from tomorrow.
+  (function () {
+    var parts = {};
+    new Intl.DateTimeFormat("en-CA", { timeZone: "Europe/Berlin", year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", hourCycle: "h23" })
+      .formatToParts(new Date()).forEach(function (p) { parts[p.type] = p.value; });
+    var after = +parts.hour >= 13;
+    var base = Date.UTC(+parts.year, +parts.month - 1, +parts.day, 12);
+    var fmt = new Intl.DateTimeFormat(L.intl, { weekday: "short", day: "numeric", month: "numeric", timeZone: "UTC" });
+    var known = after ? 2 : 1;
+    document.querySelectorAll("#days li").forEach(function (li, n) {
+      li.className = n < known ? "known" : (n < known + 6 ? "fc" : "wait");
+      li.style.setProperty("--u", n - known + 1);
+      if (n === known) li.classList.add("first-fc");
+      li.querySelector("span").textContent = li.className.indexOf("wait") >= 0 ? {{ t.ruler.pending | tojson }} : fmt.format(new Date(base + n * 864e5));
+    });
+    document.getElementById("ruler-caption").textContent = after ? {{ t.ruler.caption_after | tojson }} : {{ t.ruler.caption_before | tojson }};
+  })();
+
+  // The look-back chart, variant A of the cards: the actual price against the
+  // forecast made h days before, the gap filled red. Plotly loads when the chart
+  // comes near the screen.
+  var plot = document.getElementById("plot");
+  var msg = document.getElementById("plot-msg");
+  var readout = document.getElementById("readout");
+  var state = { h: 1, r: 1 };
+  var D = null;
+  var num = new Intl.NumberFormat(L.intl, { minimumFractionDigits: 1, maximumFractionDigits: 1 });
+  var RANGE_DAYS = [7, 30, 91, 183];
+
+  function fail() { msg.textContent = {{ t.chart.failed | tojson }}; msg.hidden = false; }
+  function css(name) { return getComputedStyle(document.documentElement).getPropertyValue(name).trim(); }
+  function rgba(hex, a) {
+    var n = parseInt(hex.replace("#", ""), 16);
+    return "rgba(" + ((n >> 16) & 255) + "," + ((n >> 8) & 255) + "," + (n & 255) + "," + a + ")";
+  }
+  function ms(s) { return Date.parse(s.replace(" ", "T") + ":00Z"); }
+  function wall(t) { return new Date(t).toISOString().slice(0, 16).replace("T", " "); }
+  function label(h) { return (h === 1 ? T.forecast_one : T.forecast_many).replace("{h}", h); }
+
+  function range() {
+    var end = ms(D.t[D.t.length - 1]) + 3600e3;
+    return [wall(end - RANGE_DAYS[state.r] * 864e5), wall(end)];
+  }
+
+  // The y range of what the shown lines reach in the shown range, not of all data.
+  function yrange() {
+    var r = range(), lo = 0, hi = 0;
+    var shown = [D.actual].concat([1, 2, 3, 4, 5, 6].filter(function (h) { return !state.h || state.h === h; }).map(function (h) { return D.forecast[h]; }));
+    for (var i = 0; i < D.t.length; i++) {
+      if (D.t[i] < r[0] || D.t[i] >= r[1]) continue;
+      shown.forEach(function (s) { if (s[i] !== null) { lo = Math.min(lo, s[i]); hi = Math.max(hi, s[i]); } });
+    }
+    var pad = (hi - lo) * 0.05;
+    return [lo - pad, hi + pad];
+  }
+
+  function mae(h, lo, hi, peakOnly) {
+    var sum = 0, n = 0, f = D.forecast[h];
+    for (var i = 0; i < D.t.length; i++) {
+      var a = D.actual[i], p = f[i];
+      if (a === null || p === null || D.t[i] < lo || D.t[i] >= hi) continue;
+      if (peakOnly && a <= D.peak_threshold) continue;
+      sum += Math.abs(p - a); n++;
+    }
+    return n ? sum / n : null;
+  }
+
+  function updateReadout() {
+    var r = range();
+    if (state.h) {
+      var all = mae(state.h, r[0], r[1], false), peak = mae(state.h, r[0], r[1], true);
+      readout.innerHTML = T.mae.replace("{v}", num.format(all)) + '<span class="sep"></span>' +
+        T.peak.replace("{t}", num.format(D.peak_threshold)).replace("{v}", peak === null ? T.none : num.format(peak));
+    } else {
+      var parts = [];
+      for (var h = 1; h <= 6; h++) parts.push("D+" + h + " <b>" + num.format(mae(h, r[0], r[1], false)) + "</b>");
+      readout.innerHTML = T.mae_all + ": " + parts.join('<span class="sep"></span>');
+    }
+  }
+
+  function draw() {
+    var c = { board: css("--board"), ink: css("--ink"), ink2: css("--ink-2"), grid: css("--grid"), rule: css("--rule"), risk: css("--risk") };
+    var traces = [{ x: D.t, y: D.actual, name: T.actual, mode: "lines", line: { color: c.ink, width: 1.6 }, hovertemplate: "%{y:.1f} ct<extra>" + T.actual + "</extra>" }];
+    for (var h = 1; h <= 6; h++) {
+      var one = state.h === h;
+      traces.push({ x: D.t, y: D.actual, mode: "lines", line: { width: 0 }, hoverinfo: "skip", showlegend: false, visible: one });
+      traces.push({ x: D.t, y: D.forecast[h], name: label(h), mode: "lines", visible: one || state.h === 0,
+        line: { color: css("--h" + h), width: 1.6 }, fill: one ? "tonexty" : "none", fillcolor: rgba(c.risk, 0.2),
+        hovertemplate: "%{y:.1f} ct<extra>D+" + h + "</extra>" });
+    }
+    var narrow = plot.clientWidth < 600;
+    var axis = { gridcolor: c.grid, linecolor: c.rule, tickcolor: c.rule, zerolinecolor: c.rule, fixedrange: true, automargin: true };
+    var layout = {
+      paper_bgcolor: c.board, plot_bgcolor: c.board, separators: L.decimal + L.thousands,
+      font: { family: '"Atkinson Hyperlegible Next", "Segoe UI", system-ui, sans-serif', size: narrow ? 11 : 13, color: c.ink2 },
+      margin: { t: 8, r: 6, b: 8, l: 8 }, dragmode: false, hovermode: "x unified",
+      hoverlabel: { bgcolor: c.board, bordercolor: c.rule, font: { color: c.ink } },
+      legend: { orientation: "h", x: 0, y: -0.12, yanchor: "top", traceorder: "normal" },
+      xaxis: Object.assign({ type: "date", range: range(), tickformat: L.tick, hoverformat: L.hover, nticks: narrow ? 4 : 8 }, axis),
+      yaxis: Object.assign({ ticksuffix: " ct", zeroline: true, range: yrange() }, axis),
+    };
+    msg.hidden = true;
+    Plotly.react(plot, traces, layout, { displayModeBar: false, responsive: true, locale: "site", scrollZoom: false, doubleClick: false });
+    updateReadout();
+  }
+
+  function press(group, attr, value) {
+    document.querySelectorAll(group + " button").forEach(function (b) { b.setAttribute("aria-pressed", String(+b.getAttribute(attr) === value)); });
+  }
+  document.querySelectorAll("#horizons button").forEach(function (b) {
+    b.addEventListener("click", function () { state.h = +b.getAttribute("data-h"); press("#horizons", "data-h", state.h); if (D) draw(); });
+  });
+  document.querySelectorAll("#ranges button").forEach(function (b) {
+    b.addEventListener("click", function () {
+      state.r = +b.getAttribute("data-r"); press("#ranges", "data-r", state.r);
+      if (D) { Plotly.relayout(plot, { "xaxis.range": range(), "yaxis.range": yrange() }); updateReadout(); }
+    });
+  });
+
+  function start() {
+    var s = document.createElement("script");
+    s.src = "https://cdn.jsdelivr.net/npm/plotly.js-dist-min@2.35.2/plotly.min.js";
+    s.integrity = "sha384-cCVCZkAjYNxaYKbM8lsArLznDF/SvMFr1jcZrvOpSTCa0W40ZAdLzHCEulnUa5i7";
+    s.crossOrigin = "anonymous";
+    var data = fetch({{ (root ~ "assets/backtest.json") | tojson }}).then(function (r) { if (!r.ok) throw new Error(r.status); return r.json(); });
+    var lib = new Promise(function (ok, no) { s.onload = ok; s.onerror = no; });
+    document.head.appendChild(s);
+    Promise.all([data, lib]).then(function (res) {
+      D = res[0];
+      Plotly.register({ moduleType: "locale", name: "site", dictionary: {}, format: {
+        days: L.days, shortDays: L.shortDays, months: L.months, shortMonths: L.shortMonths, date: L.date, decimal: L.decimal, thousands: L.thousands } });
+      draw();
+      var dark = window.matchMedia("(prefers-color-scheme: dark)");
+      if (dark.addEventListener) dark.addEventListener("change", draw);
+    }).catch(fail);
+  }
+  if ("IntersectionObserver" in window) {
+    var seen = new IntersectionObserver(function (entries) {
+      if (entries.some(function (e) { return e.isIntersecting; })) { seen.disconnect(); start(); }
+    }, { rootMargin: "800px 0px" });
+    seen.observe(plot);
+  } else {
+    start();
+  }
+})();
+</script>
+</body>
+</html>

@@ -71,6 +71,7 @@ def test_train_workflow_triggers_and_permissions():
                 "tests",
                 "tests-training",
                 "tests-homeassistant",
+                "docs",
                 "model-age",
                 "lint",
             ],
@@ -232,3 +233,19 @@ def test_hacs_json_values():
 
 def test_codeowners():
     assert (REPO / ".github" / "CODEOWNERS").read_text().strip() == "* @cygnusb"
+
+
+def test_pages_workflow_builds_site_then_strict_docs():
+    wf = _load("pages.yml")
+    steps = _steps(wf, "deploy")
+    assert _index(steps, "tools/build_site.py _site") < _index(steps, "mkdocs build --strict")
+    assert wf["jobs"]["deploy"]["environment"]["name"] == "github-pages"
+    # the monthly training edits the rolling `models` release: no redeploy for that
+    assert (
+        "startsWith(github.event.release.tag_name, 'v')" in (wf["jobs"]["redeploy-from-main"]["if"])
+    )
+
+
+def test_validate_workflow_checks_the_docs():
+    steps = _steps(_load("validate.yml"), "docs")
+    assert _index(steps, "tools/build_site.py _site") < _index(steps, "mkdocs build --strict")

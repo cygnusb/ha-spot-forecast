@@ -1,0 +1,175 @@
+{
+  "meta": {
+    "title": "Spot Forecast – six-day electricity price forecast for Home Assistant",
+    "description": "A free Home Assistant integration that forecasts the German-Luxembourg day-ahead electricity price hour by hour for the six days after the published auction, with a peak-risk band. Open data, no account, no API key.",
+    "og_title": "Spot Forecast for Home Assistant",
+    "og_description": "Day-ahead electricity prices for DE-LU, six days further than the auction, with an honest peak-risk band."
+  },
+  "nav": {
+    "main_label": "Main",
+    "accuracy": "How good is it?",
+    "how": "How it works",
+    "cards": "Cards",
+    "install": "Install",
+    "docs": "Docs",
+    "language_label": "Language"
+  },
+  "hero": {
+    "title": "Electricity prices, six days ahead.",
+    "lede": "The day-ahead auction only covers today and tomorrow. Spot Forecast adds the six days after that, hour by hour, for the DE-LU zone, with a peak-risk band that says how high a price could go. It runs inside Home Assistant on open data.",
+    "cta_install": "Install from HACS",
+    "cta_accuracy": "See how accurate it is",
+    "facts": {
+      "free": "Free, MIT licence",
+      "keyless": "No account, no API key",
+      "pi": "Runs on a Raspberry Pi",
+      "home_assistant": "Home Assistant 2024.11+"
+    },
+    "shot_alt": "The Spot Forecast card in Home Assistant: known prices for 13 to 15 October 2026 as a black step line, then six forecast days as a blue line with a hatched red peak-risk band above it and a hatched green low-price band below. Labels above each day give the maximum and, on every forecast day, a warning such as “bis 37” for the peak risk.",
+    "shot_caption": "The forecast card on 14 October 2026, two weeks after the bundled model’s training cutoff, so this forecast is out of sample, drawn from the shipped model and real prices. The ink line is known, blue is the forecast, hatched red reaches up to the peak risk (P90), hatched green down to the low-price value (P10). ▲ and ▼ mark each day’s four dearest and cheapest hours. Card labels are German."
+  },
+  "ruler": {
+    "label": "What the price sensor holds",
+    "today": "Today",
+    "tomorrow": "Tomorrow",
+    "ahead": "+{n} days",
+    "known": "Known from the auction",
+    "forecast": "Forecast, with peak risk",
+    "pending": "From about 13:00",
+    "caption_after": "The auction result for tomorrow is out, so the forecast covers the six days after it.",
+    "caption_before": "Tomorrow’s auction result comes out around 13:00. Until then the forecast starts tomorrow; afterwards it moves one day on."
+  },
+  "accuracy": {
+    "title": "How good is it?",
+    "lede": "Every figure here is out of sample. The models were refit month by month on past data only and then forecast days they had never seen, with weather forecasts at least a day older than a live install gets. Pick a horizon to see the forecast made that many days ahead against the price that came.",
+    "table_caption": "Mean absolute error in ct/kWh per horizon, bundled model {version}",
+    "horizon": "Forecast made",
+    "full": "Since {from}",
+    "last3": "Last 3 months",
+    "naive": "Naive",
+    "skill": "Better than naive",
+    "p90": "Above peak risk",
+    "days_ahead_one": "1 day ahead",
+    "days_ahead_many": "{h} days ahead",
+    "table_note": "The full period runs from {from} to the training cutoff, the last three months from {from3}. Naive repeats last week’s price for the same hour. “Better than naive” is 1 − error ÷ naive error, which depends far less on how wild the market was. The peak-risk value (P90) should be exceeded in about 1 hour in 10.",
+    "peaks_title": "Peaks come out too low",
+    "peaks_text": "The forecast gets the timing of price peaks right, not their height. In hours above {t} ct it is on average {b1} ct too low one day ahead and {b6} ct six days ahead. For peaks, read the peak-risk band: it is exceeded in about {p} of hours, and it is what the peak-risk sensor switches on.",
+    "regime_title": "Expensive gas, larger errors",
+    "regime_text": "The error depends on the market. Since {from3} gas and electricity prices have been higher and more volatile, and the error rose to {a} ct one day ahead and {b} ct six days ahead. The skill against naive held up better. Models are retrained every month and reach your install without an update."
+  },
+  "chart": {
+    "title": "Forecast against the actual price",
+    "subtitle": "Hourly, ct/kWh, the six months before the model’s training cutoff",
+    "horizons_label": "Forecast made",
+    "ranges_label": "Range",
+    "loading": "Loading the chart…",
+    "failed": "The chart could not be loaded. The table below has the same figures.",
+    "source": "Prices: Bundesnetzagentur | SMARD.de via Energy-Charts (CC BY 4.0). Forecasts: the bundled model’s walk-forward backfill, the same data a new install imports.",
+    "js": {
+      "actual": "Actual price",
+      "forecast_one": "Forecast 1 day ahead",
+      "forecast_many": "Forecast {h} days ahead",
+      "all": "All",
+      "mae": "Mean error in this range <b>{v} ct</b>",
+      "mae_all": "Mean error in this range, ct",
+      "peak": "in hours above {t} ct <b>{v} ct</b>",
+      "none": "none",
+      "ranges": ["7 d", "30 d", "3 m", "6 m"],
+      "locale": {
+        "days": ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"],
+        "shortDays": ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"],
+        "months": ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"],
+        "shortMonths": ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"],
+        "date": "%d/%m/%Y",
+        "decimal": ".",
+        "thousands": ",",
+        "tick": "%-d %b",
+        "hover": "%a %d %b, %H:%M",
+        "intl": "en-GB"
+      }
+    }
+  },
+  "how": {
+    "title": "How it works",
+    "lede": "A run takes a few seconds on a Raspberry Pi. It repeats after each new weather model run, four times a day, and again when the auction result for tomorrow appears.",
+    "items": {
+      "prices": {
+        "title": "Known prices",
+        "text": "The last 40 days of DE-LU day-ahead prices from Energy-Charts, in one request."
+      },
+      "weather": {
+        "title": "Weather forecast",
+        "text": "ECMWF from Open-Meteo for 10 points in Germany and 12 in neighbouring countries: wind at 100 m, sunshine, temperature, cloud and rain."
+      },
+      "model": {
+        "title": "Three tree models",
+        "text": "Trained every month on GitHub, run in numpy on your device: the expected price, a peak-risk value (P90) and a low-price value (P10) per hour."
+      },
+      "calibrate": {
+        "title": "Calibrated on its record",
+        "text": "Every forecast is kept. The bands are shifted by how often they were crossed in the last 56 days, so peak risk stays near one hour in ten."
+      },
+      "publish": {
+        "title": "Sensors and statistics",
+        "text": "One price sensor with known and forecast hours, a peak-risk and a negative-price warning, and long-term statistics of every forecast against the actual price."
+      }
+    }
+  },
+  "cards": {
+    "title": "Two cards for your dashboard",
+    "lede": "Both are YAML for the <a href=\"https://github.com/dbuezas/lovelace-plotly-graph-card\">Plotly Graph Card</a>, written for v4.0.2: paste one into a manual card. The forecast card is at the top of this page.",
+    "lookback_alt": "The look-back card in Home Assistant: the actual price as a dark line from 15 September to 14 October 2026 and the forecast made two days ahead in orange, with the gap between them filled red. Buttons above choose D+1 to D+6 or all, and 7 days to 6 months.",
+    "lookback_caption": "The look-back card: the forecast made two days ahead against the actual price, with the mean error over the shown range. It reads the long-term statistics, which the integration fills from the first day, backfill included.",
+    "entities_title": "What you get in Home Assistant",
+    "entities": {
+      "price": {
+        "title": "sensor.spot_forecast_de_lu_price",
+        "text": "The current price; the attribute prices holds every slot from today 00:00 to the end of the forecast."
+      },
+      "peak": {
+        "title": "binary_sensor.spot_forecast_de_lu_peak_risk",
+        "text": "On when a price above your threshold is known or likely in the next 48 hours."
+      },
+      "negative": {
+        "title": "binary_sensor.spot_forecast_de_lu_negative_price",
+        "text": "On when a negative price is known or likely in the next 48 hours."
+      },
+      "days": {
+        "title": "Day sensors, statistics, diagnostics",
+        "text": "Mean, minimum and maximum per day for automations; the forecast error of the last 30 days; the model in use."
+      }
+    }
+  },
+  "sbp": {
+    "title": "Works with Smart Battery Pilot",
+    "text": "Choose <code>sensor.spot_forecast_de_lu_price</code> as the price entity in <a href=\"https://cygnusb.github.io/ha-smart-battery-pilot/\">Smart Battery Pilot</a>. Its ENTSO-E adapter reads the <code>prices</code> attribute as it is. Hours past the auction are marked <code>source: forecast</code> and carry <code>p90</code> and <code>p10</code>."
+  },
+  "install": {
+    "title": "Install",
+    "lede": "Spot Forecast is a custom repository in HACS for now. It works right after setup with the bundled model and needs no account.",
+    "open_hacs": "Add to HACS",
+    "add_integration": "Add the integration",
+    "repo": "Add the repository to HACS",
+    "repo_detail": "Use the button, or in HACS: ⋮ → Custom repositories, URL <code>https://github.com/cygnusb/ha-spot-forecast</code>, type Integration.",
+    "download": "Download Spot Forecast and restart Home Assistant.",
+    "setup": "Settings → Devices &amp; services → Add integration → Spot Forecast.",
+    "setup_detail": "Choose the bidding zone. The first forecast is made right away, and the look-back starts with 60 days of backfill.",
+    "cards": "Add the cards",
+    "cards_detail": "Install the Plotly Graph Card from HACS and paste the YAML from <a href=\"https://github.com/cygnusb/ha-spot-forecast/tree/main/examples\">examples/</a>."
+  },
+  "sources": {
+    "title": "Open data, credited",
+    "lede": "Both sources are free and need no key. The integration names them in the sensor’s attribution.",
+    "prices_name": "Energy-Charts",
+    "prices": "Day-ahead prices DE-LU. Energy-Charts by Fraunhofer ISE, price data from Bundesnetzagentur | SMARD.de, licensed CC BY 4.0.",
+    "weather_name": "Open-Meteo",
+    "weather": "Weather forecasts from the ECMWF IFS model at 0.25°. Open-Meteo, licensed CC BY 4.0, free for non-commercial use."
+  },
+  "footer": {
+    "text": "Spot Forecast is free software under the MIT licence.",
+    "nav_label": "Further links",
+    "changelog": "Changelog",
+    "issues": "Issues"
+  },
+  "months": ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"]
+}

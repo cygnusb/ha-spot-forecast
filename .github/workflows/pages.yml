@@ -1,0 +1,78 @@
+name: Pages
+
+# The project site at https://cygnusb.github.io/ha-spot-forecast/.
+# tools/build_site.py renders the project page from site/ in English and German, with
+# the logo, fonts and card screenshots from assets/ (so the README and the site always
+# show the same images), the accuracy table from the bundled model and the look-back
+# chart's data from site/data/. The pages under /docs/ are built from docs/ with MkDocs
+# (mkdocs.yml), the changelog page among them from the GitHub releases.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "site/**"
+      - "assets/**"
+      - "docs/**"
+      - "mkdocs.yml"
+      - "tools/mkdocs_hooks.py"
+      - "tools/build_site.py"
+      - "tools/docs-requirements.txt"
+      - "custom_components/spot_forecast/models/**"
+      - ".github/workflows/pages.yml"
+  # A new or edited release changes the changelog page.
+  release:
+    types: [published, edited, deleted]
+  workflow_dispatch:
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+jobs:
+  redeploy-from-main:
+    # A release run belongs to the tag: it would build the site as of that commit, and
+    # the github-pages environment only lets main deploy. So it starts a run on main
+    # instead. Only integration releases (v…) are on the changelog page; the monthly
+    # training edits the rolling `models` release, which must not redeploy the site.
+    if: github.event_name == 'release' && startsWith(github.event.release.tag_name, 'v')
+    runs-on: ubuntu-latest
+    permissions:
+      actions: write
+    steps:
+      - run: gh workflow run pages.yml --repo "$GITHUB_REPOSITORY" --ref main
+        env:
+          GH_TOKEN: ${{ github.token }}
+
+  deploy:
+    if: github.event_name != 'release'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pages: write
+      id-token: write
+    concurrency:
+      group: pages
+      cancel-in-progress: true
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - run: pip install -r tools/docs-requirements.txt
+      - name: Build the project page
+        run: python tools/build_site.py _site
+      - name: Build the documentation
+        # Into _site/docs; MkDocs empties only that directory.
+        run: mkdocs build --strict
+        env:
+          NO_MKDOCS_2_WARNING: "true"
+          GITHUB_TOKEN: ${{ github.token }}
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: _site
+      - id: deployment
+        uses: actions/deploy-pages@v4

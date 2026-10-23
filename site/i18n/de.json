@@ -1,0 +1,175 @@
+{
+  "meta": {
+    "title": "Spot Forecast – Strompreis-Prognose für sechs Tage in Home Assistant",
+    "description": "Eine kostenlose Home-Assistant-Integration, die den Day-Ahead-Strompreis für Deutschland und Luxemburg stündlich für die sechs Tage nach der veröffentlichten Auktion vorhersagt, mit einem Band für das Spitzenrisiko. Offene Daten, kein Konto, kein API-Schlüssel.",
+    "og_title": "Spot Forecast für Home Assistant",
+    "og_description": "Day-Ahead-Strompreise für DE-LU, sechs Tage weiter als die Auktion, mit einem ehrlichen Band für das Spitzenrisiko."
+  },
+  "nav": {
+    "main_label": "Hauptnavigation",
+    "accuracy": "Wie gut ist sie?",
+    "how": "So funktioniert’s",
+    "cards": "Karten",
+    "install": "Installation",
+    "docs": "Doku",
+    "language_label": "Sprache"
+  },
+  "hero": {
+    "title": "Strompreise, sechs Tage im Voraus.",
+    "lede": "Die Day-Ahead-Auktion reicht nur bis morgen. Spot Forecast ergänzt die sechs Tage danach, Stunde für Stunde, für die Zone DE-LU, mit einem Band für das Spitzenrisiko, das zeigt, wie hoch ein Preis steigen kann. Alles läuft in Home Assistant, mit offenen Daten.",
+    "cta_install": "Über HACS installieren",
+    "cta_accuracy": "Wie genau ist sie?",
+    "facts": {
+      "free": "Kostenlos, MIT-Lizenz",
+      "keyless": "Kein Konto, kein API-Schlüssel",
+      "pi": "Läuft auf einem Raspberry Pi",
+      "home_assistant": "Home Assistant 2024.11+"
+    },
+    "shot_alt": "Die Spot-Forecast-Karte in Home Assistant: bekannte Preise vom 13. bis 15. Oktober 2026 als schwarze Stufenlinie, danach sechs Prognosetage als blaue Linie mit schraffiertem rotem Spitzenrisiko darüber und schraffierter grüner Tiefpreis-Chance darunter. Über jedem Tag steht das Maximum und an jedem Prognosetag eine Warnung wie „bis 37“ für das Spitzenrisiko.",
+    "shot_caption": "Die Prognose-Karte am 14. Oktober 2026, zwei Wochen nach dem Trainingsstichtag des mitgelieferten Modells, also außerhalb der Trainingsdaten, gezeichnet aus dem mitgelieferten Modell und echten Preisen. Die Linie in Textfarbe ist bekannt, blau die Prognose, rot schraffiert reicht bis zum Spitzenrisiko (P90), grün schraffiert bis zum Tiefpreis (P10). ▲ und ▼ markieren die vier teuersten und günstigsten Stunden jedes Tages."
+  },
+  "ruler": {
+    "label": "Was der Preissensor enthält",
+    "today": "Heute",
+    "tomorrow": "Morgen",
+    "ahead": "+{n} Tage",
+    "known": "Bekannt aus der Auktion",
+    "forecast": "Prognose, mit Spitzenrisiko",
+    "pending": "Ab etwa 13 Uhr",
+    "caption_after": "Das Auktionsergebnis für morgen ist da, also deckt die Prognose die sechs Tage danach ab.",
+    "caption_before": "Das Auktionsergebnis für morgen erscheint gegen 13 Uhr. Bis dahin beginnt die Prognose morgen, danach rückt sie einen Tag weiter."
+  },
+  "accuracy": {
+    "title": "Wie gut ist sie?",
+    "lede": "Jede Zahl hier ist außerhalb der Trainingsdaten gemessen. Die Modelle wurden Monat für Monat nur mit vergangenen Daten neu trainiert und haben dann Tage vorhergesagt, die sie nie gesehen hatten, mit Wetterprognosen, die mindestens einen Tag älter sind als bei einer echten Installation. Wähle einen Vorlauf und sieh die Prognose von so vielen Tagen vorher gegen den Preis, der dann kam.",
+    "table_caption": "Mittlere absolute Abweichung in ct/kWh je Vorlauf, mitgeliefertes Modell {version}",
+    "horizon": "Vorlauf",
+    "full": "Seit {from}",
+    "last3": "Letzte 3 Monate",
+    "naive": "Naiv",
+    "skill": "Besser als naiv",
+    "p90": "Über Spitzenrisiko",
+    "days_ahead_one": "1 Tag vorher",
+    "days_ahead_many": "{h} Tage vorher",
+    "table_note": "Der ganze Zeitraum reicht von {from} bis zum Trainingsstichtag, die letzten drei Monate beginnen im {from3}. Naiv heißt: der Preis derselben Stunde vor einer Woche. „Besser als naiv“ ist 1 − Abweichung ÷ naive Abweichung und hängt viel weniger davon ab, wie wild der Markt war. Das Spitzenrisiko (P90) soll in etwa 1 von 10 Stunden überschritten werden.",
+    "peaks_title": "Spitzen fallen zu niedrig aus",
+    "peaks_text": "Die Prognose trifft den Zeitpunkt von Preisspitzen, nicht ihre Höhe. In Stunden über {t} ct liegt sie einen Tag vorher im Schnitt {b1} ct zu niedrig, sechs Tage vorher {b6} ct. Für Spitzen gilt das Band des Spitzenrisikos: Es wird in etwa {p} der Stunden überschritten, und daran schaltet der Spitzenrisiko-Sensor.",
+    "regime_title": "Teures Gas, größere Abweichung",
+    "regime_text": "Die Abweichung hängt vom Markt ab. Seit {from3} sind Gas- und Strompreise höher und schwankender, und die Abweichung stieg auf {a} ct einen Tag vorher und {b} ct sechs Tage vorher. Der Vorsprung vor der naiven Prognose hielt sich besser. Die Modelle werden jeden Monat neu trainiert und kommen ohne Update bei dir an."
+  },
+  "chart": {
+    "title": "Prognose gegen den echten Preis",
+    "subtitle": "Stündlich, ct/kWh, die sechs Monate vor dem Trainingsstichtag des Modells",
+    "horizons_label": "Vorlauf",
+    "ranges_label": "Zeitraum",
+    "loading": "Diagramm wird geladen …",
+    "failed": "Das Diagramm konnte nicht geladen werden. Die Tabelle unten zeigt dieselben Zahlen.",
+    "source": "Preise: Bundesnetzagentur | SMARD.de über Energy-Charts (CC BY 4.0). Prognosen: der Backfill des mitgelieferten Modells, dieselben Daten, die eine neue Installation importiert.",
+    "js": {
+      "actual": "Börsenpreis",
+      "forecast_one": "Prognose 1 Tag vorher",
+      "forecast_many": "Prognose {h} Tage vorher",
+      "all": "alle",
+      "mae": "Ø Abweichung im Zeitraum <b>{v} ct</b>",
+      "mae_all": "Ø Abweichung im Zeitraum, ct",
+      "peak": "in Stunden über {t} ct <b>{v} ct</b>",
+      "none": "keine",
+      "ranges": ["7 T", "30 T", "3 M", "6 M"],
+      "locale": {
+        "days": ["Sonntag", "Montag", "Dienstag", "Mittwoch", "Donnerstag", "Freitag", "Samstag"],
+        "shortDays": ["So", "Mo", "Di", "Mi", "Do", "Fr", "Sa"],
+        "months": ["Januar", "Februar", "März", "April", "Mai", "Juni", "Juli", "August", "September", "Oktober", "November", "Dezember"],
+        "shortMonths": ["Jan", "Feb", "Mär", "Apr", "Mai", "Jun", "Jul", "Aug", "Sep", "Okt", "Nov", "Dez"],
+        "date": "%d.%m.%Y",
+        "decimal": ",",
+        "thousands": ".",
+        "tick": "%d.%m.",
+        "hover": "%a %d.%m., %H:%M",
+        "intl": "de-DE"
+      }
+    }
+  },
+  "how": {
+    "title": "So funktioniert’s",
+    "lede": "Ein Lauf dauert auf einem Raspberry Pi wenige Sekunden. Er wiederholt sich nach jedem neuen Lauf des Wettermodells, viermal am Tag, und noch einmal, wenn das Auktionsergebnis für morgen erscheint.",
+    "items": {
+      "prices": {
+        "title": "Bekannte Preise",
+        "text": "Die Day-Ahead-Preise DE-LU der letzten 40 Tage von Energy-Charts, in einer Anfrage."
+      },
+      "weather": {
+        "title": "Wetterprognose",
+        "text": "ECMWF über Open-Meteo für 10 Punkte in Deutschland und 12 in den Nachbarländern: Wind in 100 m, Sonne, Temperatur, Bewölkung und Regen."
+      },
+      "model": {
+        "title": "Drei Baummodelle",
+        "text": "Jeden Monat auf GitHub trainiert, auf deinem Gerät mit numpy gerechnet: der erwartete Preis, ein Spitzenrisiko (P90) und ein Tiefpreis (P10) je Stunde."
+      },
+      "calibrate": {
+        "title": "Am eigenen Verlauf kalibriert",
+        "text": "Jede Prognose wird aufbewahrt. Die Bänder werden danach verschoben, wie oft sie in den letzten 56 Tagen überschritten wurden, damit das Spitzenrisiko bei etwa einer von zehn Stunden bleibt."
+      },
+      "publish": {
+        "title": "Sensoren und Statistiken",
+        "text": "Ein Preissensor mit bekannten und prognostizierten Stunden, eine Warnung für Spitzen und eine für negative Preise, und Langzeitstatistiken jeder Prognose gegen den echten Preis."
+      }
+    }
+  },
+  "cards": {
+    "title": "Zwei Karten fürs Dashboard",
+    "lede": "Beide sind YAML für die <a href=\"https://github.com/dbuezas/lovelace-plotly-graph-card\">Plotly Graph Card</a>, geschrieben für v4.0.2: in eine manuelle Karte einfügen. Die Prognose-Karte steht oben auf dieser Seite.",
+    "lookback_alt": "Die Rückblick-Karte in Home Assistant: der Börsenpreis als dunkle Linie vom 15. September bis 14. Oktober 2026 und die Prognose von zwei Tagen vorher in Orange, die Lücke dazwischen rot gefüllt. Knöpfe darüber wählen D+1 bis D+6 oder alle und 7 Tage bis 6 Monate.",
+    "lookback_caption": "Die Rückblick-Karte: die Prognose von zwei Tagen vorher gegen den Börsenpreis, mit der mittleren Abweichung im gezeigten Zeitraum. Sie liest die Langzeitstatistiken, die die Integration vom ersten Tag an füllt, Backfill eingeschlossen.",
+    "entities_title": "Was du in Home Assistant bekommst",
+    "entities": {
+      "price": {
+        "title": "sensor.spot_forecast_de_lu_price",
+        "text": "Der aktuelle Preis; das Attribut prices enthält jeden Zeitschlitz von heute 0 Uhr bis zum Ende der Prognose."
+      },
+      "peak": {
+        "title": "binary_sensor.spot_forecast_de_lu_peak_risk",
+        "text": "An, wenn ein Preis über deiner Schwelle in den nächsten 48 Stunden bekannt oder wahrscheinlich ist."
+      },
+      "negative": {
+        "title": "binary_sensor.spot_forecast_de_lu_negative_price",
+        "text": "An, wenn ein negativer Preis in den nächsten 48 Stunden bekannt oder wahrscheinlich ist."
+      },
+      "days": {
+        "title": "Tagessensoren, Statistiken, Diagnose",
+        "text": "Mittel, Minimum und Maximum je Tag für Automationen; die Abweichung der letzten 30 Tage; das aktive Modell."
+      }
+    }
+  },
+  "sbp": {
+    "title": "Passt zu Smart Battery Pilot",
+    "text": "Wähle <code>sensor.spot_forecast_de_lu_price</code> als Preis-Entität in <a href=\"https://cygnusb.github.io/ha-smart-battery-pilot/de/\">Smart Battery Pilot</a>. Sein ENTSO-E-Adapter liest das Attribut <code>prices</code> so, wie es ist. Stunden nach der Auktion sind mit <code>source: forecast</code> markiert und tragen <code>p90</code> und <code>p10</code>."
+  },
+  "install": {
+    "title": "Installation",
+    "lede": "Spot Forecast ist vorerst ein benutzerdefiniertes Repository in HACS. Mit dem mitgelieferten Modell läuft es direkt nach der Einrichtung und braucht kein Konto.",
+    "open_hacs": "Zu HACS hinzufügen",
+    "add_integration": "Integration hinzufügen",
+    "repo": "Repository in HACS hinzufügen",
+    "repo_detail": "Über den Knopf, oder in HACS: ⋮ → Benutzerdefinierte Repositories, URL <code>https://github.com/cygnusb/ha-spot-forecast</code>, Typ Integration.",
+    "download": "Spot Forecast herunterladen und Home Assistant neu starten.",
+    "setup": "Einstellungen → Geräte &amp; Dienste → Integration hinzufügen → Spot Forecast.",
+    "setup_detail": "Gebotszone wählen. Die erste Prognose entsteht sofort, der Rückblick beginnt mit 60 Tagen Backfill.",
+    "cards": "Karten hinzufügen",
+    "cards_detail": "Die Plotly Graph Card über HACS installieren und das YAML aus <a href=\"https://github.com/cygnusb/ha-spot-forecast/tree/main/examples\">examples/</a> einfügen."
+  },
+  "sources": {
+    "title": "Offene Daten, mit Quellenangabe",
+    "lede": "Beide Quellen sind frei und brauchen keinen Schlüssel. Die Integration nennt sie in der Attribution des Sensors.",
+    "prices_name": "Energy-Charts",
+    "prices": "Day-Ahead-Preise DE-LU. Energy-Charts des Fraunhofer ISE, Preisdaten von Bundesnetzagentur | SMARD.de, Lizenz CC BY 4.0.",
+    "weather_name": "Open-Meteo",
+    "weather": "Wetterprognosen des ECMWF-Modells IFS mit 0,25°. Open-Meteo, Lizenz CC BY 4.0, frei für nicht-kommerzielle Nutzung."
+  },
+  "footer": {
+    "text": "Spot Forecast ist freie Software unter der MIT-Lizenz.",
+    "nav_label": "Weitere Links",
+    "changelog": "Änderungen",
+    "issues": "Fehler melden"
+  },
+  "months": ["Januar", "Februar", "März", "April", "Mai", "Juni", "Juli", "August", "September", "Oktober", "November", "Dezember"]
+}

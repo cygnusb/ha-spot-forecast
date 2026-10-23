@@ -1,0 +1,92 @@
+# The documentation pages of the project site, built from docs/ by
+# .github/workflows/pages.yml and served under /docs/. The Markdown files stay
+# the single source: they read the same on GitHub and on the site.
+site_name: Spot Forecast
+site_description: Documentation of Spot Forecast, the Home Assistant integration that forecasts day-ahead electricity prices six days ahead from open data.
+site_url: https://cygnusb.github.io/ha-spot-forecast/docs/
+repo_url: https://github.com/cygnusb/ha-spot-forecast
+repo_name: cygnusb/ha-spot-forecast
+edit_uri: edit/main/docs/
+copyright: MIT licensed
+
+docs_dir: docs
+# Never the default `site/`: MkDocs empties site_dir before every build, and
+# site/ holds the hand-written project page.
+site_dir: _site/docs
+
+# Internal plans and specs.
+exclude_docs: |
+  superpowers/
+
+nav:
+  - Overview: README.md
+  - Configuration: configuration.md
+  - Entities: entities.md
+  - Dashboard cards: cards.md
+  - How the model works: model.md
+  - Accuracy: accuracy.md
+  - Smart Battery Pilot: smart-battery-pilot.md
+  # Built from the GitHub releases by tools/mkdocs_hooks.py.
+  - Changelog: changelog.md
+
+# A broken link or anchor fails `mkdocs build --strict`, and with it CI.
+validation:
+  omitted_files: warn
+  absolute_links: warn
+  unrecognized_links: warn
+  anchors: warn
+
+hooks:
+  - tools/mkdocs_hooks.py
+
+theme:
+  name: material
+  logo: assets/icon.svg
+  favicon: assets/icon.svg
+  # The site serves its own fonts (assets/fonts, added by the hooks), so no
+  # page loads anything from Google Fonts.
+  font: false
+  palette:
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      primary: custom
+      accent: custom
+      toggle:
+        icon: material/weather-night
+        name: Dark mode
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      primary: custom
+      accent: custom
+      toggle:
+        icon: material/weather-sunny
+        name: Light mode
+  features:
+    - content.action.edit
+    - content.code.copy
+    - navigation.footer
+    - navigation.top
+    - search.highlight
+    - toc.follow
+
+extra:
+  # The logo leads back to the project page.
+  homepage: https://cygnusb.github.io/ha-spot-forecast/
+  generator: false
+
+extra_css:
+  - assets/fonts/fonts.css
+  - stylesheets/extra.css
+
+markdown_extensions:
+  - attr_list
+  - sane_lists
+  - tables
+  - toc:
+      permalink: true
+      # GitHub's anchors, so links from the README and between pages work on both.
+      slugify: !!python/object/apply:pymdownx.slugs.slugify
+        kwds:
+          case: lower
+  - pymdownx.highlight
+  - pymdownx.superfences
