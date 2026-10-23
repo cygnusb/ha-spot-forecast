@@ -498,9 +498,11 @@ Modelled on `ha-smart-battery-pilot`:
   `day-ahead`, `spot-price`, `epex-spot`, `dynamic-pricing`,
   `energy-management`, `open-meteo`, `energy-charts`, `germany`,
   `forecasting`, `machine-learning`.
-- Repository description: "Home Assistant integration: six-day day-ahead
-  electricity price forecast for DE-LU from open data, with peak risk.
-  Key-free, HACS-ready."
+- Repository description: "📈 Home Assistant integration that forecasts German
+  day-ahead electricity prices (DE-LU, EPEX Spot) up to 7 days ahead. Machine-learning
+  model on open weather and market data, peak-risk and negative-price alerts, Plotly
+  dashboards, a look-back of past forecasts, and a price sensor ready for Smart Battery
+  Pilot. No API key, HACS-ready." *(Owner asked for a longer one.)*
 - HACS: start as a custom repository; apply for HACS default once the
   integration has run a few weeks live and the live error matches the
   backtest.
