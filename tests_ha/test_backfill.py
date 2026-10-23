@@ -268,6 +268,7 @@ async def test_bundled_rows_use_every_earlier_row_of_the_window(
     )
     rows = pure.finalize(
         "Europe/Berlin",
+        today=TODAY,
         zone_id="de_lu",
         default_p90=coordinator.model.p90_offsets,
         default_p10=coordinator.model.p10_offsets,

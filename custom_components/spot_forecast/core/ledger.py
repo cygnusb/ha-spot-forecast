@@ -25,6 +25,8 @@ ISSUE_HOUR = 6  # local hour a backfilled run is deemed to have been issued
 _HOUR = timedelta(hours=1)
 _PREFIX = "spot_forecast"
 PRICE = "price"  # series key in ``Ledger.finalized``; forecast series are "h1" … "h6"
+SERIES = (PRICE, *(f"h{h}" for h in HORIZONS))  # what a fully finalized day has
+GAP_GRACE_DAYS = 2  # a day with missing hours is written once it is this many days past
 
 
 @dataclass(frozen=True)
@@ -77,6 +79,10 @@ class Ledger:
     finalized: set[tuple[date, str]] = field(default_factory=set)
     actual: dict[datetime, float] = field(default_factory=dict)  # UTC hour -> EUR/MWh
 
+    def copy(self) -> Ledger:
+        """A ledger that can be changed without touching this one (runs and slots are frozen)."""
+        return Ledger(dict(self.runs), set(self.finalized), dict(self.actual))
+
     def add_run(self, run: Run) -> None:
         """Store ``run`` unless the stored run of its anchor takes precedence.
 
@@ -125,28 +131,34 @@ class Ledger:
         self,
         tz: str,
         *,
+        today: date,
         zone_id: str,
         default_p90: Mapping[int, float],
         default_p10: Mapping[int, float],
     ) -> list[StatRow]:
         """Statistic rows not yet written, for every target day with all hourly actuals.
 
+        A day with missing hours is written as it is once it lies ``GAP_GRACE_DAYS`` before
+        ``today`` (local): the price rows of the hours that exist, the forecast rows in full.
         Tracked per series: a day's price rows go out once; its forecast, peak-risk and low
         rows for horizon ``h`` go out once a run with anchor ``day - h`` holds slots for that
         horizon (so runs added or completed later, e.g. by the backfill, still produce their
         rows). ``default_*`` are the model's offsets, used by ``offsets`` while a horizon has
-        too few residuals.
+        too few residuals. Days whose every series is written are not looked at again.
         """
         zone = ZoneInfo(tz)
         by_anchor: dict[date, tuple[dict[int, float], dict[int, float]]] = {}
         rows: list[StatRow] = []
-        for day in sorted({t.astimezone(zone).date() for t in self.actual}):
+        for day in self._open_days(zone):
             hours = _day_hours(day, zone)
-            if any(t not in self.actual for t in hours):
+            known = [t for t in hours if t in self.actual]
+            if not known:
+                continue
+            if len(known) < len(hours) and day > today - timedelta(days=GAP_GRACE_DAYS):
                 continue
             if (day, PRICE) not in self.finalized:
                 rows += [
-                    StatRow(f"{_PREFIX}:{zone_id}_price", t, _kwh(self.actual[t])) for t in hours
+                    StatRow(f"{_PREFIX}:{zone_id}_price", t, _kwh(self.actual[t])) for t in known
                 ]
                 self.finalized.add((day, PRICE))
             span = set(hours)
@@ -176,9 +188,16 @@ class Ledger:
                 self.finalized.add((day, f"h{h}"))
         return rows
 
-    def accuracy(
-        self, now: datetime, peak_threshold: float, days: int = 30, tz: str = "Europe/Berlin"
-    ) -> dict:
+    def _open_days(self, zone: ZoneInfo) -> list[date]:
+        """Local days from the first to the last actual hour with a series not yet written."""
+        if not self.actual:
+            return []
+        first = min(self.actual).astimezone(zone).date()
+        last = max(self.actual).astimezone(zone).date()
+        days = (first + timedelta(days=i) for i in range((last - first).days + 1))
+        return [d for d in days if any((d, s) not in self.finalized for s in SERIES)]
+
+    def accuracy(self, now: datetime, peak_threshold: float, *, tz: str, days: int = 30) -> dict:
         """Median-forecast accuracy over target days in [today - days, today) (local), EUR/kWh.
 
         ``peak_threshold`` is EUR/MWh; ``peak_mae`` covers hours with actual > it
@@ -207,7 +226,7 @@ class Ledger:
             "n": len(allerr),
         }
 
-    def prune(self, keep_days: int = 200) -> None:
+    def prune(self, keep_days: int) -> None:
         """Drop runs, actuals and finalized days older than ``keep_days`` before the newest one."""
         newest = [max(self.actual)] if self.actual else []
         newest += [r.issued_at for r in self.runs.values()]
@@ -275,9 +294,7 @@ class Ledger:
         )
 
 
-def runs_from_backfill_file(
-    data: bytes, model_version: str, tz: str = "Europe/Berlin"
-) -> list[Run]:
+def runs_from_backfill_file(data: bytes, model_version: str, tz: str) -> list[Run]:
     """Parse the training backfill (gzip JSON, format 1) into one run per anchor day."""
     doc = json.loads(gzip.decompress(data))
     if doc.get("format") != BACKFILL_FORMAT:

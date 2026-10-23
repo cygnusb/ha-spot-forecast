@@ -193,6 +193,7 @@ class SpotForecastCoordinator(DataUpdateCoordinator[SpotData]):
         return partial(
             ledger.finalize,
             self.zone.tz,
+            today=self._today(dt_util.utcnow()),
             zone_id=self.zone.slug,
             default_p90=self.model.p90_offsets,
             default_p10=self.model.p10_offsets,

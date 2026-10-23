@@ -7,6 +7,7 @@ from zoneinfo import ZoneInfo
 
 import numpy as np
 
+from core import ledger as ledger_module
 from core.features import Hourly
 from core.forecast import Slot
 from core.ledger import Ledger, Run, StatRow, runs_from_backfill_file
@@ -14,10 +15,13 @@ from core.ledger import Ledger, Run, StatRow, runs_from_backfill_file
 TZ = "Europe/Berlin"
 BERLIN = ZoneInfo(TZ)
 ZERO = dict.fromkeys(range(1, 7), 0.0)
+EARLY = date(2026, 1, 1)  # before every test day: days with missing hours wait
 
 
-def fin(led: Ledger, p90=None, p10=None) -> list[StatRow]:
-    return led.finalize(TZ, zone_id="de_lu", default_p90=p90 or ZERO, default_p10=p10 or ZERO)
+def fin(led: Ledger, p90=None, p10=None, today: date = EARLY) -> list[StatRow]:
+    return led.finalize(
+        TZ, today=today, zone_id="de_lu", default_p90=p90 or ZERO, default_p10=p10 or ZERO
+    )
 
 
 def day_hours(d: date) -> list[datetime]:
@@ -236,7 +240,7 @@ def test_accuracy_mae_per_horizon():
     led.add_run(make_run(d, hs=[1], median=50.0))
     led.add_run(make_run(d - timedelta(days=1), hs=[2], median=70.0))
     led.record_actual(hourly_for([d + timedelta(days=1)], lambda t: 100.0 if t.hour < 12 else 40.0))
-    acc = led.accuracy(now, peak_threshold=90.0)
+    acc = led.accuracy(now, peak_threshold=90.0, tz=TZ)
     # h1 errors 50 or 10 -> mean 30; h2 errors 30 or 30 -> 30 ; 24 hours each
     n_h = 24
     assert acc["n"] == 2 * n_h
@@ -253,7 +257,7 @@ def test_accuracy_window_excludes_today_and_old_days():
     for target in (date(2026, 5, 1), date(2026, 6, 20)):
         led.add_run(make_run(target - timedelta(days=1), hs=[1]))
         led.record_actual(hourly_for([target], 10.0))
-    acc = led.accuracy(now, peak_threshold=1e9, days=30)
+    acc = led.accuracy(now, peak_threshold=1e9, tz=TZ, days=30)
     assert acc["n"] == 0 and acc["mae"] is None and acc["peak_mae"] is None
 
 
@@ -301,7 +305,7 @@ def test_backfill_file_groups_by_anchor():
         for h in (1, 2):
             for t in day_hours(anchor + timedelta(days=h)):
                 rows.append([t.isoformat(), h, 50.0, 60.0, 40.0])
-    runs = runs_from_backfill_file(_backfill_bytes(rows), "v9")
+    runs = runs_from_backfill_file(_backfill_bytes(rows), "v9", TZ)
     assert [r.anchor for r in runs] == [date(2026, 2, 1), date(2026, 2, 2)]
     r = runs[0]
     assert r.backfill and r.model_version == "v9"
@@ -339,3 +343,55 @@ def test_finalize_waits_for_a_run_that_holds_the_horizon():
     assert not [r for r in fin(led) if "_h4" in r.statistic_id]
     led.add_run(replace(make_run(anchor), backfill=True))
     assert len([r for r in fin(led) if r.statistic_id.endswith("forecast_h4")]) == 24
+
+
+def test_finalize_writes_a_day_with_missing_hours_two_days_later():
+    day = date(2026, 6, 10)
+    led = _complete_ledger(day)
+    missing = day_hours(day)[5]
+    del led.actual[missing]
+    assert fin(led, today=day + timedelta(days=1)) == []
+    rows = fin(led, today=day + timedelta(days=2))
+    price = [r for r in rows if r.statistic_id.endswith("_price")]
+    assert len(price) == 23 and missing not in {r.start for r in price}
+    assert len(rows) == 23 + 24 * 18  # the forecast rows in full
+    assert {(day, s) for s in ledger_module.SERIES} <= led.finalized
+    led.record_actual(Hourly(missing, np.array([1.0])))  # arrives late: not written again
+    assert fin(led, today=day + timedelta(days=3)) == []
+
+
+def test_finalize_skips_fully_finalized_days(monkeypatch):
+    first, n = date(2026, 1, 1), 200
+    days = consecutive(first, n)
+    led = Ledger()
+    for anchor in consecutive(first - timedelta(days=6), n + 5):
+        led.add_run(make_run(anchor))
+    led.record_actual(hourly_for(days, 50.0))
+    assert len([r for r in fin(led) if r.statistic_id.endswith("_price")]) == 24 * n - 1  # DST
+    assert {(d, s) for d in days for s in ledger_module.SERIES} <= led.finalized
+
+    touched: list[date] = []
+    day_hours_of = ledger_module._day_hours
+
+    def spy(d: date, zone: ZoneInfo) -> list[datetime]:
+        touched.append(d)
+        return day_hours_of(d, zone)
+
+    monkeypatch.setattr(ledger_module, "_day_hours", spy)
+    assert fin(led) == []
+    assert touched == []
+
+    reopened = days[100]
+    led.finalized.discard((reopened, "h3"))
+    rows = fin(led)
+    assert touched == [reopened]
+    assert len(rows) == 24 * 3 and all(r.statistic_id.endswith("_h3") for r in rows)
+
+
+def test_copy_is_independent():
+    led = _complete_ledger(date(2026, 6, 10))
+    other = led.copy()
+    fin(other)
+    other.add_run(make_run(date(2026, 6, 20)))
+    assert led.finalized == set() and date(2026, 6, 20) not in led.runs
+    assert other.actual == led.actual and other.actual is not led.actual
