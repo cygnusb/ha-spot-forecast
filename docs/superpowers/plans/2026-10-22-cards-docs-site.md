@@ -14,7 +14,7 @@
 
 **Tech Stack:** Plotly Graph Card (dbuezas/lovelace-plotly-graph-card, pinned release), Playwright (Node, browsers from the local cache), Jinja2, MkDocs 1.6.1 + Material 9.7.7, `rsvg-convert`.
 
-**Spec:** `docs/superpowers/specs/2026-10-22-spot-forecast-design.md`, sections "Dashboard cards (Plotly Graph Card, variant A)" and "README, website, discoverability". The approved mock-up's source is the reference for the look: `research/mockup/` (copied in Task 1 from the session scratchpad: `template.html`, `main.js`, `build.py`, `export.py`, `shot_a.png`).
+**Spec:** `docs/superpowers/specs/2026-10-22-spot-forecast-design.md`, sections "Dashboard cards (Plotly Graph Card, variant A)" and "README, website, discoverability". The approved mock-up's source is the reference for the look: `research/mockup/` (copied in Task 1: `template.html`, `main.js`, `build.py`, `export.py`, `shot_a.png`).
 
 ## Global Constraints
 
@@ -51,7 +51,7 @@
 
 **Files:**
 - Create:
-  - `research/mockup/` (copy `template.html`, `main.js`, `build.py`, `export.py`, `shot_a.png` from `/private/tmp/claude-501/-Users-valerius-git-ha-spot-forecast/98c22759-0116-43f8-a4a6-6045476799d0/scratchpad/mock/`; not `data.json` or the previews, which are large and regenerable)
+  - `research/mockup/` (copy `template.html`, `main.js`, `build.py`, `export.py`, `shot_a.png` from the mock-up build directory the controller names in the dispatch; not `data.json` or the previews, which are large and regenerable)
   - `research/mockup/README.md` (what it is and how to rebuild it)
   - `assets/icon.svg`, `assets/logo.svg`
   - `assets/BRANDS.md` (how to render the PNGs, as in SBP)
