@@ -17,12 +17,18 @@ research data:
 Format: ``t`` local wall-clock hours ("YYYY-MM-DD HH:MM"), ``actual`` and
 ``forecast["1"…"6"]`` in ct/kWh on that grid (null where unknown), plus the model
 version, the zone and the peak threshold in ct/kWh.
+
+``trailing`` holds the figures of the model report's trailing period (its
+``trailing_3m_from`` to the cutoff) per horizon, in ct/kWh: ``mae`` (the same rows as
+the report's ``mae_3m``, which ``main`` checks), and the naive baseline the report has
+for the full period only, ``naive_mae`` (the price of the same hour a week before, as in
+training/report.py) and ``skill`` = 1 − mae ÷ naive_mae.
 """
 
 from __future__ import annotations
 
 import argparse
-from datetime import timedelta
+from datetime import date, timedelta
 import json
 from pathlib import Path
 import sys
@@ -70,8 +76,27 @@ def backtest(zone: Zone = DE_LU) -> dict:
     for r in rows:
         name = r.statistic_id.removeprefix(prefix)
         if name in series and r.start in index:
-            series[name][index[r.start]] = round(r.value * 100, 2)  # EUR/kWh -> ct/kWh
+            series[name][index[r.start]] = r.value * 100  # EUR/kWh -> ct/kWh
     tz = ZoneInfo(zone.tz)
+    local = [t.astimezone(tz) for t in hours]
+    trailing_from = date.fromisoformat(model.metrics["trailing_3m_from"])
+    recent = [k for k, t in enumerate(local) if t.date() >= trailing_from]
+    trailing = {}
+    for h in HORIZONS:
+        actual, forecast = series["price"], series[f"forecast_h{h}"]
+        pairs = [
+            (abs(forecast[k] - actual[k]), abs(actual[k - 168] - actual[k]))
+            for k in recent
+            if k >= 168 and None not in (actual[k], forecast[k], actual[k - 168])
+        ]
+        mae = sum(e for e, _ in pairs) / len(pairs)
+        naive = sum(e for _, e in pairs) / len(pairs)
+        trailing[str(h)] = {
+            "mae": round(mae, 3),
+            "naive_mae": round(naive, 3),
+            "skill": round(1 - mae / naive, 4),
+        }
+    rounded = {k: [None if v is None else round(v, 2) for v in vs] for k, vs in series.items()}
     return {
         "zone": zone.code,
         "model_version": model.version,
@@ -81,9 +106,14 @@ def backtest(zone: Zone = DE_LU) -> dict:
         "source": (
             f"Prices: {zone.price_attribution}. Forecasts: {model.version} walk-forward backfill."
         ),
-        "t": [t.astimezone(tz).strftime("%Y-%m-%d %H:%M") for t in hours],
-        "actual": series["price"],
-        "forecast": {str(h): series[f"forecast_h{h}"] for h in HORIZONS},
+        "trailing": {
+            "from": trailing_from.isoformat(),
+            "until": (cutoff - timedelta(days=1)).isoformat(),
+            "horizons": trailing,
+        },
+        "t": [t.strftime("%Y-%m-%d %H:%M") for t in local],
+        "actual": rounded["price"],
+        "forecast": {str(h): rounded[f"forecast_h{h}"] for h in HORIZONS},
     }
 
 
@@ -92,6 +122,11 @@ def main() -> int:
     parser.add_argument("--out", type=Path, default=OUT / f"backtest_{DE_LU.slug}.json")
     out = parser.parse_args().out
     doc = backtest()
+    # the trailing MAE must be the report's own figure, or the naive baseline next to it
+    # would be measured on other rows
+    for h, m in cs._model().metrics["horizons"].items():
+        if abs(doc["trailing"]["horizons"][h]["mae"] - m["mae_3m"] / 10) > 0.005:
+            raise SystemExit(f"D+{h}: trailing MAE differs from the model report's mae_3m")
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(json.dumps(doc, separators=(",", ":")) + "\n", encoding="utf-8")
     known = sum(v is not None for v in doc["actual"])

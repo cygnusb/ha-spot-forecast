@@ -204,10 +204,12 @@ nav.top { position: relative; display: flex; flex-wrap: wrap; align-items: cente
 @media (min-width: 1000px) { .facts-grid { grid-template-columns: minmax(0, 1.35fr) minmax(0, 1fr); } }
 .table-wrap { overflow-x: auto; }
 table.acc { width: 100%; border-collapse: collapse; font-size: 15px; }
-table.acc caption { text-align: left; font-weight: 700; padding-bottom: 10px; }
+.table-cap { font-weight: 700; padding-bottom: 10px; }
 table.acc th, table.acc td { padding: 9px 0 9px 16px; text-align: right; border-bottom: 1px solid var(--rule); white-space: nowrap; }
 table.acc th:first-child, table.acc td:first-child { text-align: left; }
-table.acc thead th { font-weight: 400; color: var(--ink-2); vertical-align: bottom; border-bottom: 1px solid var(--ink); white-space: normal; }
+table.acc thead th { font-weight: 400; color: var(--ink-2); vertical-align: bottom; border-bottom: 1px solid var(--ink); white-space: normal; hyphens: manual; overflow-wrap: normal; }
+table.acc thead th.grp { text-align: center; font-weight: 700; color: var(--ink); border-bottom: 1px solid var(--rule); padding-left: 24px; }
+table.acc .gs, table.acc thead tr:last-child th:nth-child(3n + 1) { padding-left: 24px; }
 table.acc td { font-family: var(--display); font-stretch: 75%; font-weight: 600; font-size: 18px; font-variant-numeric: tabular-nums lining-nums; }
 table.acc td:first-child { font-family: var(--body); font-stretch: 100%; font-weight: 400; font-size: 15px; }
 table.acc td:first-child b { display: inline-flex; align-items: center; gap: 7px; font-family: var(--display); font-stretch: 75%; font-size: 18px; min-width: 3.2em; }
@@ -366,25 +368,30 @@ footer.foot nav { display: flex; flex-wrap: wrap; gap: 6px 22px; }
 
 <div class="facts-grid">
 <div>
+<p class="table-cap" id="acc-cap">{{ t.accuracy.table_caption | replace("{version}", m.version) }}</p>
 <div class="table-wrap">
-<table class="acc">
-<caption>{{ t.accuracy.table_caption | replace("{version}", m.version) }}</caption>
-<thead><tr>
-<th scope="col">{{ t.accuracy.horizon }}</th>
-<th scope="col">{{ t.accuracy.full | replace("{from}", m.walk_forward_from | month) }}</th>
-<th scope="col">{{ t.accuracy.last3 }}</th>
-<th scope="col">{{ t.accuracy.naive }}</th>
-<th scope="col">{{ t.accuracy.skill }}</th>
-<th scope="col">{{ t.accuracy.p90 }}</th>
-</tr></thead>
+<table class="acc" aria-labelledby="acc-cap">
+<thead>
+<tr>
+<th scope="col" rowspan="2">{{ t.accuracy.horizon }}</th>
+<th scope="colgroup" colspan="3" class="grp">{{ t.accuracy.period | replace("{from}", m.walk_forward_from | mon) | replace("{until}", m.until | mon) }}</th>
+<th scope="colgroup" colspan="3" class="grp">{{ t.accuracy.period | replace("{from}", m.trailing_3m_from | mon) | replace("{until}", m.until | mon) }}</th>
+<th scope="col" rowspan="2">{{ t.accuracy.p90 }}</th>
+</tr>
+<tr>
+{%- for _ in range(2) %}
+<th scope="col">{{ t.accuracy.mae }}</th><th scope="col">{{ t.accuracy.naive }}</th><th scope="col">{{ t.accuracy.skill }}</th>
+{%- endfor %}
+</tr>
+</thead>
 <tbody>
 {%- for r in m.rows %}
-<tr><td style="--k:var(--h{{ r.h }})"><b>D+{{ r.h }}</b> <span>{{ (t.accuracy.days_ahead_one if r.h == 1 else t.accuracy.days_ahead_many) | replace("{h}", r.h) }}</span></td><td>{{ r.mae | num(2) }}</td><td>{{ r.mae_3m | num(2) }}</td><td>{{ r.naive | num(2) }}</td><td>{{ r.skill | pct }}</td><td>{{ r.p90 | pct }}</td></tr>
+<tr><td style="--k:var(--h{{ r.h }})"><b>D+{{ r.h }}</b> <span>{{ (t.accuracy.days_ahead_one if r.h == 1 else t.accuracy.days_ahead_many) | replace("{h}", r.h) }}</span></td><td>{{ r.mae | num(2) }}</td><td>{{ r.naive | num(2) }}</td><td>{{ r.skill | pct }}</td><td class="gs">{{ r.mae_3m | num(2) }}</td><td>{{ r.naive_3m | num(2) }}</td><td>{{ r.skill_3m | pct }}</td><td class="gs">{{ r.p90 | pct }}</td></tr>
 {%- endfor %}
 </tbody>
 </table>
 </div>
-<p class="note">{{ t.accuracy.table_note | replace("{from}", m.walk_forward_from | month) | replace("{from3}", m.trailing_3m_from | month) }}</p>
+<p class="note">{{ t.accuracy.table_note }}</p>
 </div>
 {%- set first = m.rows[0] %}
 {%- set last = m.rows[-1] %}
@@ -395,7 +402,7 @@ footer.foot nav { display: flex; flex-wrap: wrap; gap: 6px 22px; }
 </div>
 <div class="caveat">
 <h3>{{ t.accuracy.regime_title }}</h3>
-<p>{{ t.accuracy.regime_text | replace("{from3}", m.trailing_3m_from | month) | replace("{a}", first.mae_3m | num(1)) | replace("{b}", last.mae_3m | num(1)) }}</p>
+<p>{{ t.accuracy.regime_text | replace("{from3}", m.trailing_3m_from | month) | replace("{a}", first.mae_3m | num(1)) | replace("{b}", last.mae_3m | num(1)) | replace("{s1}", first.skill_3m | pct) | replace("{s6}", last.skill_3m | pct) | replace("{f1}", first.skill | pct) | replace("{f6}", last.skill | pct) }}</p>
 </div>
 </div>
 </div>

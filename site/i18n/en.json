@@ -22,7 +22,7 @@
     "facts": {
       "free": "Free, MIT licence",
       "keyless": "No account, no API key",
-      "pi": "Runs on a Raspberry Pi",
+      "pi": "Light enough for a Raspberry Pi",
       "home_assistant": "Home Assistant 2024.11+"
     },
     "shot_alt": "The Spot Forecast card in Home Assistant: known prices for 13 to 15 October 2026 as a black step line, then six forecast days as a blue line with a hatched red peak-risk band above it and a hatched green low-price band below. Labels above each day give the maximum and, on every forecast day, a warning such as “bis 37” for the peak risk.",
@@ -41,21 +41,21 @@
   },
   "accuracy": {
     "title": "How good is it?",
-    "lede": "Every figure here is out of sample. The models were refit month by month on past data only and then forecast days they had never seen, with weather forecasts at least a day older than a live install gets. Pick a horizon to see the forecast made that many days ahead against the price that came.",
+    "lede": "Every figure here is out of sample. The models were refit month by month on past data only and then forecast days they had never seen, with weather forecasts never fresher than, and up to a day older than, what a live install uses. Pick a horizon to see the forecast made that many days ahead against the price that came.",
     "table_caption": "Mean absolute error in ct/kWh per horizon, bundled model {version}",
     "horizon": "Forecast made",
-    "full": "Since {from}",
-    "last3": "Last 3 months",
-    "naive": "Naive",
+    "period": "{from} – {until}",
+    "mae": "Error",
+    "naive": "Naive error",
     "skill": "Better than naive",
     "p90": "Above peak risk",
     "days_ahead_one": "1 day ahead",
     "days_ahead_many": "{h} days ahead",
-    "table_note": "The full period runs from {from} to the training cutoff, the last three months from {from3}. Naive repeats last week’s price for the same hour. “Better than naive” is 1 − error ÷ naive error, which depends far less on how wild the market was. The peak-risk value (P90) should be exceeded in about 1 hour in 10.",
+    "table_note": "Naive repeats the price of the same hour a week before. “Better than naive” is 1 − error ÷ naive error, which depends far less on how wild the market was. The full period and the error of the last three months are the model’s own report. The model report has the naive error for the full period only, so for the last three months it is computed from the bundled backfill and Energy-Charts prices, on the same hours as the report’s error. “Above peak risk” covers the full period; the peak-risk value (P90) should be exceeded in about 1 hour in 10.",
     "peaks_title": "Peaks come out too low",
     "peaks_text": "The forecast gets the timing of price peaks right, not their height. In hours above {t} ct it is on average {b1} ct too low one day ahead and {b6} ct six days ahead. For peaks, read the peak-risk band: it is exceeded in about {p} of hours, and it is what the peak-risk sensor switches on.",
     "regime_title": "Expensive gas, larger errors",
-    "regime_text": "The error depends on the market. Since {from3} gas and electricity prices have been higher and more volatile, and the error rose to {a} ct one day ahead and {b} ct six days ahead. The skill against naive held up better. Models are retrained every month and reach your install without an update."
+    "regime_text": "The error depends on the market. Since {from3} gas and electricity prices have been higher and more volatile, and the error rose to {a} ct one day ahead and {b} ct six days ahead. The naive forecast got worse too, so the lead over it held: {s1} better than naive one day ahead and {s6} six days ahead, against {f1} and {f6} over the full period. Models are retrained every month and reach your install without an update."
   },
   "chart": {
     "title": "Forecast against the actual price",
@@ -91,7 +91,7 @@
   },
   "how": {
     "title": "How it works",
-    "lede": "A run takes a few seconds on a Raspberry Pi. It repeats after each new weather model run, four times a day, and again when the auction result for tomorrow appears.",
+    "lede": "A run takes about 55 ms on a desktop computer and needs nothing but numpy, so it is built for small hardware such as a Raspberry Pi. It repeats after each new weather model run, four times a day, and again when the auction result for tomorrow appears.",
     "items": {
       "prices": {
         "title": "Known prices",
@@ -171,5 +171,6 @@
     "changelog": "Changelog",
     "issues": "Issues"
   },
+  "months_short": ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"],
   "months": ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"]
 }

@@ -19,7 +19,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
-from datetime import date
+from datetime import date, timedelta
 import gzip
 import json
 from pathlib import Path
@@ -87,9 +87,15 @@ def _markup(value):
 
 
 def model_figures() -> dict:
-    """The bundled model's accuracy in ct/kWh (its metrics are EUR/MWh) and fractions."""
+    """The bundled model's accuracy in ct/kWh (its metrics are EUR/MWh) and fractions.
+
+    The report has the naive error and the skill for the full period only; those of its
+    trailing three months come from the look-back data (tools/site_data.py), measured on
+    the same hours as the report's ``mae_3m``.
+    """
     model = json.loads(gzip.decompress(MODEL.read_bytes()))
     metrics = model["metrics"]
+    trailing = json.loads(BACKTEST.read_text(encoding="utf-8"))["trailing"]
     rows = [
         {
             "h": int(h),
@@ -99,6 +105,8 @@ def model_figures() -> dict:
             "skill": m["skill"],
             "p90": m["p90_exceedance"],
             "peak_bias": m["peak_bias"] / 10,
+            "naive_3m": trailing["horizons"][h]["naive_mae"],
+            "skill_3m": trailing["horizons"][h]["skill"],
         }
         for h, m in sorted(metrics["horizons"].items(), key=lambda item: int(item[0]))
     ]
@@ -107,6 +115,7 @@ def model_figures() -> dict:
         "cutoff": model["train_cutoff"],
         "walk_forward_from": metrics["walk_forward_from"],
         "trailing_3m_from": metrics["trailing_3m_from"],
+        "until": (date.fromisoformat(model["train_cutoff"]) - timedelta(days=1)).isoformat(),
         "threshold": round(metrics["peak_threshold"] / 10, 1),
         "rows": rows,
     }
@@ -123,6 +132,7 @@ def build(out: Path) -> None:
     env.filters["num"] = _num
     env.filters["pct"] = _pct
     env.filters["month"] = _month
+    env.filters["mon"] = _mon
     template = env.get_template("index.html.j2")
     figures = model_figures()
     languages = [
@@ -180,6 +190,13 @@ def _month(context, iso: str) -> str:
     """'2026-07-01' as 'July 2026' / 'Juli 2026', from the page's month names."""
     d = date.fromisoformat(iso)
     return f"{context['t']['months'][d.month - 1]} {d.year}"
+
+
+@pass_context
+def _mon(context, iso: str) -> str:
+    """'2026-07-01' as 'Jul 2026' / 'Juli 2026', for table headings."""
+    d = date.fromisoformat(iso)
+    return f"{context['t']['months_short'][d.month - 1]} {d.year}"
 
 
 def _json_ld(t, lang) -> Markup:

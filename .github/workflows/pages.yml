@@ -52,7 +52,8 @@ jobs:
       id-token: write
     concurrency:
       group: pages
-      cancel-in-progress: true
+      # A deploy that has started always finishes (as GitHub's starter workflow).
+      cancel-in-progress: false
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}

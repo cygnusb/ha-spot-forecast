@@ -22,7 +22,7 @@
     "facts": {
       "free": "Kostenlos, MIT-Lizenz",
       "keyless": "Kein Konto, kein API-Schlüssel",
-      "pi": "Läuft auf einem Raspberry Pi",
+      "pi": "Leicht genug für einen Raspberry Pi",
       "home_assistant": "Home Assistant 2024.11+"
     },
     "shot_alt": "Die Spot-Forecast-Karte in Home Assistant: bekannte Preise vom 13. bis 15. Oktober 2026 als schwarze Stufenlinie, danach sechs Prognosetage als blaue Linie mit schraffiertem rotem Spitzenrisiko darüber und schraffierter grüner Tiefpreis-Chance darunter. Über jedem Tag steht das Maximum und an jedem Prognosetag eine Warnung wie „bis 37“ für das Spitzenrisiko.",
@@ -41,21 +41,21 @@
   },
   "accuracy": {
     "title": "Wie gut ist sie?",
-    "lede": "Jede Zahl hier ist außerhalb der Trainingsdaten gemessen. Die Modelle wurden Monat für Monat nur mit vergangenen Daten neu trainiert und haben dann Tage vorhergesagt, die sie nie gesehen hatten, mit Wetterprognosen, die mindestens einen Tag älter sind als bei einer echten Installation. Wähle einen Vorlauf und sieh die Prognose von so vielen Tagen vorher gegen den Preis, der dann kam.",
+    "lede": "Jede Zahl hier ist außerhalb der Trainingsdaten gemessen. Die Modelle wurden Monat für Monat nur mit vergangenen Daten neu trainiert und haben dann Tage vorhergesagt, die sie nie gesehen hatten, mit Wetterprognosen, die nie frischer und bis zu einen Tag älter sind als bei einer echten Installation. Wähle einen Vorlauf und sieh die Prognose von so vielen Tagen vorher gegen den Preis, der dann kam.",
     "table_caption": "Mittlere absolute Abweichung in ct/kWh je Vorlauf, mitgeliefertes Modell {version}",
     "horizon": "Vorlauf",
-    "full": "Seit {from}",
-    "last3": "Letzte 3 Monate",
+    "period": "{from} – {until}",
+    "mae": "Abweichung",
     "naive": "Naiv",
     "skill": "Besser als naiv",
     "p90": "Über Spitzenrisiko",
     "days_ahead_one": "1 Tag vorher",
     "days_ahead_many": "{h} Tage vorher",
-    "table_note": "Der ganze Zeitraum reicht von {from} bis zum Trainingsstichtag, die letzten drei Monate beginnen im {from3}. Naiv heißt: der Preis derselben Stunde vor einer Woche. „Besser als naiv“ ist 1 − Abweichung ÷ naive Abweichung und hängt viel weniger davon ab, wie wild der Markt war. Das Spitzenrisiko (P90) soll in etwa 1 von 10 Stunden überschritten werden.",
+    "table_note": "Naiv heißt: der Preis derselben Stunde eine Woche vorher. „Besser als naiv“ ist 1 − Abweichung ÷ naive Abweichung und hängt viel weniger davon ab, wie wild der Markt war. Der ganze Zeitraum und die Abweichung der letzten drei Monate stammen aus dem Bericht des Modells. Der Bericht hat die naive Abweichung nur für den ganzen Zeitraum, für die letzten drei Monate ist sie aus dem mitgelieferten Backfill und den Preisen von Energy-Charts berechnet, über dieselben Stunden wie die Abweichung im Bericht. „Über Spitzenrisiko“ gilt für den ganzen Zeitraum; das Spitzenrisiko (P90) soll in etwa 1 von 10 Stunden überschritten werden.",
     "peaks_title": "Spitzen fallen zu niedrig aus",
     "peaks_text": "Die Prognose trifft den Zeitpunkt von Preisspitzen, nicht ihre Höhe. In Stunden über {t} ct liegt sie einen Tag vorher im Schnitt {b1} ct zu niedrig, sechs Tage vorher {b6} ct. Für Spitzen gilt das Band des Spitzenrisikos: Es wird in etwa {p} der Stunden überschritten, und daran schaltet der Spitzenrisiko-Sensor.",
     "regime_title": "Teures Gas, größere Abweichung",
-    "regime_text": "Die Abweichung hängt vom Markt ab. Seit {from3} sind Gas- und Strompreise höher und schwankender, und die Abweichung stieg auf {a} ct einen Tag vorher und {b} ct sechs Tage vorher. Der Vorsprung vor der naiven Prognose hielt sich besser. Die Modelle werden jeden Monat neu trainiert und kommen ohne Update bei dir an."
+    "regime_text": "Die Abweichung hängt vom Markt ab. Seit {from3} sind Gas- und Strompreise höher und schwankender, und die Abweichung stieg auf {a} ct einen Tag vorher und {b} ct sechs Tage vorher. Die naive Prognose wurde ebenfalls schlechter, der Vorsprung blieb also: {s1} besser als naiv einen Tag vorher und {s6} sechs Tage vorher, gegenüber {f1} und {f6} im ganzen Zeitraum. Die Modelle werden jeden Monat neu trainiert und kommen ohne Update bei dir an."
   },
   "chart": {
     "title": "Prognose gegen den echten Preis",
@@ -91,7 +91,7 @@
   },
   "how": {
     "title": "So funktioniert’s",
-    "lede": "Ein Lauf dauert auf einem Raspberry Pi wenige Sekunden. Er wiederholt sich nach jedem neuen Lauf des Wettermodells, viermal am Tag, und noch einmal, wenn das Auktionsergebnis für morgen erscheint.",
+    "lede": "Ein Lauf dauert auf einem Desktop-Rechner etwa 55 ms und braucht nur numpy, ist also für kleine Hardware wie einen Raspberry Pi gebaut. Er wiederholt sich nach jedem neuen Lauf des Wettermodells, viermal am Tag, und noch einmal, wenn das Auktionsergebnis für morgen erscheint.",
     "items": {
       "prices": {
         "title": "Bekannte Preise",
@@ -171,5 +171,6 @@
     "changelog": "Änderungen",
     "issues": "Fehler melden"
   },
+  "months_short": ["Jan.", "Feb.", "März", "Apr.", "Mai", "Juni", "Juli", "Aug.", "Sep.", "Okt.", "Nov.", "Dez."],
   "months": ["Januar", "Februar", "März", "April", "Mai", "Juni", "Juli", "August", "September", "Oktober", "November", "Dezember"]
 }

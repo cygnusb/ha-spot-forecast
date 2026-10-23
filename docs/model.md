@@ -18,7 +18,7 @@ right after them. The anchor is in the sensor's `anchor_day` attribute.
 | What | Source | When |
 |---|---|---|
 | Day-ahead prices DE-LU, the last 40 days | [Energy-Charts](https://www.energy-charts.info/) `/price?bzn=DE-LU` | every run, one request |
-| Weather forecast, hourly, 8 days, ECMWF IFS 0.25° | [Open-Meteo](https://open-meteo.com/), all points in one request | every run |
+| Weather forecast, hourly, 8 days, ECMWF IFS 0.25° | [Open-Meteo](https://open-meteo.com/), two multi-location requests (German points, neighbour points) | every run |
 | Installed wind and solar capacity | the model file (last training value) | |
 | Public holidays in Germany | computed in the integration | |
 
@@ -51,8 +51,10 @@ order, the tree arrays, training period, version, backtest metrics, default
 calibration offsets, installed capacity and default peak threshold. On the
 device a small tree walker over numpy arrays evaluates them; it reproduces
 scikit-learn's predictions to 1e-6. Feature engineering is one module without
-Home Assistant or pandas, shared by the integration and the training. A run
-takes a few seconds on a Raspberry Pi 4.
+Home Assistant or pandas, shared by the integration and the training. A
+forecast run takes about 55 ms on a desktop computer. It needs nothing but
+numpy (no pandas, no scikit-learn), so it is designed to run on a Raspberry
+Pi; a measurement on one is still to come.
 
 ## Calibration
 
@@ -89,19 +91,26 @@ and they reach your install **separately from integration releases**:
   [`models` release](https://github.com/cygnusb/ha-spot-forecast/releases/tag/models),
   with a manifest listing version, file, SHA-256, feature schema, training
   cutoff and headline metrics, and the model's backfill file.
-* Once a day, at a random minute, the integration reads the manifest. It
-  downloads a newer model only if the feature schema matches its own, the
+* Five minutes after setup, and then once a day at a fixed time between 03:00
+  and 05:59 that differs from install to install, the integration reads the
+  manifest. It downloads a newer model only if the feature schema matches its own, the
   SHA-256 matches, and the file loads and predicts on a built-in sample. The
   file is data only; the integration never runs downloaded code.
 * Downloaded models live in `<config>/.storage/spot_forecast/`, so a HACS
-  update does not remove them. The newest valid downloaded model is used,
-  else the bundled one.
+  update does not remove them. The integration uses the newest model by
+  training data among the bundled one and the valid downloaded ones; a
+  download counts only if it is newer than the bundled model.
+  `sensor.spot_forecast_de_lu_model_version` shows which one runs (`source`:
+  `bundled` or `downloaded`).
 
 Each integration release bundles the latest published model, so a fresh
 install works without GitHub. Forecasts already written stay as they were;
-a new model only affects new runs. Turn the option *Update models
-automatically* off to stay on the bundled model; a repairs issue then appears
-once its training data is more than 60 days old.
+a new model only affects new runs.
+
+Turning the option *Update models automatically* off stops further downloads
+only. A model downloaded before stays in use until an integration update
+bundles a newer one. A repairs issue appears once the training data of the
+model in use is more than 60 days old.
 
 The training code is in
 [`training/`](https://github.com/cygnusb/ha-spot-forecast/tree/main/training),

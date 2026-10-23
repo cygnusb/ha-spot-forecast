@@ -80,19 +80,44 @@ def test_backtest_json_size():
     assert doc["model_version"] == model["version"]
 
 
-@pytest.mark.parametrize("page", ["README.md", "docs/accuracy.md"])
-def test_accuracy_tables_match_model(page):
-    """The accuracy tables are written by hand; they must show the bundled model's metrics."""
-    metrics = json.loads(gzip.decompress(MODEL.read_bytes()))["metrics"]
-    # the per-horizon table; docs/accuracy.md has a peaks table with D+ rows after it
-    text = (REPO / page).read_text(encoding="utf-8").split("## Peaks")[0]
-    for h, m in metrics["horizons"].items():
-        row = re.search(rf"^\| D\+{h} \|(.*)\|$", text, re.MULTILINE)
-        assert row, f"{page} has no accuracy row for D+{h}"
-        cells = [c.strip() for c in row.group(1).split("|")]
-        assert cells[:4] == [
-            f"{m['mae'] / 10:.2f}",
-            f"{m['mae_3m'] / 10:.2f}",
-            f"{m['naive_mae'] / 10:.2f}",
-            f"{m['skill']:.0%}",
-        ], f"D+{h}"
+def _ct(x: float) -> str:
+    return f"{x:.2f}"
+
+
+def _pct(x: float) -> str:
+    return f"{x:.0%}"
+
+
+def _expected_rows(kind: str) -> dict[str, list[str]]:
+    """Per horizon, the cells a hand-written accuracy table must show."""
+    metrics = json.loads(gzip.decompress(MODEL.read_bytes()))["metrics"]["horizons"]
+    trailing = json.loads(build_site.BACKTEST.read_text(encoding="utf-8"))["trailing"]
+    rows = {}
+    for h, m in metrics.items():
+        t = trailing["horizons"][h]
+        full = [_ct(m["mae"] / 10), _ct(m["naive_mae"] / 10), _pct(m["skill"])]
+        last3 = [_ct(m["mae_3m"] / 10), _ct(t["naive_mae"]), _pct(t["skill"])]
+        rows[h] = {
+            "readme": [*full, *last3, _pct(m["p90_exceedance"])],
+            "full": [*full, _pct(m["p90_exceedance"]), _pct(m["neg_p10_below_zero"])],
+            "last3": last3,
+        }[kind]
+    return rows
+
+
+def _table_rows(text: str) -> dict[str, list[str]]:
+    rows = {}
+    for match in re.finditer(r"^\| D\+(\d) \|(.*)\|$", text, re.MULTILINE):
+        rows.setdefault(match.group(1), [c.strip() for c in match.group(2).split("|")])
+    return rows
+
+
+def test_accuracy_tables_match_model():
+    """The accuracy tables are written by hand; they must show the bundled model's metrics,
+    and for the last three months the naive figures of the look-back data."""
+    readme = (REPO / "README.md").read_text(encoding="utf-8")
+    assert _table_rows(readme) == _expected_rows("readme")
+    docs = (REPO / "docs" / "accuracy.md").read_text(encoding="utf-8")
+    full, rest = docs.split("### Last three months")
+    assert _table_rows(full) == _expected_rows("full")
+    assert _table_rows(rest.split("## Peaks")[0]) == _expected_rows("last3")

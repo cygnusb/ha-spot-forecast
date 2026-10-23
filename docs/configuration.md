@@ -32,7 +32,7 @@ right after setup and without access to GitHub.
 |---|---|---|---|
 | Peak price threshold | the model's, 21.2 ct/kWh | 0–100 ct/kWh | Wholesale price above which an hour counts as a price peak, for the [peak-risk sensor](entities.md#peak-risk). |
 | Backfill window (days) | 60 | 0–180 | How many past days of forecasts are reconstructed on first start, so the look-back card and the calibration have history. 0 turns the backfill off. |
-| Update models automatically | on | | Once a day, download a newer model for the zone when one is published (see [model updates](model.md#model-updates)). |
+| Update models automatically | on | | Check for a newer model for the zone after setup and once a day between 03:00 and 06:00, and download it if it passes its checks. Off stops further downloads; a model downloaded before stays in use (see [model updates](model.md#model-updates)). |
 
 The default peak threshold is the 97th percentile of hourly prices in the
 model's last training year. As long as you leave it at that value, it follows
@@ -75,7 +75,8 @@ A forecast run happens:
   are published, at the latest until 16:00, then with the new anchor day;
 * just after midnight, when the day rolls over.
 
-That is roughly 10 to 20 requests a day to each source.
+That is about 6 to 8 runs a day, each with one request to Energy-Charts and
+two to Open-Meteo.
 
 ## When a source fails
 
@@ -86,13 +87,13 @@ forecast never looks like a fresh one.
 
 ## Troubleshooting
 
-*Download diagnostics* on the device page dumps the active model (version,
+*Download diagnostics* in the ⋮ menu of the integration entry dumps the active model (version,
 source, training cutoff), the run state, the ledger sizes, the backfill state
 and the recent accuracy. Attach it to an
 [issue](https://github.com/cygnusb/ha-spot-forecast/issues).
 
-For more detail, turn on debug logging (device page → *Enable debug logging*,
-or in `configuration.yaml`):
+For more detail, turn on debug logging (⋮ menu of the integration entry →
+*Enable debug logging*, or in `configuration.yaml`):
 
 ```yaml
 logger:

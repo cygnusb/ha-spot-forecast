@@ -68,23 +68,27 @@ always come first and the forecast follows without a gap. Details:
 ## How good is it?
 
 Out of sample, walk-forward: the models were refit month by month on past data
-only and forecast days they had never seen, with weather forecasts at least
-one run older than a live install uses. The figures are the shipped model's
-own report (`de_lu-2026-10`), mean absolute error in ct/kWh:
+only and forecast days they had never seen, with weather forecasts never
+fresher than, and up to a day older than, what a live install uses. Mean
+absolute error (MAE) in ct/kWh, from the shipped model's own report
+(`de_lu-2026-10`):
 
-| Horizon | Apr 2025 – Sep 2026 | Jul – Sep 2026 | Naive | Better than naive | Above peak risk |
-|---|---|---|---|---|---|
-| D+1 | 1.79 | 2.36 | 3.39 | 47% | 12% |
-| D+2 | 1.88 | 2.49 | 3.39 | 45% | 12% |
-| D+3 | 1.96 | 2.64 | 3.39 | 42% | 12% |
-| D+4 | 2.12 | 2.86 | 3.39 | 38% | 12% |
-| D+5 | 2.36 | 3.18 | 3.39 | 30% | 13% |
-| D+6 | 2.48 | 3.20 | 3.39 | 27% | 12% |
+| Horizon | MAE Apr 2025 – Sep 2026 | Naive MAE, same period | Skill, same period | MAE Jul – Sep 2026 | Naive MAE, Jul – Sep 2026 | Skill, Jul – Sep 2026 | Above peak risk |
+|---|---|---|---|---|---|---|---|
+| D+1 | 1.79 | 3.39 | 47% | 2.36 | 4.29 | 45% | 12% |
+| D+2 | 1.88 | 3.39 | 45% | 2.49 | 4.29 | 42% | 12% |
+| D+3 | 1.96 | 3.39 | 42% | 2.64 | 4.29 | 38% | 12% |
+| D+4 | 2.12 | 3.39 | 38% | 2.86 | 4.29 | 33% | 12% |
+| D+5 | 2.36 | 3.39 | 30% | 3.18 | 4.29 | 26% | 13% |
+| D+6 | 2.48 | 3.39 | 27% | 3.20 | 4.29 | 26% | 12% |
 
-*Naive* repeats last week's price for the same hour. *Better than naive* is
-1 − error ÷ naive error, which depends far less on how volatile the market
-was. *Above peak risk* is how often the actual price exceeded the calibrated
-P90; the target is about 10 %.
+*Naive* repeats the price of the same hour a week before. *Skill* is
+1 − MAE ÷ naive MAE, which depends far less on how volatile the market was.
+The model report has the naive MAE for the full period only; for July to
+September 2026 it is computed from the bundled backfill and Energy-Charts
+prices ([`tools/site_data.py`](tools/site_data.py)), on the same hours as the
+report's MAE. *Above peak risk* (full period) is how often the actual price
+exceeded the calibrated P90; the target is about 10 %.
 
 > **Peaks come out too low.** The forecast gets the timing of price peaks
 > right, not their height. In hours above 21.2 ct/kWh it is on average
@@ -93,13 +97,15 @@ P90; the target is about 10 %.
 > expected price.
 
 > **The error depends on the market.** From July 2026 gas and electricity
-> prices were higher and more volatile, and the error rose to 2.4 ct (D+1) …
-> 3.2 ct (D+6). A frozen model degrades within months when the market shifts,
-> so new models are trained every month and reach your install without an
-> integration update (see [the model channel](docs/model.md#model-updates)).
+> prices were higher and more volatile, and the MAE rose to 2.36 ct (D+1) …
+> 3.20 ct (D+6). The naive forecast got worse too (4.29 ct against 3.39 ct),
+> so the skill held at 45 % … 26 %. A frozen model degrades within months when
+> the market shifts, so new models are trained every month and can reach your
+> install without an integration update (see
+> [model updates](docs/model.md#model-updates)).
 
-The low-price value catches negative prices: in 85 % (D+1) … 81 % (D+6) of
-the hours that turned out negative, P10 was below zero. More in
+The low-price value catches negative prices: in 78–85 % of the hours that
+turned out negative (depending on the horizon), P10 was below zero. More in
 [accuracy](docs/accuracy.md); the [website](https://cygnusb.github.io/ha-spot-forecast/#accuracy)
 has the forecast against the actual price, per horizon, as an interactive
 chart.
@@ -131,7 +137,7 @@ options (*Configure* on the integration):
 |---|---|---|
 | Peak price threshold | from the model, 21.2 ct/kWh | Wholesale price above which an hour counts as a peak, for the peak-risk sensor. |
 | Backfill window (days) | 60 | Past days of forecasts reconstructed on first start, so the look-back and the calibration have history (0–180, 0 = off). |
-| Update models automatically | on | Once a day, download a newer model for the zone if one is published and passes its checks. |
+| Update models automatically | on | Check for a newer model after setup and once a day, and download it if it passes its checks. Off stops further downloads; a model downloaded before stays in use. |
 
 Details: [docs/configuration.md](docs/configuration.md).
 
