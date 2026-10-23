@@ -86,13 +86,18 @@ class ForecastStore:
     def async_save(self, state: StoredState) -> None:
         """Save ``state`` ``SAVE_DELAY`` seconds later, turned into JSON off the loop."""
 
-        def data() -> dict[str, Any]:
-            if self._pending is data:
-                self._pending = None
+        def data() -> dict[str, Any]:  # runs in a worker thread
+            self._hass.loop.call_soon_threadsafe(self._written, data)
             return _to_json(state)
 
         self._pending = data
         self._store.async_delay_save(data, SAVE_DELAY)
+
+    @callback
+    def _written(self, data: Callable[[], dict[str, Any]]) -> None:
+        """``data`` went to the file: nothing to flush unless a newer snapshot came since."""
+        if self._pending is data:
+            self._pending = None
 
     async def async_flush(self) -> None:
         """Write a pending snapshot now (on unload; a reload reads the file right after)."""
