@@ -1,7 +1,7 @@
 """Monthly CI training: train, run the quality gate, build the release manifest.
 
 python -m training.ci --raw DIR --out DIR --cutoff YYYY-MM-DD
-    [--previous-manifest FILE] [--previous-model FILE] [--capacity-month YYYY-MM]
+    [--previous-manifest FILE] [--previous-model FILE ...] [--capacity-month YYYY-MM]
 
 Besides the training outputs (see ``training.train``) it writes to ``--out``:
 
@@ -15,8 +15,12 @@ A published version is never replaced: if the previous manifest already lists th
 version (a rerun in the same month), ``gate.json`` says ``already_published`` and none of the
 other three files is written.
 
-The gate month is the last full month before the cutoff. The previous files are optional
-(the first run has none). Exit 0 whether or not the gate passed, 2 on a data lag.
+The gate month is the last full month before the cutoff. The candidate is compared with
+the best of the previous models (``--previous-model``, repeatable): the model the manifest
+lists for the zone must be one of them and comparable, or the gate fails; only a manifest
+without a model for the zone (the first run) lets the candidate pass on skill alone.
+
+Exit 0 whether or not the gate passed, 2 on a data lag.
 """
 
 from __future__ import annotations
@@ -32,8 +36,8 @@ from core.model import ModelMismatch, load_model
 
 from . import gate, train
 from .dataset import Dataset
-from .gate import evaluate_gate, month_metrics, previous_model_predictions
-from .manifest import manifest_entry, merge_manifest
+from .gate import GateResult, evaluate_gate, month_metrics, previous_model_predictions
+from .manifest import manifest_entry, merge_manifest, revoked_versions
 from .train import DataLag
 
 MODELS_BASE_URL = "https://github.com/cygnusb/ha-spot-forecast/releases/download/models"
@@ -44,32 +48,73 @@ def gate_month(cutoff: date) -> date:
     return (cutoff.replace(day=1) - timedelta(days=1)).replace(day=1)
 
 
-def _previous_metrics(
-    path: Path | None, zone: str, ds: Dataset, month: date, candidate_rows: int
-) -> tuple[dict | None, str]:
-    """Month metrics of the previous model, or ``None`` with the reason it is not compared."""
-    if path is None:
-        return None, "no previous model given"
+def _score_previous(
+    path: Path, zone: str, ds: Dataset, month: date, candidate_rows: int
+) -> tuple[str, dict | None, str]:
+    """The version of the previous model at ``path`` (its file name if it does not load),
+    its month metrics, or ``None`` with the reason it cannot be compared."""
+    name = path.name.removesuffix(".json.gz")
     if not path.exists():
-        return None, f"previous model {path.name} not found"
+        return name, None, f"{path.name} not found"
     try:
         model = load_model(path.read_bytes())
     except ModelMismatch as e:
-        return None, f"previous model {path.name} cannot be used: {e}"
+        return name, None, f"{path.name} cannot be used: {e}"
+    v = model.version
     if model.zone != zone:
-        return None, f"previous model {model.version} is for zone {model.zone}, not {zone}"
+        return v, None, f"{v} is for zone {model.zone}, not {zone}"
     if model.train_cutoff > month:
-        return None, (
-            f"previous model {model.version} is not out of sample: trained up to "
-            f"{model.train_cutoff}, after the gate month start {month}"
-        )
+        why = f"trained up to {model.train_cutoff}, after the gate month start {month}"
+        return v, None, f"{v} is not out of sample: {why}"
     metrics = month_metrics(previous_model_predictions(model, ds, month), month)
     if metrics["rows"] != candidate_rows:
-        return None, (
-            f"previous model {model.version} scored {metrics['rows']} rows, "
-            f"the candidate {candidate_rows}: not comparable"
-        )
-    return metrics, f"compared with previous model {model.version}"
+        why = f"{metrics['rows']} rows, the candidate {candidate_rows}"
+        return v, None, f"{v} scored {why}: not comparable"
+    if not gate._finite(metrics["mae"]):
+        return v, None, f"{v} has MAE {metrics['mae']}, not finite"
+    return v, metrics, ""
+
+
+def _previous_metrics(
+    paths: list[Path],
+    published: str | None,
+    revoked: frozenset[str],
+    zone: str,
+    ds: Dataset,
+    month: date,
+    candidate_rows: int,
+) -> tuple[dict | None, str, bool]:
+    """The month metrics of the best (lowest MAE) previous model, a note for the gate reason
+    and whether the gate may go on.
+
+    ``published`` is the manifest's version for ``zone``. Unless it is ``None`` or revoked,
+    it must be among ``paths`` and comparable, or the gate fails (False): only a manifest
+    without a model for the zone lets the candidate pass on skill alone. The other previous
+    models (train.yml downloads up to three) count when they can be compared and are
+    skipped otherwise, as are revoked ones.
+    """
+    scored: dict[str, dict] = {}
+    skipped: list[str] = []
+    for path in paths:
+        version, metrics, why = _score_previous(path, zone, ds, month, candidate_rows)
+        if metrics is None:
+            skipped.append(why)
+        elif version in revoked:
+            skipped.append(f"{version} is revoked")
+        else:
+            scored[version] = metrics
+    required = published if published is not None and published not in revoked else None
+    if required is not None and required not in scored:
+        why = "; ".join(skipped) or "it was not given"
+        return None, f"the published model {required} cannot be compared ({why})", False
+    tail = f"; skipped: {'; '.join(skipped)}" if skipped else ""
+    if not scored:
+        if published is None:
+            return None, f"no previous model in the manifest{tail}", True
+        return None, f"the published model {published} is revoked{tail}", True
+    best = min(scored, key=lambda v: scored[v]["mae"])
+    note = f"compared with {best}, the best of {', '.join(sorted(scored))}{tail}"
+    return scored[best], note, True
 
 
 def _previous_manifest(path: Path | None) -> dict | None:
@@ -92,7 +137,13 @@ def _parse(argv: list[str]) -> argparse.Namespace:
     ap.add_argument("--out", type=Path, required=True)
     ap.add_argument("--cutoff", type=date.fromisoformat, required=True)
     ap.add_argument("--previous-manifest", type=Path, default=None)
-    ap.add_argument("--previous-model", type=Path, default=None)
+    ap.add_argument(
+        "--previous-model",
+        type=Path,
+        action="append",
+        default=[],
+        help="a previously published model; repeatable, the best of them is the bar",
+    )
     ap.add_argument("--capacity-month", default=None, help="passed on to training.train")
     return ap.parse_args(argv)
 
@@ -109,19 +160,28 @@ def run(argv: list[str], max_iter: int = 600) -> int:
         print(e, file=sys.stderr)
         return 2
 
+    old_manifest = _previous_manifest(args.previous_manifest)
+    published = _published_version(old_manifest, result.model.zone)
     month = gate_month(args.cutoff)
     candidate = month_metrics(result.predictions, month)
-    previous, note = _previous_metrics(
-        args.previous_model, result.model.zone, result.dataset, month, candidate["rows"]
+    already_published = published == result.version
+    previous, note, comparable = _previous_metrics(
+        args.previous_model,
+        None if already_published else published,  # a rerun: nothing to compare, see below
+        frozenset(revoked_versions(old_manifest)),
+        result.model.zone,
+        result.dataset,
+        month,
+        candidate["rows"],
     )
-    verdict = evaluate_gate(candidate, previous)
-    verdict = replace(verdict, reason=f"{verdict.reason} ({note})")
+    if comparable:
+        verdict = evaluate_gate(candidate, previous)
+        verdict = replace(verdict, reason=f"{verdict.reason} ({note})")
+    else:
+        verdict = GateResult(False, candidate, None, note)
 
     out: Path = args.out
     out.mkdir(parents=True, exist_ok=True)
-    old_manifest = _previous_manifest(args.previous_manifest)
-    published = _published_version(old_manifest, result.model.zone)
-    already_published = published == result.version
     gate_doc = {
         "version": result.version,
         "month": f"{month:%Y-%m}",

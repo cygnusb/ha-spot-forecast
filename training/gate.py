@@ -1,14 +1,16 @@
-"""Quality gate of the monthly training: the candidate against the published model.
+"""Quality gate of the monthly training: the candidate against the published models.
 
 Both are scored on the target days of one full month that neither has trained on: the
-candidate by its walk-forward predictions (monthly refit), the previous model by
-predicting the same dataset rows with its trees.
+candidate by its walk-forward predictions (monthly refit), a previous model by predicting
+the same dataset rows with its trees. ``training.ci`` picks the previous models to compare
+with and passes the best of them.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import date, timedelta
+import math
 
 import numpy as np
 
@@ -66,15 +68,23 @@ def previous_model_predictions(model: ModelFile, ds: Dataset, month_start: date)
 class GateResult:
     passed: bool
     candidate: dict  # month_metrics of the candidate
-    previous: dict | None  # month_metrics of the published model; None on the first run
+    previous: dict | None  # month_metrics of the best previous model; None on the first run
     reason: str
+
+
+def _finite(x: float | None) -> bool:
+    return x is not None and math.isfinite(x)
 
 
 def evaluate_gate(
     candidate: dict, previous: dict | None, tolerance: float = TOLERANCE
 ) -> GateResult:
     """Pass if the candidate beats the naive baseline (skill > 0) and its MAE is at most
-    the previous model's + ``tolerance``. Without a previous model only skill counts."""
+    the previous model's + ``tolerance``. Without a previous model only skill counts.
+
+    Fails closed: a metric that is NaN or infinite, the candidate's or the previous
+    model's, fails the gate (every comparison with NaN is False).
+    """
 
     def result(passed: bool, reason: str) -> GateResult:
         return GateResult(passed, candidate, previous, reason)
@@ -82,10 +92,14 @@ def evaluate_gate(
     mae, skill = candidate["mae"], candidate["skill"]
     if not candidate["rows"] or mae is None:
         return result(False, "the candidate has no rows in the gate month")
+    if not _finite(mae) or (skill is not None and not _finite(skill)):
+        return result(False, f"candidate MAE {mae} or skill {skill} is not finite")
     if skill is None or skill <= 0:
         return result(False, f"candidate skill {_num(skill)} against the naive baseline is not > 0")
-    if previous is None or previous["mae"] is None:
+    if previous is None:
         return result(True, f"candidate skill {skill:.3f} > 0; no previous model to compare")
+    if not previous["rows"] or not _finite(previous["mae"]):
+        return result(False, f"the previous model's MAE {previous['mae']} is not finite (no rows?)")
     limit = previous["mae"] + tolerance
     if mae > limit:
         return result(

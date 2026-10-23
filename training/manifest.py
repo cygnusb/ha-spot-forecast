@@ -41,6 +41,17 @@ def manifest_entry(
     }
 
 
+def revoked_versions(manifest: dict | None) -> list[str]:
+    """The ``revoked`` list of ``manifest`` (empty without one); ``ValueError`` if malformed.
+
+    Optional, a list of model versions (``de_lu-2026-11``) that must not be used any more.
+    """
+    revoked = manifest.get("revoked", []) if manifest is not None else []
+    if not isinstance(revoked, list) or not all(isinstance(v, str) for v in revoked):
+        raise ValueError(f"manifest: revoked {revoked!r} is not a list of versions")
+    return revoked
+
+
 def merge_manifest(old: dict | None, slug: str, entry: dict) -> dict:
     """``old`` (``None`` on the first run) with the zone ``slug`` set to ``entry``."""
     if old is not None and old.get("format") != FORMAT:

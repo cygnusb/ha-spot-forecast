@@ -8,7 +8,7 @@ import hashlib
 
 import pytest
 
-from training.manifest import manifest_entry, merge_manifest
+from training.manifest import manifest_entry, merge_manifest, revoked_versions
 
 BASE = "https://example.org/releases/download/models/"
 METRICS = {
@@ -62,3 +62,11 @@ def test_merge_manifest_first_run_and_wrong_format(model):
     assert merge_manifest(None, "de_lu", new)["zones"] == {"de_lu": new}
     with pytest.raises(ValueError, match="format"):
         merge_manifest({"format": 2, "zones": {}}, "de_lu", new)
+
+
+@pytest.mark.parametrize(
+    ("manifest", "revoked"),
+    [(None, []), ({"format": 1}, []), ({"revoked": ["de_lu-2026-09"]}, ["de_lu-2026-09"])],
+)
+def test_revoked_versions(manifest, revoked):
+    assert revoked_versions(manifest) == revoked
