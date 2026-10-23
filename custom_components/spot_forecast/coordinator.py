@@ -41,6 +41,7 @@ from .sources.http import SourceError
 from .sources.open_meteo import fetch_forecast
 from .store import ForecastStore, StoredState
 
+UNLOAD_WAIT = 10  # seconds a run in flight may take to finish during unload
 _LOGGER = logging.getLogger(__name__)
 
 MARKET_KEEP_DAYS = 3  # market slots kept for display and in the Store, before today
@@ -501,7 +502,14 @@ class SpotForecastCoordinator(DataUpdateCoordinator[SpotData]):
         if self._unsub_stop is not None:
             self._unsub_stop()
             self._unsub_stop = None
-        await self._store.async_flush()
+        # Let a run still in flight finish its save first, so the flush is the last write
+        # (and a removed entry's file is not recreated). Bounded: unload must not hang on
+        # a slow API.
+        try:
+            async with asyncio.timeout(UNLOAD_WAIT), self._run_lock:
+                await self._store.async_flush()
+        except TimeoutError:
+            await self._store.async_flush()
 
 
 def _latest_live_run(ledger: Ledger) -> Run | None:
