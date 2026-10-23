@@ -71,7 +71,7 @@ jobs:
         run: |
           tar -czf raw.tar.gz -C training/data raw/prices/ raw/weather/ raw/installed_power.json
           if ! gh release view training-data >/dev/null 2>&1; then
-            gh release create training-data --title "Training data" --latest=false --notes "Raw inputs of the monthly model training, refreshed by the Train workflow: day-ahead prices and installed capacity from Energy-Charts (price data: Bundesnetzagentur | SMARD.de, CC BY 4.0) and weather forecasts from Open-Meteo (CC BY 4.0)."
+            gh release create training-data --title "Training data" --latest=false --prerelease --notes "Raw inputs of the monthly model training, refreshed by the Train workflow: day-ahead prices and installed capacity from Energy-Charts (price data: Bundesnetzagentur | SMARD.de, CC BY 4.0) and weather forecasts from Open-Meteo (CC BY 4.0)."
           fi
           gh release upload training-data raw.tar.gz --clobber
 
@@ -151,7 +151,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           if ! gh release view models >/dev/null 2>&1; then
-            gh release create models --title "Models" --latest=false --notes "Rolling release of the published models. manifest.json lists the current model of every zone."
+            gh release create models --title "Models" --latest=false --prerelease --notes "Rolling release of the published models. manifest.json lists the current model of every zone."
           fi
           gh release upload models "out/$VERSION.json.gz" "out/$VERSION.backfill.json.gz" "out/$VERSION.report.md" --clobber
           gh release upload models out/manifest.json --clobber
