@@ -103,3 +103,11 @@ def test_full_range_is_complete_and_fast(raw):
     assert ds.X.shape == (len(ds.y_price), len(FEATURE_NAMES))
     assert not np.isnan(ds.y_price).any() and not np.isnan(ds.p_lastweek).any()
     print(f"full range: {len(ds.y_price)} rows, {elapsed:.1f}s")
+
+
+def test_hidden_files_are_not_data(tmp_path) -> None:
+    from training.dataset import _json_files
+
+    (tmp_path / "2026-07_6m.json").write_text("{}")
+    (tmp_path / "._2026-07_6m.json").write_bytes(b"\x00\x05\x16\x07\xa3")  # AppleDouble
+    assert [f.name for f in _json_files(tmp_path, "*.json")] == ["2026-07_6m.json"]
