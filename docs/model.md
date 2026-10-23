@@ -52,7 +52,7 @@ calibration offsets, installed capacity and default peak threshold. On the
 device a small tree walker over numpy arrays evaluates them; it reproduces
 scikit-learn's predictions to 1e-6. Feature engineering is one module without
 Home Assistant or pandas, shared by the integration and the training. A
-forecast run takes about 55 ms on a desktop computer. It needs nothing but
+forecast run takes well under a second on a desktop computer. It needs nothing but
 numpy (no pandas, no scikit-learn), so it is designed to run on a Raspberry
 Pi; a measurement on one is still to come.
 

@@ -91,7 +91,7 @@
   },
   "how": {
     "title": "How it works",
-    "lede": "A run takes about 55 ms on a desktop computer and needs nothing but numpy, so it is built for small hardware such as a Raspberry Pi. It repeats after each new weather model run, four times a day, and again when the auction result for tomorrow appears.",
+    "lede": "A run takes well under a second on a desktop computer and needs nothing but numpy, so it is built for small hardware such as a Raspberry Pi. It repeats after each new weather model run, four times a day, and again when the auction result for tomorrow appears.",
     "items": {
       "prices": {
         "title": "Known prices",
