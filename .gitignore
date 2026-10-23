@@ -3,3 +3,6 @@ dist/
 __pycache__/
 .venv
 .venv-ha
+
+# screenshot harness: downloaded card bundle, scenario cache, work shots
+tools/.cache/

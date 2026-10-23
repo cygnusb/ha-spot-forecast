@@ -38,3 +38,7 @@ exclude = ["*.md"]
 [lint.isort]
 force-sort-within-sections = true
 known-first-party = ["spot_forecast", "core", "training"]
+
+[lint.per-file-ignores]
+# The screenshot harness embeds its page and its Playwright script as JS templates.
+"tools/gen_card_screenshots.py" = ["E501"]

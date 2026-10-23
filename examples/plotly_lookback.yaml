@@ -1,0 +1,430 @@
+# Spot Forecast: look-back, the forecast made h days ahead against the actual price,
+# for the Plotly Graph Card.
+#
+# Needs: the Spot Forecast integration and Plotly Graph Card v4
+# (https://github.com/dbuezas/lovelace-plotly-graph-card). Add a manual card and paste
+# this YAML. It reads the long-term statistics spot_forecast:de_lu_price (actual) and
+# spot_forecast:de_lu_forecast_h1 … _h6 (the median forecast made 1 … 6 days before
+# the day), and the threshold of binary_sensor.spot_forecast_de_lu_peak_risk.
+#
+# The buttons on the left pick the horizon (D+1 … D+6, or "alle": all lines, no fill);
+# with one horizon the deviation from the actual price is filled red. The buttons on
+# the right pick the range. Above the plot: the mean absolute error of the shown
+# horizon over the shown range, and the error in the hours above the peak threshold.
+#
+# Horizon switch: tested on Plotly Graph Card v4.0.2 (tools/gen_card_screenshots.py
+# --switch-test). Plain `updatemenus` restyle buttons do not survive: the card draws
+# itself again right after the click (and on every refresh) from this YAML, which undoes
+# the restyle. Legend clicks do survive (Plotly keeps them while the card is in its
+# browsing mode), but they cannot switch the fill or the error figure. So the buttons
+# here keep their choice in `window.spotForecastLookback` and every value that depends
+# on it (visibility, fill, active button, error figure) is computed from it below. The
+# choice holds until the page is reloaded and is shared by all look-back cards on it.
+type: custom:plotly-graph
+hours_to_show: 30d
+refresh_interval: auto
+autorange_after_scroll: true
+defaults:
+  entity:
+    # one unit for every trace, so they all share the left axis
+    unit_of_measurement: ct/kWh
+    statistic: mean
+    period: hour
+    extend_to_present: false
+    line:
+      shape: linear
+    filters:
+      - multiply: 100 # EUR/kWh -> ct/kWh
+entities:
+  - entity: spot_forecast:de_lu_price
+    name: Börsenpreis
+    legendrank: 1
+    filters:
+      - multiply: 100
+      - store_var: actual
+      # The horizon choice and the colours, for everything below.
+      - fn: |-
+          ({ vars, css_vars, get }) => {
+            const choice = window.spotForecastLookback?.h;
+            const sel = [0, 1, 2, 3, 4, 5, 6].includes(choice) ? choice : 2; // 0 = alle
+            const bg = css_vars["card-background-color"] || "";
+            const rgb = bg.startsWith("#")
+              ? (bg.length === 4 ? [...bg.slice(1)].map((c) => parseInt(c + c, 16)) : [1, 3, 5].map((i) => parseInt(bg.slice(i, i + 2), 16)))
+              : (bg.match(/[\d.]+/g) || [255, 255, 255]).slice(0, 3).map(Number);
+            const dark = (0.2126 * rgb[0] + 0.7152 * rgb[1] + 0.0722 * rgb[2]) / 255 < 0.5;
+            const C = dark
+              ? ["#3987e5", "#d95926", "#199e70", "#c98500", "#d55181", "#2c9a2c"]
+              : ["#2a78d6", "#eb6834", "#1baf7a", "#eda100", "#e87ba4", "#008300"];
+            const width = get("layout.width") || 600;
+            const narrow = width < 520;
+            // vertical layout in px: title, button rows, error line, plot
+            const top = narrow ? 150 : 118;
+            const height = 480;
+            const plot = height - top - 92;
+            vars.lb = {
+              sel, dark, C, narrow, top, height,
+              plotWidth: width - (narrow ? 38 : 46) - 12,
+              y: (px) => 1 + px / plot, // px above the plot area, in paper units
+              dev: dark ? "rgba(230, 103, 103, 0.28)" : "rgba(227, 73, 72, 0.18)",
+              fill: (h) => sel === h,
+              line: (h) => sel === h || sel === 0,
+            };
+          }
+    line:
+      color: $ex css_vars['primary-text-color']
+      width: 1.6
+    hovertemplate: "Börse %{y:.1f} ct<extra></extra>"
+  # D+1: base (actual at the forecast's hours), deviation fill, forecast line
+  - entity: spot_forecast:de_lu_forecast_h1
+    name: Börsenpreis D+1
+    visible: $ex vars.lb.fill(1)
+    showlegend: false
+    hoverinfo: skip
+    line:
+      width: 0
+    filters:
+      - multiply: 100
+      - store_var: h1
+      - align_timestamps: actual
+      - map_y: vars.aligned.actual.ys[i]
+  - entity: spot_forecast:de_lu_forecast_h1
+    name: Abweichung
+    legendrank: 3
+    visible: $ex vars.lb.fill(1)
+    showlegend: $ex vars.lb.fill(1)
+    hoverinfo: skip
+    fill: tonexty
+    fillcolor: $ex vars.lb.dev
+    line:
+      width: 0
+  - entity: spot_forecast:de_lu_forecast_h1
+    name: '$ex vars.lb.sel === 0 ? "D+1" : "Prognose 1 Tag vorher"'
+    legendrank: 11
+    visible: $ex vars.lb.line(1)
+    line:
+      color: $ex vars.lb.C[0]
+      width: 1.6
+    hovertemplate: "D+1 %{y:.1f} ct<extra></extra>"
+  # D+2: base (actual at the forecast's hours), deviation fill, forecast line
+  - entity: spot_forecast:de_lu_forecast_h2
+    name: Börsenpreis D+2
+    visible: $ex vars.lb.fill(2)
+    showlegend: false
+    hoverinfo: skip
+    line:
+      width: 0
+    filters:
+      - multiply: 100
+      - store_var: h2
+      - align_timestamps: actual
+      - map_y: vars.aligned.actual.ys[i]
+  - entity: spot_forecast:de_lu_forecast_h2
+    name: Abweichung
+    legendrank: 3
+    visible: $ex vars.lb.fill(2)
+    showlegend: $ex vars.lb.fill(2)
+    hoverinfo: skip
+    fill: tonexty
+    fillcolor: $ex vars.lb.dev
+    line:
+      width: 0
+  - entity: spot_forecast:de_lu_forecast_h2
+    name: '$ex vars.lb.sel === 0 ? "D+2" : "Prognose 2 Tage vorher"'
+    legendrank: 12
+    visible: $ex vars.lb.line(2)
+    line:
+      color: $ex vars.lb.C[1]
+      width: 1.6
+    hovertemplate: "D+2 %{y:.1f} ct<extra></extra>"
+  # D+3: base (actual at the forecast's hours), deviation fill, forecast line
+  - entity: spot_forecast:de_lu_forecast_h3
+    name: Börsenpreis D+3
+    visible: $ex vars.lb.fill(3)
+    showlegend: false
+    hoverinfo: skip
+    line:
+      width: 0
+    filters:
+      - multiply: 100
+      - store_var: h3
+      - align_timestamps: actual
+      - map_y: vars.aligned.actual.ys[i]
+  - entity: spot_forecast:de_lu_forecast_h3
+    name: Abweichung
+    legendrank: 3
+    visible: $ex vars.lb.fill(3)
+    showlegend: $ex vars.lb.fill(3)
+    hoverinfo: skip
+    fill: tonexty
+    fillcolor: $ex vars.lb.dev
+    line:
+      width: 0
+  - entity: spot_forecast:de_lu_forecast_h3
+    name: '$ex vars.lb.sel === 0 ? "D+3" : "Prognose 3 Tage vorher"'
+    legendrank: 13
+    visible: $ex vars.lb.line(3)
+    line:
+      color: $ex vars.lb.C[2]
+      width: 1.6
+    hovertemplate: "D+3 %{y:.1f} ct<extra></extra>"
+  # D+4: base (actual at the forecast's hours), deviation fill, forecast line
+  - entity: spot_forecast:de_lu_forecast_h4
+    name: Börsenpreis D+4
+    visible: $ex vars.lb.fill(4)
+    showlegend: false
+    hoverinfo: skip
+    line:
+      width: 0
+    filters:
+      - multiply: 100
+      - store_var: h4
+      - align_timestamps: actual
+      - map_y: vars.aligned.actual.ys[i]
+  - entity: spot_forecast:de_lu_forecast_h4
+    name: Abweichung
+    legendrank: 3
+    visible: $ex vars.lb.fill(4)
+    showlegend: $ex vars.lb.fill(4)
+    hoverinfo: skip
+    fill: tonexty
+    fillcolor: $ex vars.lb.dev
+    line:
+      width: 0
+  - entity: spot_forecast:de_lu_forecast_h4
+    name: '$ex vars.lb.sel === 0 ? "D+4" : "Prognose 4 Tage vorher"'
+    legendrank: 14
+    visible: $ex vars.lb.line(4)
+    line:
+      color: $ex vars.lb.C[3]
+      width: 1.6
+    hovertemplate: "D+4 %{y:.1f} ct<extra></extra>"
+  # D+5: base (actual at the forecast's hours), deviation fill, forecast line
+  - entity: spot_forecast:de_lu_forecast_h5
+    name: Börsenpreis D+5
+    visible: $ex vars.lb.fill(5)
+    showlegend: false
+    hoverinfo: skip
+    line:
+      width: 0
+    filters:
+      - multiply: 100
+      - store_var: h5
+      - align_timestamps: actual
+      - map_y: vars.aligned.actual.ys[i]
+  - entity: spot_forecast:de_lu_forecast_h5
+    name: Abweichung
+    legendrank: 3
+    visible: $ex vars.lb.fill(5)
+    showlegend: $ex vars.lb.fill(5)
+    hoverinfo: skip
+    fill: tonexty
+    fillcolor: $ex vars.lb.dev
+    line:
+      width: 0
+  - entity: spot_forecast:de_lu_forecast_h5
+    name: '$ex vars.lb.sel === 0 ? "D+5" : "Prognose 5 Tage vorher"'
+    legendrank: 15
+    visible: $ex vars.lb.line(5)
+    line:
+      color: $ex vars.lb.C[4]
+      width: 1.6
+    hovertemplate: "D+5 %{y:.1f} ct<extra></extra>"
+  # D+6: base (actual at the forecast's hours), deviation fill, forecast line
+  - entity: spot_forecast:de_lu_forecast_h6
+    name: Börsenpreis D+6
+    visible: $ex vars.lb.fill(6)
+    showlegend: false
+    hoverinfo: skip
+    line:
+      width: 0
+    filters:
+      - multiply: 100
+      - store_var: h6
+      - align_timestamps: actual
+      - map_y: vars.aligned.actual.ys[i]
+  - entity: spot_forecast:de_lu_forecast_h6
+    name: Abweichung
+    legendrank: 3
+    visible: $ex vars.lb.fill(6)
+    showlegend: $ex vars.lb.fill(6)
+    hoverinfo: skip
+    fill: tonexty
+    fillcolor: $ex vars.lb.dev
+    line:
+      width: 0
+  - entity: spot_forecast:de_lu_forecast_h6
+    name: '$ex vars.lb.sel === 0 ? "D+6" : "Prognose 6 Tage vorher"'
+    legendrank: 16
+    visible: $ex vars.lb.line(6)
+    line:
+      color: $ex vars.lb.C[5]
+      width: 1.6
+    hovertemplate: "D+6 %{y:.1f} ct<extra></extra>"
+layout:
+  height: $ex vars.lb.height
+  separators: ",."
+  hovermode: x unified
+  dragmode: false
+  title:
+    text: $ex `<b>Rückblick nach Vorlauf</b><br><span style="font-size:12px;color:${css_vars['secondary-text-color']}">Prognose x Tage vorher gegen den echten Börsenpreis</span>`
+    x: 0
+    xref: paper
+    xanchor: left
+    "y": 1
+    yref: container
+    yanchor: top
+    pad:
+      t: 14
+    font:
+      size: 17
+      color: $ex css_vars['primary-text-color']
+  margin:
+    t: $ex vars.lb.top
+    r: 12
+    b: 92
+    l: '$ex vars.lb.narrow ? 38 : 46'
+  hoverlabel:
+    bgcolor: $ex css_vars['card-background-color']
+    bordercolor: $ex css_vars['secondary-text-color']
+    font:
+      color: $ex css_vars['primary-text-color']
+  legend:
+    orientation: h
+    x: 0
+    "y": -0.12
+    yanchor: top
+    traceorder: normal
+    entrywidthmode: '$ex vars.lb.narrow ? "fraction" : "pixels"'
+    entrywidth: '$ex vars.lb.narrow ? 0.5 : 0'
+    font:
+      size: '$ex vars.lb.narrow ? 11 : 12'
+  xaxis:
+    type: date
+    tickformat: "%d.%m."
+    hoverformat: "%a %d.%m. %H:%M"
+    gridcolor: rgba(127, 127, 127, 0.16)
+    fixedrange: true
+    rangeselector:
+      x: '$ex vars.lb.narrow ? -30 / vars.lb.plotWidth : 1'
+      xanchor: '$ex vars.lb.narrow ? "left" : "right"'
+      "y": '$ex vars.lb.y(vars.lb.narrow ? 40 : 44)'
+      yanchor: bottom
+      bgcolor: $ex css_vars['card-background-color']
+      activecolor: rgba(127, 127, 127, 0.28)
+      bordercolor: rgba(127, 127, 127, 0.4)
+      borderwidth: 1
+      font:
+        size: 12
+        color: $ex css_vars['primary-text-color']
+      buttons:
+        - count: 7
+          step: day
+          stepmode: backward
+          label: 7 T
+        - count: 30
+          step: day
+          stepmode: backward
+          label: 30 T
+        - count: 3
+          step: month
+          stepmode: backward
+          label: 3 M
+        - count: 6
+          step: month
+          stepmode: backward
+          label: 6 M
+  yaxis:
+    title:
+      text: ""
+    ticksuffix: " ct"
+    zeroline: true
+    zerolinecolor: rgba(127, 127, 127, 0.45)
+    gridcolor: rgba(127, 127, 127, 0.16)
+    fixedrange: true
+  updatemenus: |
+    $fn ({ vars, css_vars }) => {
+      const lb = vars.lb;
+      const H = [1, 2, 3, 4, 5, 6];
+      // trace order: Börsenpreis, then per horizon base, fill, line
+      const visible = (s) => [true, ...H.flatMap((h) => [s === h, s === h, s === h || s === 0])];
+      const label = (text, s, color) => (lb.sel === s
+        ? `<b><span style="color:${color}">${text}</span></b>`
+        : `<span style="color:${css_vars["secondary-text-color"]}">${text}</span>`);
+      const button = (text, s, color) => ({
+        label: label(text, s, color),
+        method: "restyle",
+        args: [{ visible: visible(s) }],
+        on_click: () => { window.spotForecastLookback = { h: s }; },
+      });
+      return [{
+        type: "buttons", direction: "right", showactive: false,
+        // on a phone the row starts at the card edge, to fit all seven buttons
+        x: lb.narrow ? -30 / lb.plotWidth : 0, xanchor: "left", y: lb.y(lb.narrow ? 70 : 38), yanchor: "bottom",
+        pad: { l: 0, r: 0, t: 0, b: 0 },
+        bgcolor: css_vars["card-background-color"], bordercolor: "rgba(127, 127, 127, 0.4)", borderwidth: 1,
+        font: { size: lb.narrow ? 11 : 12, color: css_vars["primary-text-color"] },
+        buttons: [...H.map((h) => button(`D+${h}`, h, lb.C[h - 1])), button("alle", 0, css_vars["primary-text-color"])],
+      }];
+    }
+  # The error figures over the shown range, and the range before the first data.
+  annotations: |
+    $fn ({ vars, css_vars, hass, get }) => {
+      const lb = vars.lb;
+      const [from, to] = get("visible_range") ?? [-Infinity, Infinity];
+      const threshold = Number(hass.states["binary_sensor.spot_forecast_de_lu_peak_risk"]?.attributes?.threshold) * 100;
+      const actual = new Map();
+      (vars.actual?.xs ?? []).forEach((x, i) => { if (vars.actual.ys[i] != null) actual.set(+x, vars.actual.ys[i]); });
+      const f1 = (v) => v.toLocaleString("de-DE", { minimumFractionDigits: 1, maximumFractionDigits: 1 });
+      const mae = (h) => {
+        const s = vars["h" + h];
+        let sum = 0, n = 0, psum = 0, pn = 0;
+        (s?.xs ?? []).forEach((x, i) => {
+          const a = actual.get(+x), f = s.ys[i];
+          if (a == null || f == null || +x < from || +x > to) return;
+          sum += Math.abs(f - a); n += 1;
+          if (a > threshold) { psum += Math.abs(f - a); pn += 1; }
+        });
+        return { mae: n ? sum / n : null, peak: pn ? psum / pn : null };
+      };
+      const ink = css_vars["primary-text-color"];
+      let text;
+      if (lb.sel) {
+        const e = mae(lb.sel);
+        const peak = Number.isFinite(threshold)
+          ? `   ${lb.narrow ? "Spitzen" : "in Spitzen über " + Math.round(threshold) + " ct"}: <b>${e.peak == null ? "keine" : f1(e.peak) + " ct"}</b>`
+          : "";
+        text = e.mae == null ? "noch keine Prognosen im Zeitraum" : `Ø Abweichung <b>${f1(e.mae)} ct</b>${peak}`;
+      } else {
+        const parts = [1, 2, 3, 4, 5, 6].map((h) => {
+          const e = mae(h);
+          return `<span style="color:${lb.C[h - 1]}">D+${h}</span> <b>${e.mae == null ? "–" : f1(e.mae)}</b>`;
+        });
+        text = `Ø Abweichung in ct:  ${parts.slice(0, lb.narrow ? 3 : 6).join("  ")}` + (lb.narrow ? `<br>${parts.slice(3).join("  ")}` : "");
+      }
+      const out = [{
+        xref: "paper", x: 0, xanchor: "left", yref: "paper", y: lb.y(8), yanchor: "bottom",
+        showarrow: false, align: "left", font: { size: 12, color: ink }, text,
+      }];
+      const first = vars.actual?.xs?.find((x, i) => vars.actual.ys[i] != null);
+      if (first && +first - from > 86400000) {
+        out.push({
+          xref: "x", x: new Date((from + +first) / 2), yref: "paper", y: 0.5, showarrow: false,
+          font: { size: 12, color: css_vars["secondary-text-color"] }, text: "noch keine Daten",
+        });
+      }
+      return out;
+    }
+  shapes: |
+    $fn ({ vars, get }) => {
+      const [from] = get("visible_range") ?? [];
+      const first = vars.actual?.xs?.find((x, i) => vars.actual.ys[i] != null);
+      if (!first || +first - from <= 86400000) return [];
+      return [{
+        type: "rect", xref: "x", yref: "paper", x0: new Date(from), x1: first, y0: 0, y1: 1,
+        layer: "below", line: { width: 0 }, fillcolor: "rgba(127, 127, 127, 0.08)",
+      }];
+    }
+config:
+  displayModeBar: false
+  scrollZoom: false
+  doubleClick: false

@@ -1,0 +1,396 @@
+# Spot Forecast: day-ahead prices and the six-day forecast, for the Plotly Graph Card.
+#
+# Needs: the Spot Forecast integration and Plotly Graph Card v4
+# (https://github.com/dbuezas/lovelace-plotly-graph-card). Add a manual card and paste
+# this YAML. Entities read: sensor.spot_forecast_de_lu_price (attribute `prices`),
+# binary_sensor.spot_forecast_de_lu_peak_risk (attribute `threshold`) and sun.sun; and
+# the long-term statistic spot_forecast:de_lu_price for yesterday.
+#
+# What it shows, on one time axis: yesterday and today (known prices, ink), the
+# forecast days (blue median), the peak risk (hatched red up to P90) and the low-price
+# chance (hatched green down to P10), the 4 dearest (▲) and cheapest (▼) hours of each
+# day, nights from sun.sun and a dotted "now" line. Above each day: weekday, date, the
+# maximum and "⚠ bis NN" when the peak risk crosses the threshold of the peak-risk
+# sensor (the option "peak threshold" of the integration).
+#
+# Times are handed to Plotly as wall-clock strings in the card's time zone (Home
+# Assistant's profile setting, as the card resolves it). The repeated hour of the
+# autumn clock change is drawn once, as the mean of both hours, so the step line never
+# runs backwards.
+type: custom:plotly-graph
+# Fetch window: yesterday's prices come from the statistics. The shown range is set
+# in layout.xaxis.range.
+hours_to_show: 50h
+refresh_interval: auto
+extended_touch_support:
+  pinch_to_zoom: false
+  double_tap_drag_to_zoom: false
+defaults:
+  entity:
+    # one unit for every trace, so they all share the left axis
+    unit_of_measurement: ct/kWh
+    extend_to_present: false
+    showlegend: true
+entities:
+  # Yesterday's hourly prices; the prices attribute starts at today 00:00.
+  - entity: spot_forecast:de_lu_price
+    statistic: mean
+    period: hour
+    internal: true
+    filters:
+      - store_var: yesterday
+  # Known prices. Bound to the price sensor so the card redraws whenever the sensor
+  # updates; its own recorded history is replaced by the data built here.
+  - entity: sensor.spot_forecast_de_lu_price
+    name: Börsenpreis
+    legendrank: 1
+    filters:
+      - fn: |-
+          ({ hass, vars, css_vars, get }) => {
+            const PRICE = "sensor.spot_forecast_de_lu_price";
+            const PEAK = "binary_sensor.spot_forecast_de_lu_peak_risk";
+            const H = 3600000;
+            const WD = ["So", "Mo", "Di", "Mi", "Do", "Fr", "Sa"];
+            // Wall clock in the time zone the card draws in ("server" or the browser's).
+            const zone = hass.locale?.time_zone === "server" ? hass.config?.time_zone : undefined;
+            const fmt = new Intl.DateTimeFormat("en-CA", {
+              timeZone: zone || undefined, year: "numeric", month: "2-digit", day: "2-digit",
+              hour: "2-digit", minute: "2-digit", hourCycle: "h23",
+            });
+            const wall = (t) => {
+              const p = {};
+              for (const { type, value } of fmt.formatToParts(new Date(t))) p[type] = value;
+              return `${p.year}-${p.month}-${p.day} ${p.hour}:${p.minute}`;
+            };
+            const addDays = (d, n) => {
+              const x = new Date(d + "T12:00:00Z");
+              x.setUTCDate(x.getUTCDate() + n);
+              return x.toISOString().slice(0, 10);
+            };
+            const addMinutes = (w, n) => {
+              const x = new Date(w.replace(" ", "T") + ":00Z");
+              return new Date(+x + n * 60000).toISOString().slice(0, 16).replace("T", " ");
+            };
+            // Points on the wall clock; a wall time seen twice (clock change) is averaged.
+            const series = (items) => {
+              const byWall = new Map();
+              for (const it of items) {
+                const p = byWall.get(it.w);
+                if (!p) { byWall.set(it.w, { ...it, n: 1 }); continue; }
+                for (const k of ["v", "p90", "p10"]) if (it[k] != null) p[k] = (p[k] * p.n + it[k]) / (p.n + 1);
+                p.n += 1;
+              }
+              return [...byWall.values()].sort((a, b) => (a.w < b.w ? -1 : 1));
+            };
+            const ct = (v) => (v == null || v === "" || isNaN(+v) ? null : +v * 100);
+
+            const now = new Date();
+            const today = wall(now).slice(0, 10);
+            const yesterday = addDays(today, -1);
+            const entries = hass.states[PRICE]?.attributes?.prices ?? [];
+            const threshold = ct(hass.states[PEAK]?.attributes?.threshold);
+
+            const y = vars.yesterday ?? { xs: [], ys: [] };
+            const known = series([
+              ...y.xs.map((x, i) => ({ w: wall(x), v: ct(y.ys[i]) }))
+                .filter((p) => p.w.slice(0, 10) === yesterday && p.v != null),
+              ...entries.filter((e) => e.source === "market")
+                .map((e) => ({ w: wall(e.time), v: ct(e.price) })),
+            ]);
+            const forecast = series(
+              entries.filter((e) => e.source === "forecast")
+                .map((e) => ({ w: wall(e.time), v: ct(e.price), p90: ct(e.p90), p10: ct(e.p10) })),
+            );
+
+            // Step lines hold each value to the next point: close the last slot.
+            const step = (pts, end) => (pts.length ? [...pts, { ...pts.at(-1), w: end }] : []);
+            const slot = (pts) => (pts.length > 1
+              ? (new Date(pts.at(-1).w.replace(" ", "T") + ":00Z") - new Date(pts.at(-2).w.replace(" ", "T") + ":00Z")) / 60000
+              : 60);
+            const fcStart = forecast[0]?.w;
+            const knownLine = step(known, fcStart ?? (known.length ? addMinutes(known.at(-1).w, slot(known)) : ""));
+            const fcLine = step(forecast, forecast.length ? addMinutes(forecast.at(-1).w, 60) : "");
+
+            // Per day: hourly means for the ranking, maximum, peak risk.
+            const days = new Map();
+            for (const [pts, isFc] of [[known, false], [forecast, true]]) {
+              for (const p of pts) {
+                const d = p.w.slice(0, 10);
+                const day = days.get(d) ?? { d, hours: new Map(), max: -Infinity, p90: -Infinity, fc: false };
+                const hour = day.hours.get(p.w.slice(0, 13)) ?? { sum: 0, n: 0, max: -Infinity, min: Infinity };
+                hour.sum += p.v; hour.n += 1;
+                hour.max = Math.max(hour.max, p.v); hour.min = Math.min(hour.min, p.v);
+                day.hours.set(p.w.slice(0, 13), hour);
+                day.max = Math.max(day.max, p.v);
+                if (isFc) { day.fc = true; day.p90 = Math.max(day.p90, p.p90 ?? -Infinity); }
+                days.set(d, day);
+              }
+            }
+            const dear = { x: [], y: [] };
+            const cheap = { x: [], y: [] };
+            for (const day of days.values()) {
+              const order = [...day.hours.entries()].sort((a, b) => a[1].sum / a[1].n - b[1].sum / b[1].n);
+              for (const [h, v] of order.slice(0, 4)) { cheap.x.push(h + ":30"); cheap.y.push(v.min); }
+              for (const [h, v] of order.slice(-4)) { dear.x.push(h + ":30"); dear.y.push(v.max); }
+            }
+
+            // Colours: the integration's palette, a little lighter on dark themes.
+            const bg = css_vars["card-background-color"] || "";
+            const rgb = bg.startsWith("#")
+              ? (bg.length === 4 ? [...bg.slice(1)].map((c) => parseInt(c + c, 16)) : [1, 3, 5].map((i) => parseInt(bg.slice(i, i + 2), 16)))
+              : (bg.match(/[\d.]+/g) || [255, 255, 255]).slice(0, 3).map(Number);
+            const dark = (0.2126 * rgb[0] + 0.7152 * rgb[1] + 0.0722 * rgb[2]) / 255 < 0.5;
+            const C = dark
+              ? { blue: "#3987e5", risk: "#e5605f", cheap: "#199e70", dear: "#d95926" }
+              : { blue: "#2a78d6", risk: "#d03b3b", cheap: "#1baf7a", dear: "#eb6834" };
+            const rgba = (hex, a) => `rgba(${[1, 3, 5].map((i) => parseInt(hex.slice(i, i + 2), 16)).join(", ")}, ${a})`;
+
+            const dayList = [...days.keys()].sort();
+            const first = dayList.includes(yesterday) ? yesterday : (dayList[0] ?? today);
+            const last = dayList.at(-1) ?? today;
+            const width = get("layout.width") || 600;
+            vars.sf = {
+              C, rgba, dark, wall, addDays, now: wall(now), width, narrow: width < 480,
+              threshold, fcStart, hasForecast: forecast.length > 0,
+              range: [first + " 00:00", addDays(last, 1) + " 00:00"],
+              fc: {
+                x: fcLine.map((p) => p.w), y: fcLine.map((p) => p.v),
+                p90: fcLine.map((p) => p.p90), p10: fcLine.map((p) => p.p10),
+              },
+              dear, cheap,
+              days: dayList.filter((d) => d >= first).map((d) => days.get(d)),
+              ink: css_vars["primary-text-color"], ink2: css_vars["secondary-text-color"], bg,
+            };
+            return { xs: knownLine.map((p) => p.w), ys: knownLine.map((p) => p.v) };
+          }
+    line:
+      color: $ex css_vars['primary-text-color']
+      width: 2.4
+      shape: hv
+    hovertemplate: "Börse %{y:.1f} ct<extra></extra>"
+  # Low-price chance: hatched in the cheap colour from P10 up to the median.
+  - entity: ""
+    name: P10
+    x: $ex vars.sf.fc.x
+    y: $ex vars.sf.fc.p10
+    visible: $ex vars.sf.hasForecast
+    showlegend: false
+    line:
+      color: $ex vars.sf.rgba(vars.sf.C.cheap, 0.5)
+      width: 0.8
+      shape: hv
+    hovertemplate: "ab %{y:.1f} ct möglich<extra></extra>"
+  - entity: ""
+    name: Tiefpreis-Chance (P10)
+    legendrank: 4
+    x: $ex vars.sf.fc.x
+    y: $ex vars.sf.fc.y
+    visible: $ex vars.sf.hasForecast
+    showlegend: $ex vars.sf.hasForecast
+    fill: tonexty
+    fillcolor: $ex vars.sf.rgba(vars.sf.C.cheap, 0.04)
+    fillpattern:
+      shape: "\\"
+      size: 7
+      solidity: 0.18
+      fgcolor: '$ex vars.sf.rgba(vars.sf.C.cheap, vars.sf.dark ? 0.6 : 0.5)'
+      bgcolor: $ex vars.sf.rgba(vars.sf.C.cheap, 0.04)
+    line:
+      width: 0
+      shape: hv
+    hoverinfo: skip
+  # Peak risk: hatched in the risk colour from the median up to P90.
+  - entity: ""
+    name: Median
+    x: $ex vars.sf.fc.x
+    y: $ex vars.sf.fc.y
+    visible: $ex vars.sf.hasForecast
+    showlegend: false
+    line:
+      width: 0
+      shape: hv
+    hoverinfo: skip
+  - entity: ""
+    name: Spitzenrisiko (P90)
+    legendrank: 3
+    x: $ex vars.sf.fc.x
+    y: $ex vars.sf.fc.p90
+    visible: $ex vars.sf.hasForecast
+    showlegend: $ex vars.sf.hasForecast
+    fill: tonexty
+    fillcolor: $ex vars.sf.rgba(vars.sf.C.risk, 0.06)
+    fillpattern:
+      shape: /
+      size: 7
+      solidity: 0.22
+      fgcolor: '$ex vars.sf.rgba(vars.sf.C.risk, vars.sf.dark ? 0.7 : 0.6)'
+      bgcolor: $ex vars.sf.rgba(vars.sf.C.risk, 0.05)
+    line:
+      color: $ex vars.sf.rgba(vars.sf.C.risk, 0.55)
+      width: 1
+      shape: hv
+    hovertemplate: "bis %{y:.1f} ct möglich<extra></extra>"
+  - entity: ""
+    name: Prognose
+    legendrank: 2
+    x: $ex vars.sf.fc.x
+    y: $ex vars.sf.fc.y
+    visible: $ex vars.sf.hasForecast
+    showlegend: $ex vars.sf.hasForecast
+    line:
+      color: $ex vars.sf.C.blue
+      width: 2.4
+      shape: hv
+    hovertemplate: "Prognose %{y:.1f} ct<extra></extra>"
+  - entity: ""
+    name: 4 teuerste Stunden
+    legendrank: 5
+    mode: markers
+    x: $ex vars.sf.dear.x
+    y: $ex vars.sf.dear.y
+    marker:
+      symbol: triangle-up
+      size: '$ex vars.sf.narrow ? 7 : 8'
+      color: $ex vars.sf.C.dear
+      line:
+        width: 1.5
+        color: $ex css_vars['card-background-color']
+    hoverinfo: skip
+  - entity: ""
+    name: 4 günstigste Stunden
+    legendrank: 6
+    mode: markers
+    x: $ex vars.sf.cheap.x
+    y: $ex vars.sf.cheap.y
+    marker:
+      symbol: triangle-down
+      size: '$ex vars.sf.narrow ? 7 : 8'
+      color: $ex vars.sf.C.cheap
+      line:
+        width: 1.5
+        color: $ex css_vars['card-background-color']
+    hoverinfo: skip
+layout:
+  height: 470
+  separators: ",."
+  hovermode: x unified
+  dragmode: false
+  title:
+    text: $ex `<b>Strompreis DE-LU</b><br><span style="font-size:12px;color:${css_vars['secondary-text-color']}">Börsenpreis und Prognose, ct/kWh ohne Abgaben</span>`
+    x: 0
+    xref: paper
+    xanchor: left
+    "y": 1
+    yref: container
+    yanchor: top
+    pad:
+      t: 14
+    font:
+      size: 17
+      color: $ex css_vars['primary-text-color']
+  margin:
+    t: 102
+    r: 12
+    b: 40
+    l: '$ex vars.sf.narrow ? 38 : 46'
+  hoverlabel:
+    bgcolor: $ex css_vars['card-background-color']
+    bordercolor: $ex css_vars['secondary-text-color']
+    font:
+      color: $ex css_vars['primary-text-color']
+  legend:
+    orientation: h
+    x: 0
+    "y": -0.1
+    yanchor: top
+    traceorder: normal
+    # two columns on a phone, one row when there is room
+    entrywidthmode: '$ex vars.sf.narrow ? "fraction" : "pixels"'
+    entrywidth: '$ex vars.sf.narrow ? 0.5 : 0'
+    font:
+      size: '$ex vars.sf.narrow ? 11 : 12'
+  xaxis:
+    type: date
+    range: $ex vars.sf.range
+    dtick: 86400000
+    tickformat: '$ex vars.sf.narrow ? "%d." : "%d.%m."'
+    hoverformat: "%a %d.%m. %H:%M"
+    showgrid: true
+    gridcolor: rgba(127, 127, 127, 0.16)
+    fixedrange: true
+  yaxis:
+    title:
+      text: ""
+    ticksuffix: " ct"
+    zeroline: true
+    zerolinecolor: rgba(127, 127, 127, 0.45)
+    gridcolor: rgba(127, 127, 127, 0.16)
+    fixedrange: true
+  annotations: |
+    $fn ({ vars, css_vars }) => {
+      const sf = vars.sf;
+      const WD = ["So", "Mo", "Di", "Mi", "Do", "Fr", "Sa"];
+      const f0 = (v) => Math.round(v).toLocaleString("de-DE");
+      const out = sf.days.map((day) => {
+        const wd = WD[new Date(day.d + "T12:00:00Z").getUTCDay()];
+        const date = `${day.d.slice(8, 10)}.${day.d.slice(5, 7)}.`;
+        const risk = day.fc && sf.threshold != null && day.p90 > sf.threshold;
+        const warn = risk ? `<span style="color:${sf.C.risk}">⚠ ${sf.narrow ? "" : "bis "}${f0(day.p90)}</span>` : " ";
+        const head = sf.narrow ? `<b>${wd}</b>` : `<b>${wd} ${date}</b>`;
+        const max = sf.narrow ? f0(day.max) : `max ${f0(day.max)} ct`;
+        return {
+          x: day.d + " 12:00", xref: "x", y: 1, yref: "paper", yanchor: "bottom",
+          showarrow: false, align: "center",
+          font: { size: sf.narrow ? 10 : 11, color: css_vars["primary-text-color"] },
+          text: `${head}<br><span style="color:${css_vars["secondary-text-color"]}">${max}</span><br>${warn}`,
+        };
+      });
+      out.push({
+        x: sf.now, xref: "x", y: 0, yref: "paper", xanchor: "right", yanchor: "bottom",
+        showarrow: false, font: { size: 10, color: css_vars["secondary-text-color"] }, text: "jetzt ",
+      });
+      if (sf.fcStart) {
+        out.push({
+          x: sf.fcStart, xref: "x", y: 0, yref: "paper", xanchor: "left", yanchor: "bottom",
+          showarrow: false, font: { size: 10, color: css_vars["secondary-text-color"] },
+          text: sf.narrow ? " Prognose" : " ab hier Prognose",
+        });
+      } else {
+        // the forecast was dropped (no successful run for 36 h): say so instead of leaving a gap
+        out.push({
+          x: 1, xref: "paper", y: 0, yref: "paper", xanchor: "right", yanchor: "bottom",
+          showarrow: false, font: { size: 10, color: css_vars["secondary-text-color"] },
+          text: "Prognose zurzeit nicht verfügbar",
+        });
+      }
+      return out;
+    }
+  shapes: |
+    $fn ({ hass, vars, css_vars }) => {
+      const sf = vars.sf;
+      const DAY = 86400000;
+      const shapes = [];
+      const sun = hass.states["sun.sun"]?.attributes;
+      if (sun?.next_rising && sun?.next_setting) {
+        const rise = +new Date(sun.next_rising);
+        let set = +new Date(sun.next_setting);
+        if (set > rise) set -= DAY; // it is night: this night began at the last setting
+        for (let i = -3; i <= 9; i++) {
+          shapes.push({
+            type: "rect", xref: "x", yref: "paper", y0: 0, y1: 1, layer: "below",
+            x0: sf.wall(set + i * DAY), x1: sf.wall(rise + i * DAY), line: { width: 0 },
+            fillcolor: sf.dark ? css_vars["primary-background-color"] : "rgba(60, 82, 120, 0.07)",
+            opacity: sf.dark ? 0.75 : 1,
+          });
+        }
+      }
+      shapes.push({
+        type: "line", xref: "x", yref: "paper", x0: sf.now, x1: sf.now, y0: 0, y1: 1,
+        line: { color: css_vars["secondary-text-color"], width: 1, dash: "dot" },
+      });
+      return shapes;
+    }
+config:
+  displayModeBar: false
+  scrollZoom: false
+  doubleClick: false
