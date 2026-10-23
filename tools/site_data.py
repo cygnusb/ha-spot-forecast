@@ -36,6 +36,7 @@ import sys
 from zoneinfo import ZoneInfo
 
 import card_scenarios as cs
+from const import DOMAIN
 
 from core.features import HORIZONS, Hourly
 from core.ingest import hourly_prices
@@ -91,6 +92,7 @@ def backtest(zone: Zone = DE_LU) -> dict:
     rows = ledger.finalize(
         zone.tz,
         today=cutoff + timedelta(days=GAP_GRACE_DAYS),
+        domain=DOMAIN,
         zone_id=zone.slug,
         default_p90=model.p90_offsets,
         default_p10=model.p10_offsets,

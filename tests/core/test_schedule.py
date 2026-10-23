@@ -3,7 +3,14 @@ from itertools import pairwise
 from zoneinfo import ZoneInfo
 
 from core.ingest import MarketSlot
-from core.schedule import WEATHER_RUNS_UTC, choose_anchor, is_expired, is_stale, next_run
+from core.schedule import (
+    RETRY_AFTER,
+    WEATHER_RUNS_UTC,
+    choose_anchor,
+    is_expired,
+    is_stale,
+    next_run,
+)
 
 TZ = "Europe/Berlin"
 BERLIN = ZoneInfo(TZ)
@@ -129,6 +136,20 @@ def test_next_run_hits_weather_times():
     assert next_run(datetime(2026, 7, 1, 20, 15, tzinfo=UTC), True, TZ) == datetime(
         2026, 7, 1, 22, 5, tzinfo=UTC
     )
+
+
+def test_next_run_retries_20_min_after_a_failed_run():
+    assert timedelta(minutes=20) == RETRY_AFTER
+    # 10:15 local: the regular run is the 13:00 poll, the retry comes first
+    now = _local(2026, 10, 22, 10, 15)
+    assert next_run(now, False, TZ) == _local(2026, 10, 22, 13, 0).astimezone(UTC)
+    assert next_run(now, False, TZ, retry=True) == _local(2026, 10, 22, 10, 35).astimezone(UTC)
+    assert next_run(now, True, TZ, retry=True) == _local(2026, 10, 22, 10, 35).astimezone(UTC)
+    # a regular run sooner than the retry stays: the 15-minute poll
+    now = _local(2026, 10, 22, 13, 7)
+    assert next_run(now, False, TZ, retry=True) == _local(2026, 10, 22, 13, 15).astimezone(UTC)
+    # UTC-aware, like every other result
+    assert next_run(now, True, TZ, retry=True).utcoffset() == timedelta(0)
 
 
 def test_stale_after_failed_attempt_or_7h():
