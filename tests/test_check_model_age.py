@@ -121,3 +121,10 @@ def test_future_limit_matches_the_integration():
     from core.manifest import MAX_CUTOFF_AHEAD
 
     assert MAX_CUTOFF_AHEAD.days == cma.FUTURE_DAYS
+
+
+def test_every_zone_is_checked(monkeypatch, capsys):
+    assert _run(monkeypatch, _manifest(de_lu="2026-12-01", nl="2026-12-01")) == 0
+    assert "All 2 published models" in capsys.readouterr().out
+    assert _run(monkeypatch, _manifest(de_lu="2026-12-01", nl="2026-10-01")) == 1
+    assert "::error::nl: published model nl-2026-10" in capsys.readouterr().out

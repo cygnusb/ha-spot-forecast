@@ -95,7 +95,7 @@ def test_training_installs_the_hash_locked_requirements():
 @pytest.mark.parametrize("workflow", ["train.yml", "validate.yml", "release.yml", "pages.yml"])
 def test_every_job_has_a_timeout(workflow):
     for name, job in _load(workflow)["jobs"].items():
-        expected = 120 if (workflow, name) == ("train.yml", "train") else 30
+        expected = 240 if (workflow, name) == ("train.yml", "train") else 30
         assert job.get("timeout-minutes") == expected, name
 
 
@@ -150,27 +150,40 @@ def test_train_workflow_keeps_data_releases_out_of_hacs():
 def test_train_workflow_publishes_only_on_pass():
     wf = _load("train.yml")
     train, publish = _steps(wf, "train"), _steps(wf, "publish")
-    ci = _step(train, "python -m training.ci")
-    gate = _step(train, "out/gate.json")
+    ci = _step(train, "python -m training.ci_zones")
+    gate = _step(train, "jq -r '.passed | join")
     upload = _step(publish, "gh release upload models")
     issue = _step(publish, "Model training gate failed")
     assert ci["id"] == "ci"
-    assert gate["id"] == "gate"
-    assert "steps.ci.outputs.rc == '0'" in gate["if"]
+    assert gate["id"] == "gate" and "if" not in gate  # runs only after the ci step succeeded
     assert "already_published" in gate["run"]
     outputs = wf["jobs"]["train"]["outputs"]
-    for name in ("passed", "already_published", "version", "manifest"):
+    for name in ("read", "passed", "failed", "lagged", "manifest"):
         assert outputs[name] == f"${{{{ steps.gate.outputs.{name} }}}}"
-    assert outputs["rc"] == "${{ steps.ci.outputs.rc }}"
-    assert "needs.train.outputs.passed == 'true'" in upload["if"]
-    assert "needs.train.outputs.manifest == 'true'" in upload["if"]
-    assert "needs.train.outputs.already_published != 'true'" in upload["if"]
-    assert "needs.train.outputs.passed != 'true'" in issue["if"]
-    assert "needs.train.outputs.already_published != 'true'" in issue["if"]
-    assert "needs.train.outputs.rc == '0'" in issue["if"]
-    assert "--body-file out/issue.md" in issue["run"]
+    assert upload["if"] == (
+        "needs.train.outputs.passed != '' && needs.train.outputs.manifest == 'true'"
+    )
+    assert upload["env"]["PASSED"] == "${{ needs.train.outputs.passed }}"
+    assert issue["if"] == "needs.train.outputs.failed != ''"
+    assert issue["env"]["FAILED"] == "${{ needs.train.outputs.failed }}"
+    assert '--body-file "out/$zone/issue.md"' in issue["run"]
     # the manifest goes up only if it names the very files about to be uploaded
     assert upload["run"].index("sha256sum -c") < upload["run"].index("gh release upload")
+    assert "select(.version == $v)" in upload["run"]
+
+
+def test_train_workflow_fails_the_run_for_an_erroring_zone_after_the_hand_over():
+    wf = _load("train.yml")
+    train = _steps(wf, "train")
+    ci = _step(train, "python -m training.ci_zones")
+    # a zone's error does not stop the step before the results are read and handed on
+    assert 'python -m training.ci_zones "${args[@]}" 2>out/ci-stderr.txt || rc=$?' in ci["run"]
+    assert ci["run"].rstrip().endswith("fi") and "out/summary.json" in ci["run"]
+    last = train[-1]
+    assert last["if"] == "steps.gate.outputs.errors != ''"
+    assert "exit 1" in last["run"]
+    uploads = [s for s in train if "upload-artifact" in s.get("uses", "")]
+    assert train.index(uploads[-1]) < train.index(last)
 
 
 def test_train_workflow_override_only_by_hand():
@@ -180,13 +193,13 @@ def test_train_workflow_override_only_by_hand():
     field = _on(wf)["workflow_dispatch"]["inputs"][name]
     assert field["type"] == "boolean" and field["default"] is False
     assert "feature-schema change" in field["description"]
-    ci = _step(_steps(wf, "train"), "python -m training.ci")
+    ci = _step(_steps(wf, "train"), "python -m training.ci_zones")
     assert ci["env"]["ACCEPT_INCOMPARABLE"] == (
         "${{ github.event_name == 'workflow_dispatch' && inputs.accept_incomparable == true }}"
     )
     run = ci["run"]
     assert 'if [ "$ACCEPT_INCOMPARABLE" = true ]; then' in run
-    assert run.index("args+=(--accept-incomparable)") < run.index("python -m training.ci")
+    assert run.index("args+=(--accept-incomparable)") < run.index("python -m training.ci_zones")
     # the input reaches nothing else
     text = (WORKFLOWS / "train.yml").read_text()
     assert text.count("inputs.accept_incomparable") == 1
@@ -197,11 +210,12 @@ def test_train_workflow_hands_its_files_to_publish():
     train, publish = _steps(wf, "train"), _steps(wf, "publish")
     uploads = {s["with"]["name"]: s for s in train if "upload-artifact" in s.get("uses", "")}
     assert uploads["out"]["with"]["path"] == "out/"
-    assert uploads["out"]["if"] == "steps.ci.outputs.rc == '0' || steps.ci.outputs.rc == '2'"
+    assert uploads["out"]["if"] == "steps.gate.outputs.read == 'true'"
     assert uploads["raw-data"]["with"]["path"] == "raw.tar.gz"
-    assert train.index(uploads["raw-data"]) < _index(train, "python -m training.ci")
-    downloads = {s["with"]["name"] for s in publish if "download-artifact" in s.get("uses", "")}
-    assert downloads == {"out", "raw-data"}
+    assert train.index(uploads["raw-data"]) < _index(train, "python -m training.ci_zones")
+    downloads = {s["with"]["name"]: s for s in publish if "download-artifact" in s.get("uses", "")}
+    assert set(downloads) == {"out", "raw-data"}
+    assert downloads["out"]["if"] == "needs.train.outputs.read == 'true'"
     # the archive goes up also when the training fails after it was made
     assert wf["jobs"]["publish"]["if"] == "always() && needs.train.outputs.archived == 'true'"
 
@@ -209,13 +223,14 @@ def test_train_workflow_hands_its_files_to_publish():
 def test_train_workflow_compares_with_up_to_three_published_models():
     train = _steps(_load("train.yml"), "train")
     previous = _step(train, "releases/tags/models")
-    assert previous["id"] == "previous"
     run = previous["run"]
-    assert 'echo "$sha  previous/$name" | sha256sum -c -' in run
+    # per zone, into its own directory
+    assert "for zone in $(python -m training.zones); do" in run
+    assert 'echo "$sha  previous/$zone/$name" | sha256sum -c -' in run
+    assert 'test("^" + $z + "-[0-9]{4}-[0-9]{2}' in run
     assert ".[-2:]" in run and "revoked" in run  # two older ones, never a revoked one
-    ci = _step(train, "python -m training.ci")
-    assert ci["env"]["PREVIOUS_MODELS"] == "${{ steps.previous.outputs.models }}"
-    assert '--previous-model "$model"' in ci["run"]
+    ci = _step(train, "python -m training.ci_zones")
+    assert "--previous previous" in ci["run"]
     # writes belong to the publish job
     assert "gh release edit" not in "".join(s.get("run", "") for s in train)
 
@@ -225,24 +240,29 @@ def test_train_workflow_never_replaces_a_published_version():
     commands = _commands(publish["run"], "gh")
     uploads = [c for c in commands if c[:3] == ["gh", "release", "upload"]]
     assert len(uploads) == 2
-    # the versioned assets: an existing name fails the step instead of being replaced
+    # the versioned assets of every passed zone: an existing name fails the step
     assert uploads[0][:4] == ["gh", "release", "upload", "models"]
-    assert [u.removeprefix("out/$VERSION") for u in uploads[0][4:]] == [
+    assert [u.removeprefix("out/$zone/$version") for u in uploads[0][4:]] == [
         ".json.gz",
         ".backfill.json.gz",
         ".report.md",
     ]
-    # the manifest goes up last: it must never name assets that are not there yet
+    # the manifest goes up last and once: it must never name assets that are not there yet
     assert uploads[1] == ["gh", "release", "upload", "models", "out/manifest.json", "--clobber"]
     assert commands.index(uploads[1]) == len(commands) - 3  # then only the notes
+    run = publish["run"]
+    assert run.index("for version in $PASSED; do", run.index("gh release create")) < run.index(
+        'gh release upload models "out/$zone'
+    )
 
 
-def test_train_workflow_prepends_the_report_to_the_release_notes():
+def test_train_workflow_prepends_the_reports_to_the_release_notes():
     publish = _step(_steps(_load("train.yml"), "publish"), "gh release upload models")
     run = publish["run"]
     earlier = run.index("gh release view models --json body -q .body")
     assert run.index("gh release upload models out/manifest.json") < earlier
-    assert earlier < run.index("cat out/release-notes.md") < run.index('cat "$RUNNER_TEMP/earlier')
+    assert run.index('cat "out/$zone/release-notes.md"') < earlier
+    assert 'cat "$RUNNER_TEMP/new-notes.md" "$RUNNER_TEMP/earlier-notes.md"' in run
     assert run.rstrip().endswith('gh release edit models --notes-file "$RUNNER_TEMP/notes.md"')
 
 
@@ -256,10 +276,9 @@ def test_train_workflow_opens_an_issue_only_once(title):
 def test_train_workflow_opens_data_lag_issue():
     wf = _load("train.yml")
     lag = _step(_steps(wf, "publish"), "Model training waiting for data")
-    assert lag["if"] == "needs.train.outputs.rc == '2'"
-    assert "out/ci-stderr.txt" in lag["run"]
-    ci = _step(_steps(wf, "train"), "python -m training.ci")
-    # Exit 2 is the data lag; every other non-zero code fails the job.
+    assert lag["if"] == "needs.train.outputs.lagged != ''"
+    assert "out/ci-stderr.txt" in lag["run"] and "$LAGGED" in lag["run"]
+    ci = _step(_steps(wf, "train"), "python -m training.ci_zones")
     assert "2>out/ci-stderr.txt" in ci["run"].replace(" ", "")
     assert "--cutoff" in ci["run"]
 
