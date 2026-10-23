@@ -9,6 +9,7 @@ on:
     # what picks up a new Home Assistant release without anyone pushing a
     # commit. A failing scheduled run notifies the repository owner.
     - cron: "0 4 * * *"
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -171,6 +172,8 @@ jobs:
     # The daily liveness check of the model channel: red once a published model is more than
     # 45 days old, whatever stopped the monthly training (its schedule switched off, data-lag
     # or gate-failure issues left unanswered). Quiet until the first model is published.
+    # Only on the daily schedule and by hand: a push or pull request must not turn red over it.
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
