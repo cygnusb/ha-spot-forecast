@@ -167,6 +167,27 @@ hour off there) gave 23.47, −0.16 on the 3.6 % of rows they change; a differen
 alone moves the overall MAE by 0.07 and those rows by 0.46. Neither is worth a feature-schema
 bump on its own; the lag fix should ride along with the next bump that happens anyway.
 
+### Price levels relative to the 7-day mean (`rel`)
+
+The target is already the deviation from the 7-day mean in units of the evening price level
+(`scale`), but the price-level features were absolute: a tree split at 120 EUR/MWh means
+something else at a gas price of 30 than at 80. `rel` turns them into the target's units:
+`(x − D_mean7) / scale` for `p_lastday, p_lastweek, D_mean, D_min, D_max, D_mean30, D_min7,
+D_max7, D_gq_evening14, D_gq_q90_14`, `x / scale` for `D_std, D_std7`; `D_mean7` stays
+absolute. Training pipeline features (`core`) against `core_rel`, walk-forward with monthly
+refit and 600 iterations, median model (`zones/bt.py`), MAE ct/kWh:
+
+| issue days | variant | D+1 | D+2 | D+3 | D+4 | D+5 | D+6 | all | bias |
+|---|---|---|---|---|---|---|---|---|---|
+| 2025-10-01 … 2026-10-21 | absolute | 1.96 | 2.07 | 2.20 | 2.38 | 2.67 | 2.82 | 2.35 | −0.63 |
+| | **rel** | 1.82 | 1.90 | 2.04 | 2.21 | 2.54 | 2.70 | **2.20** | −0.28 |
+| 2025-04-01 … 2025-09-30 | absolute | 1.54 | 1.59 | 1.61 | 1.72 | 1.94 | 2.02 | 1.74 | −0.08 |
+| | **rel** | 1.52 | 1.58 | 1.61 | 1.71 | 1.94 | 2.06 | **1.73** | −0.07 |
+
+In the rising-price year the gain is 0.15 ct and the negative bias halves: the trees no
+longer meet price levels they have never seen. In the calm 2025 summer (prices flat, little
+to extrapolate) `rel` is even (−0.003 ct overall), so it costs nothing where it does not help.
+
 ### Low-price chance (P10)
 
 A P10 quantile model (`--quantile 0.1 --target gq`) with the mirrored rolling conformal
