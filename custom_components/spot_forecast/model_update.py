@@ -165,7 +165,12 @@ class ModelUpdater:
         if not wants_download(entry, self._coordinator.model.train_cutoff, FEATURE_SCHEMA):
             return CURRENT
         for asset_url in (entry.model_url, entry.backfill_url):
-            if not asset_url.startswith(self._release_base):
+            name = asset_url[len(self._release_base) :]
+            if (
+                not asset_url.startswith(self._release_base)
+                or not name
+                or any(c in name for c in "/%?#\\")
+            ):
                 error = Rejected(f"{asset_url} is not in the release {self._release_base}")
                 self._warn_once(entry.version, error)
                 return FAILED

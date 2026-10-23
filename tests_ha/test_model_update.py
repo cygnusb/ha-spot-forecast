@@ -212,14 +212,24 @@ async def test_model_failing_its_checks_keeps_current_model(
     assert message in warnings[0].getMessage()
 
 
+@pytest.mark.parametrize(
+    "base",
+    [
+        "https://example.org/releases/download/models/",
+        MODELS_BASE + "../../",  # climbs out of the release
+        MODELS_BASE + "%2e%2e%2f",  # the same, encoded
+        MODELS_BASE + "x?y=",  # a query smuggled into the name
+    ],
+)
 async def test_assets_outside_the_release_are_not_fetched(
     hass_with_recorder: HomeAssistant,
     set_up: SetUp,
     sources: Sources,
     caplog: pytest.LogCaptureFixture,
+    base: str,
 ) -> None:
     newer = _model(date(2026, 11, 1))
-    sources.release = _published(newer, base="https://example.org/releases/download/models/")
+    sources.release = _published(newer, base=base)
     entry = await set_up({CONF_AUTO_UPDATE: True})
 
     assert await entry.runtime_data.updater.async_check() == "failed"
