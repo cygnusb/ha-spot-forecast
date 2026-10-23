@@ -227,10 +227,10 @@ def _weather_features(w: Callable[[str], np.ndarray], times: list[datetime], zon
         # sum() then divide, in the research order, so values match to the last bit
         return sum(fn(p) for p in points) / len(points)
 
-    f["solar_est_mean"] = avg(est, zone.solar_points)
-    f["wind_mean"] = avg(lambda p: w(f"{p}__wind_speed_100m") / 3.6, zone.wind_points)
-    f["wind_power_idx"] = avg(lambda p: _wind_power(w(f"{p}__wind_speed_100m")), zone.wind_points)
-    f["solar_mean"] = avg(lambda p: w(f"{p}__shortwave_radiation"), zone.solar_points)
+    f["solar_est_mean"] = avg(est, zone.solar)
+    f["wind_mean"] = avg(lambda p: w(f"{p}__wind_speed_100m") / 3.6, zone.wind)
+    f["wind_power_idx"] = avg(lambda p: _wind_power(w(f"{p}__wind_speed_100m")), zone.wind)
+    f["solar_mean"] = avg(lambda p: w(f"{p}__shortwave_radiation"), zone.solar)
     f["temp_mean"] = avg(lambda p: w(f"{p}__temperature_2m"), zone.points)
     f["cloud_mean"] = avg(lambda p: w(f"{p}__cloud_cover"), zone.points)
     f["nb_wind_power_idx"] = avg(lambda p: _wind_power(w(f"{p}__wind_speed_100m")), zone.nb_wind)

@@ -81,7 +81,7 @@ def test_missing_weather_hours_are_invalid(golden, tiny_model_file):
     assert all(s.valid for s in ok)
     target = ok[5]
     weather = {h: dict(series) for h, series in case.weather.items()}
-    for p in DE_LU.wind_points:  # blank that hour at every wind point
+    for p in DE_LU.wind:  # blank that hour at every wind point
         key = f"{p}__wind_speed_100m"
         s = weather[target.h][key]
         values = s.values.copy()
