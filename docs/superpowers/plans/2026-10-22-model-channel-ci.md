@@ -192,6 +192,7 @@
 
 - Merge to main and push.
 - Bootstrap the releases:
+  - Both releases are created with `--prerelease --latest=false` (HACS must never offer them).
   - `training-data` with `raw.tar.gz` built from `research/data` (the same file layout as the training raw dir; check this first).
   - `models` with the 2026-10 model, backfill, report and a manifest built by `training.manifest`.
 - Trigger `train.yml` once via `workflow_dispatch` as a smoke test, and confirm validate is green.
