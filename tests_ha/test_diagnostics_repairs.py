@@ -12,7 +12,7 @@ from homeassistant.helpers import issue_registry as ir
 import pytest
 
 import custom_components.spot_forecast as integration
-from custom_components.spot_forecast.const import CONF_BACKFILL_DAYS, DOMAIN
+from custom_components.spot_forecast.const import CONF_AUTO_UPDATE, CONF_BACKFILL_DAYS, DOMAIN
 from custom_components.spot_forecast.diagnostics import async_get_config_entry_diagnostics
 from custom_components.spot_forecast.model_loader import load_bundled
 
@@ -24,7 +24,7 @@ async def test_model_outdated_issue_created_and_cleared(
     hass = hass_with_recorder
     model, backfill = load_bundled("DE-LU")
     old = replace(model, train_cutoff=date(2026, 8, 22))
-    monkeypatch.setattr(integration, "load_bundled", lambda zone: (old, backfill))
+    monkeypatch.setattr(integration, "load_active", lambda zone, _: (old, backfill, "bundled"))
     entry = await set_up()
     issue_id = f"model_outdated_{entry.entry_id}"
     registry = ir.async_get(hass)
@@ -74,9 +74,10 @@ async def test_diagnostics_contains_model_and_ledger(
 
     diag = json.loads(json.dumps(await async_get_config_entry_diagnostics(hass, entry)))
 
-    assert diag["options"] == {CONF_BACKFILL_DAYS: 10}
+    assert diag["options"] == {CONF_BACKFILL_DAYS: 10, CONF_AUTO_UPDATE: False}
     assert diag["model"] == {
         "version": model.version,
+        "source": "bundled",
         "train_cutoff": "2026-10-01",
         "created": model.created.isoformat(),
     }

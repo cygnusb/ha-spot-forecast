@@ -295,10 +295,15 @@ class Ledger:
 
 
 def runs_from_backfill_file(data: bytes, model_version: str, tz: str) -> list[Run]:
-    """Parse the training backfill (gzip JSON, format 1) into one run per anchor day."""
+    """Parse the training backfill (gzip JSON, format 1) into one run per anchor day.
+
+    The runs carry the model version the file names, else ``model_version``: a
+    downloaded model without its own file uses the bundled one, made by another model.
+    """
     doc = json.loads(gzip.decompress(data))
     if doc.get("format") != BACKFILL_FORMAT:
         raise ValueError(f"unsupported backfill format {doc.get('format')!r}")
+    version = doc.get("model_version") or model_version
     zone = ZoneInfo(tz)
     slots: dict[date, list[Slot]] = {}
     for t_iso, h, median, p90, p10 in doc["rows"]:
@@ -311,7 +316,7 @@ def runs_from_backfill_file(data: bytes, model_version: str, tz: str) -> list[Ru
         Run(
             anchor,
             datetime.combine(anchor, time(ISSUE_HOUR), zone).astimezone(UTC),
-            model_version,
+            version,
             tuple(slots[anchor]),
             True,
         )

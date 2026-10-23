@@ -180,6 +180,39 @@ async def test_get_body_client_error_is_not_retried(
     assert pauses == []
 
 
+async def test_get_body_within_limit(
+    hass: HomeAssistant, aioclient_mock: AiohttpClientMocker, pauses: list[float]
+) -> None:
+    aioclient_mock.get(TEST_URL, content=b"x" * 200_000)
+
+    assert await get_body(async_get_clientsession(hass), TEST_URL, {}, 200_000) == b"x" * 200_000
+
+
+async def test_get_body_rejects_a_declared_length_above_the_limit(
+    hass: HomeAssistant, aioclient_mock: AiohttpClientMocker, pauses: list[float]
+) -> None:
+    aioclient_mock.get(TEST_URL, content=b"x" * 10, headers={"Content-Length": "1000"})
+
+    with pytest.raises(SourceError, match="limit"):
+        await get_body(async_get_clientsession(hass), TEST_URL, {}, 999)
+
+    assert aioclient_mock.call_count == 1  # not retried
+    assert pauses == []
+
+
+async def test_get_body_stops_reading_past_the_limit(
+    hass: HomeAssistant, aioclient_mock: AiohttpClientMocker, pauses: list[float]
+) -> None:
+    """No Content-Length (chunked): the body is counted while it is read."""
+    aioclient_mock.get(TEST_URL, content=b"x" * 200_001)
+
+    with pytest.raises(SourceError, match="limit"):
+        await get_body(async_get_clientsession(hass), TEST_URL, {}, 200_000)
+
+    assert aioclient_mock.call_count == 1
+    assert pauses == []
+
+
 async def test_fetch_previous_runs_chunks_per_month(
     hass: HomeAssistant, aioclient_mock: AiohttpClientMocker, pauses: list[float]
 ) -> None:

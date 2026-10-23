@@ -1,0 +1,46 @@
+name: Release
+
+# Attaches the integration as a ZIP to every published release. HACS installs
+# this asset (zip_release in hacs.json) and its download counter counts it.
+# The ZIP bundles the newest published model that this commit can load, so a
+# release never ships an older model than the one users would download anyway.
+
+on:
+  release:
+    types: [published]
+
+permissions:
+  contents: write
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+jobs:
+  zip:
+    name: Attach ZIP
+    # The rolling `models` and `training-data` releases carry data, not the integration.
+    if: github.event.release.tag_name != 'models' && github.event.release.tag_name != 'training-data'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Bundle the published models
+        # Keeps the committed files if nothing is published yet; fails the job
+        # on a download or checksum error.
+        run: python tools/fetch_published_model.py custom_components/spot_forecast/models
+
+      - name: Build ZIP
+        run: |
+          cd custom_components/spot_forecast
+          zip -r "$GITHUB_WORKSPACE/spot_forecast.zip" . -x "__pycache__/*" "*/__pycache__/*" "*.pyc"
+
+      - name: Upload release asset
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.event.release.tag_name }}
+        run: gh release upload "$TAG" spot_forecast.zip --clobber

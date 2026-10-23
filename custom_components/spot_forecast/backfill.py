@@ -64,7 +64,8 @@ async def run_backfill(
     A source error ends the pass with what was added so far (``error`` set); the window is
     then not marked done, and the coordinator tries again later.
     """
-    model, zone = coordinator.model, coordinator.zone
+    # the model and its backfill file together, before any await (see ``set_model``)
+    model, backfill, zone = coordinator.model, coordinator.backfill, coordinator.zone
     tz = ZoneInfo(zone.tz)
     today = dt_util.utcnow().astimezone(tz).date()
     first = today - timedelta(days=days)
@@ -73,7 +74,7 @@ async def run_backfill(
 
     bundled = await hass.async_add_executor_job(
         runs_from_backfill_file,
-        coordinator.config_entry.runtime_data.backfill,
+        backfill,
         model.version,
         zone.tz,
     )

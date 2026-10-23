@@ -83,7 +83,7 @@ class LastRunSensor(SpotEntity, SensorEntity):
 
 
 class ModelVersionSensor(SpotEntity, SensorEntity):
-    """Version of the bundled model, with its training cutoff and backtest metrics."""
+    """Version of the active model, with its source, training cutoff and backtest metrics."""
 
     _attr_entity_category = EntityCategory.DIAGNOSTIC
 
@@ -96,8 +96,12 @@ class ModelVersionSensor(SpotEntity, SensorEntity):
 
     @property
     def extra_state_attributes(self) -> dict[str, Any]:
-        model = self.coordinator.data.model
-        return {"train_cutoff": model.train_cutoff.isoformat(), "metrics": model.metrics}
+        data = self.coordinator.data
+        return {
+            "source": data.model_source,
+            "train_cutoff": data.model.train_cutoff.isoformat(),
+            "metrics": data.model.metrics,
+        }
 
 
 class ForecastErrorSensor(SpotEntity, SensorEntity):

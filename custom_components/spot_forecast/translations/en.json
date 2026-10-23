@@ -22,11 +22,13 @@
         "title": "Spot Forecast options",
         "data": {
           "peak_threshold": "Peak price threshold",
-          "backfill_days": "Backfill window (days)"
+          "backfill_days": "Backfill window (days)",
+          "auto_update": "Update models automatically"
         },
         "data_description": {
           "peak_threshold": "Wholesale price above which an hour counts as a price peak, in ct/kWh without taxes or grid fees. The default comes from the model's training data.",
-          "backfill_days": "How many past days of forecasts are reconstructed on first start so accuracy statistics have history. 0 turns backfill off."
+          "backfill_days": "How many past days of forecasts are reconstructed on first start so accuracy statistics have history. 0 turns backfill off.",
+          "auto_update": "Once a day, download a newer forecast model for this zone when one is published. It is used only if it fits this version of the integration and passes its checks."
         }
       }
     }
@@ -89,7 +91,7 @@
   "issues": {
     "model_outdated": {
       "title": "Spot Forecast model is outdated",
-      "description": "The bundled forecast model {version} was trained on data up to {cutoff}, more than {max_age} days ago. Forecasts get less accurate as the market changes. Update the Spot Forecast integration to get a newer model."
+      "description": "The forecast model {version} was trained on data up to {cutoff}, more than {max_age} days ago. Forecasts get less accurate as the market changes. Turn on automatic model updates in the options, or update the Spot Forecast integration, to get a newer model."
     }
   }
 }

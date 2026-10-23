@@ -15,6 +15,7 @@ from .features import FEATURE_NAMES, FEATURE_SCHEMA, HORIZONS
 
 FORMAT = 1
 _ROW_CHUNK = 4096
+SAMPLE_LIMIT = 1e3  # |prediction| bound of the sample check (scaled deviations, not EUR/MWh)
 
 
 class ModelMismatch(ValueError):
@@ -178,7 +179,16 @@ def load_model(data: bytes) -> ModelFile:
         return _model_from_json(json.loads(gzip.decompress(data)))
     except ModelMismatch:
         raise
-    except (OSError, EOFError, zlib.error, ValueError, KeyError, TypeError, AttributeError) as e:
+    except (
+        OSError,
+        EOFError,
+        zlib.error,
+        ValueError,
+        KeyError,
+        TypeError,
+        AttributeError,
+        OverflowError,  # JSON integers too large for numpy
+    ) as e:
         raise ModelCorrupt(f"model file is corrupt: {type(e).__name__}: {e}") from e
 
 
@@ -208,3 +218,25 @@ def _model_from_json(doc: Any) -> ModelFile:
         capacity={k: float(v) for k, v in doc["capacity"].items()},
         metrics=doc["metrics"],
     )
+
+
+def _sample() -> np.ndarray:
+    """Two rows: every feature missing, and every feature 0.0."""
+    sample = np.vstack([np.full(len(FEATURE_NAMES), np.nan), np.zeros(len(FEATURE_NAMES))])
+    sample.flags.writeable = False
+    return sample
+
+
+_SAMPLE = _sample()
+
+
+def sample_check(model: ModelFile) -> None:
+    """Raise ``ModelCorrupt`` unless the median, P90 and P10 predictions of a fixed sample
+    are finite and below ``SAMPLE_LIMIT`` in absolute value.
+
+    For a model from ``load_model`` (whose trees are checked to be well-formed).
+    """
+    for name in ("median", "p90", "p10"):
+        y = getattr(model, name).predict(_SAMPLE)
+        if not (np.isfinite(y).all() and (np.abs(y) < SAMPLE_LIMIT).all()):
+            raise ModelCorrupt(f"{name}: sample predictions {y.tolist()} are not plausible")

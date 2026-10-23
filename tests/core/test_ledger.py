@@ -299,6 +299,13 @@ def _backfill_bytes(rows, version="v1") -> bytes:
     return gzip.compress(json.dumps(doc).encode(), mtime=0)
 
 
+def test_backfill_file_without_version_uses_the_given_one():
+    rows = [[t.isoformat(), 1, 50.0, 60.0, 40.0] for t in day_hours(date(2026, 2, 2))]
+    doc = {"format": 1, "rows": rows}
+    data = gzip.compress(json.dumps(doc).encode(), mtime=0)
+    assert {r.model_version for r in runs_from_backfill_file(data, "v9", TZ)} == {"v9"}
+
+
 def test_backfill_file_groups_by_anchor():
     rows = []
     for anchor in (date(2026, 2, 1), date(2026, 2, 2)):
@@ -308,7 +315,7 @@ def test_backfill_file_groups_by_anchor():
     runs = runs_from_backfill_file(_backfill_bytes(rows), "v9", TZ)
     assert [r.anchor for r in runs] == [date(2026, 2, 1), date(2026, 2, 2)]
     r = runs[0]
-    assert r.backfill and r.model_version == "v9"
+    assert r.backfill and r.model_version == "v1"  # the version the file names
     assert r.issued_at == datetime(2026, 2, 1, 6, tzinfo=BERLIN).astimezone(UTC)
     assert r.issued_at.utcoffset() == timedelta(0)
     assert {s.h for s in r.slots} == {1, 2} and len(r.slots) == 48

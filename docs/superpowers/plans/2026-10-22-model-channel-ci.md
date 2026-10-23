@@ -112,7 +112,7 @@
     1. Checkout, set up Python 3.12 and install `training/requirements.txt`.
     2. `gh release download training-data -p raw.tar.gz` and untar into `training/data/raw` (tolerate a missing release on the first run).
     3. `python -m training.fetch --raw training/data/raw` (incremental, yesterday's end).
-    4. Re-tar and `gh release upload training-data raw.tar.gz --clobber`.
+    4. Re-tar **only** `raw/prices/`, `raw/weather/` and `raw/installed_power.json` (a whitelist: the public archive must hold only CC BY data from Energy-Charts and Open-Meteo, never research-only files such as Yahoo gas prices) and `gh release upload training-data raw.tar.gz --clobber`. A test asserts the tar command lists exactly these paths.
     5. Download the current manifest and previous model (tolerate a 404).
     6. Run `python -m training.ci …` with the cutoff = the first of the current month.
     7. **If** `gate.json.passed`: `gh release upload models <model> <backfill> <report> manifest.json --clobber`, then `gh release edit models --notes-file out/release-notes.md`.
@@ -192,6 +192,7 @@
 
 - Merge to main and push.
 - Bootstrap the releases:
+  - Both releases are created with `--prerelease --latest=false` (HACS must never offer them).
   - `training-data` with `raw.tar.gz` built from `research/data` (the same file layout as the training raw dir; check this first).
   - `models` with the 2026-10 model, backfill, report and a manifest built by `training.manifest`.
 - Trigger `train.yml` once via `workflow_dispatch` as a smoke test, and confirm validate is green.

@@ -1,4 +1,4 @@
-"""Config flow (choose the zone) and options flow (peak threshold, backfill window)."""
+"""Config flow (choose the zone) and options flow (peak threshold, backfill, model updates)."""
 
 from __future__ import annotations
 
@@ -12,6 +12,7 @@ from homeassistant.config_entries import (
 )
 from homeassistant.core import callback
 from homeassistant.helpers.selector import (
+    BooleanSelector,
     NumberSelector,
     NumberSelectorConfig,
     NumberSelectorMode,
@@ -22,9 +23,11 @@ from homeassistant.helpers.selector import (
 import voluptuous as vol
 
 from .const import (
+    CONF_AUTO_UPDATE,
     CONF_BACKFILL_DAYS,
     CONF_PEAK_THRESHOLD,
     CONF_ZONE,
+    DEFAULT_AUTO_UPDATE,
     DEFAULT_BACKFILL_DAYS,
     DEFAULT_PEAK_THRESHOLD,
     DOMAIN,
@@ -65,7 +68,7 @@ class SpotForecastConfigFlow(ConfigFlow, domain=DOMAIN):
 
 
 class SpotForecastOptionsFlow(OptionsFlow):
-    """Peak threshold and backfill window."""
+    """Peak threshold, backfill window and automatic model updates."""
 
     def __init__(self, entry: ConfigEntry) -> None:
         # Own reference: OptionsFlow.config_entry is read-only from HA 2024.12 on.
@@ -74,12 +77,15 @@ class SpotForecastOptionsFlow(OptionsFlow):
     async def async_step_init(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
         """Show and save the options."""
         if user_input is not None:
-            return self.async_create_entry(
-                data={
-                    CONF_PEAK_THRESHOLD: float(user_input[CONF_PEAK_THRESHOLD]),
-                    CONF_BACKFILL_DAYS: int(user_input[CONF_BACKFILL_DAYS]),
-                }
-            )
+            options: dict[str, Any] = {
+                CONF_BACKFILL_DAYS: int(user_input[CONF_BACKFILL_DAYS]),
+                CONF_AUTO_UPDATE: bool(user_input[CONF_AUTO_UPDATE]),
+            }
+            threshold = round(float(user_input[CONF_PEAK_THRESHOLD]), 1)
+            # the model's own value is not stored: it then follows a newer (downloaded) model
+            if threshold != self._model_peak_threshold():
+                options[CONF_PEAK_THRESHOLD] = threshold
+            return self.async_create_entry(data=options)
 
         options = self._entry.options
         return self.async_show_form(
@@ -106,12 +112,16 @@ class SpotForecastOptionsFlow(OptionsFlow):
                             min=0, max=MAX_BACKFILL_DAYS, step=1, mode=NumberSelectorMode.BOX
                         )
                     ),
+                    vol.Required(
+                        CONF_AUTO_UPDATE,
+                        default=options.get(CONF_AUTO_UPDATE, DEFAULT_AUTO_UPDATE),
+                    ): BooleanSelector(),
                 }
             ),
         )
 
     def _model_peak_threshold(self) -> float:
-        """The loaded model's threshold in ct/kWh; never reads the model file itself."""
+        """The active model's threshold in ct/kWh; never reads the model file itself."""
         runtime_data = getattr(self._entry, "runtime_data", None)
         if runtime_data is None:
             return DEFAULT_PEAK_THRESHOLD

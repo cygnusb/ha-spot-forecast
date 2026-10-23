@@ -99,7 +99,7 @@ def test_every_config_field_has_label(language):
     fields = _flow_fields()
     assert fields == {
         ("config", "user"): {"zone"},
-        ("options", "init"): {"peak_threshold", "backfill_days"},
+        ("options", "init"): {"peak_threshold", "backfill_days", "auto_update"},
     }
     doc = _load(language)
     for (section, step), expected in fields.items():

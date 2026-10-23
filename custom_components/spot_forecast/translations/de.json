@@ -22,11 +22,13 @@
         "title": "Spot Forecast Optionen",
         "data": {
           "peak_threshold": "Schwelle für Preisspitzen",
-          "backfill_days": "Rückwirkender Zeitraum (Tage)"
+          "backfill_days": "Rückwirkender Zeitraum (Tage)",
+          "auto_update": "Modelle automatisch aktualisieren"
         },
         "data_description": {
           "peak_threshold": "Börsenpreis, ab dem eine Stunde als Preisspitze gilt, in ct/kWh ohne Steuern und Netzentgelte. Der Standardwert stammt aus den Trainingsdaten des Modells.",
-          "backfill_days": "Für wie viele vergangene Tage beim ersten Start Prognosen nachberechnet werden, damit die Genauigkeitsstatistik Verlauf hat. 0 schaltet das ab."
+          "backfill_days": "Für wie viele vergangene Tage beim ersten Start Prognosen nachberechnet werden, damit die Genauigkeitsstatistik Verlauf hat. 0 schaltet das ab.",
+          "auto_update": "Lädt einmal am Tag ein neueres Prognosemodell für diese Zone, sobald eines veröffentlicht ist. Es wird nur verwendet, wenn es zu dieser Version der Integration passt und seine Prüfungen besteht."
         }
       }
     }
@@ -89,7 +91,7 @@
   "issues": {
     "model_outdated": {
       "title": "Spot-Forecast-Modell ist veraltet",
-      "description": "Das mitgelieferte Prognosemodell {version} wurde mit Daten bis {cutoff} trainiert, also vor mehr als {max_age} Tagen. Je weiter sich der Markt verändert, desto ungenauer werden die Prognosen. Aktualisiere die Integration Spot Forecast, um ein neueres Modell zu erhalten."
+      "description": "Das Prognosemodell {version} wurde mit Daten bis {cutoff} trainiert, also vor mehr als {max_age} Tagen. Je weiter sich der Markt verändert, desto ungenauer werden die Prognosen. Schalte in den Optionen die automatische Modellaktualisierung ein oder aktualisiere die Integration Spot Forecast, um ein neueres Modell zu erhalten."
     }
   }
 }
