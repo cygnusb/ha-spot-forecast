@@ -4,43 +4,88 @@ name: Release
 # this asset (zip_release in hacs.json) and its download counter counts it.
 # The ZIP bundles the newest published model that this commit can load, so a
 # release never ships an older model than the one users would download anyway.
+#
+# Two jobs, as in train.yml: `zip` installs the hash-locked dependencies of the
+# model check with a read-only token; `upload` installs nothing and only
+# attaches the ZIP.
 
 on:
   release:
     types: [published]
 
 permissions:
-  contents: write
+  contents: read
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
 jobs:
   zip:
-    name: Attach ZIP
+    name: Build ZIP
     # The rolling `models` and `training-data` releases carry data, not the integration.
     if: github.event.release.tag_name != 'models' && github.event.release.tag_name != 'training-data'
     runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Check the tag against the manifest version
+        # HACS shows the tag, Home Assistant the manifest's version: they must agree.
+        env:
+          TAG: ${{ github.event.release.tag_name }}
+        run: |
+          version=$(jq -r .version custom_components/spot_forecast/manifest.json)
+          if [ "${TAG#v}" != "$version" ]; then
+            echo "::error::Tag $TAG does not match version $version in manifest.json"
+            exit 1
+          fi
 
       - uses: actions/setup-python@v5
         with:
-          python-version: "3.13"
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: training/requirements.lock
+      # numpy for the model check, pinned with its hashes like the training's.
+      - run: pip install --require-hashes -r training/requirements.lock
 
       - name: Bundle the published models
         # Keeps the committed files if nothing is published yet; fails the job
-        # on a download or checksum error.
+        # on a download or checksum error or a model the integration would not load.
         run: python tools/fetch_published_model.py custom_components/spot_forecast/models
 
       - name: Build ZIP
+        # The repository's LICENSE goes into the ZIP root, next to manifest.json.
         run: |
           cd custom_components/spot_forecast
           zip -r "$GITHUB_WORKSPACE/spot_forecast.zip" . -x "__pycache__/*" "*/__pycache__/*" "*.pyc"
+          zip -j "$GITHUB_WORKSPACE/spot_forecast.zip" "$GITHUB_WORKSPACE/LICENSE"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: spot_forecast.zip
+          path: spot_forecast.zip
+          retention-days: 1
+
+  upload:
+    name: Attach ZIP
+    needs: zip
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: spot_forecast.zip
 
       - name: Upload release asset
         env:
           GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
           TAG: ${{ github.event.release.tag_name }}
         run: gh release upload "$TAG" spot_forecast.zip --clobber

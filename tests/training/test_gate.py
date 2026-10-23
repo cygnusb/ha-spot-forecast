@@ -126,3 +126,30 @@ def test_gate_first_run_checks_skill_only():
     assert passed.passed and passed.previous is None
     assert "no previous" in passed.reason
     assert not evaluate_gate(_m(10.0, -0.01), None).passed
+
+
+@pytest.mark.parametrize(
+    ("candidate", "previous"),
+    [
+        (_m(float("nan"), 0.3), _m(18.5, 0.35)),
+        (_m(17.0, float("nan")), _m(18.5, 0.35)),
+        (_m(float("inf"), 0.3), None),
+        (_m(17.0, float("inf")), None),
+        (_m(17.0, 0.3), _m(float("nan"), 0.35)),
+        (_m(17.0, 0.3), _m(float("-inf"), 0.35)),
+        (_m(17.0, 0.3), _m(None, None, rows=0)),
+    ],
+    ids=[
+        "nan-mae",
+        "nan-skill",
+        "inf-mae-first-run",
+        "inf-skill-first-run",
+        "previous-nan-mae",
+        "previous-inf-mae",
+        "previous-no-rows",
+    ],
+)
+def test_gate_fails_on_metrics_that_are_not_finite(candidate, previous):
+    result = evaluate_gate(candidate, previous)
+    assert not result.passed
+    assert "not finite" in result.reason or "no rows" in result.reason

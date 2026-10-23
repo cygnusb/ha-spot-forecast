@@ -8,7 +8,7 @@ import hashlib
 
 import pytest
 
-from training.manifest import manifest_entry, merge_manifest
+from training.manifest import manifest_entry, merge_manifest, revoked_versions
 
 BASE = "https://example.org/releases/download/models/"
 METRICS = {
@@ -62,3 +62,35 @@ def test_merge_manifest_first_run_and_wrong_format(model):
     assert merge_manifest(None, "de_lu", new)["zones"] == {"de_lu": new}
     with pytest.raises(ValueError, match="format"):
         merge_manifest({"format": 2, "zones": {}}, "de_lu", new)
+
+
+@pytest.mark.parametrize(
+    ("manifest", "revoked"),
+    [(None, []), ({"format": 1}, []), ({"revoked": ["de_lu-2026-09"]}, ["de_lu-2026-09"])],
+)
+def test_revoked_versions(manifest, revoked):
+    assert revoked_versions(manifest) == revoked
+
+
+def test_merge_manifest_keeps_the_revoked_list(model):
+    new = manifest_entry(b"m", b"b", model, BASE)
+    old = {
+        "format": 1,
+        "updated": "x",
+        "zones": {"de_lu": {"version": "de_lu-2026-10"}},
+        "revoked": ["de_lu-2026-09"],
+    }
+    merged = merge_manifest(old, "de_lu", new)
+    assert merged["revoked"] == ["de_lu-2026-09"]
+    assert "revoked" not in merge_manifest(None, "de_lu", new)
+    assert merge_manifest({**old, "revoked": []}, "de_lu", new)["revoked"] == []
+
+
+@pytest.mark.parametrize("revoked", ["de_lu-2026-09", [1], {"de_lu-2026-09": True}])
+def test_merge_manifest_rejects_a_malformed_revoked_list(model, revoked):
+    # Never dropped silently: a revoked model would come back for every client.
+    old = {"format": 1, "updated": "x", "zones": {}, "revoked": revoked}
+    with pytest.raises(ValueError, match="revoked"):
+        merge_manifest(old, "de_lu", manifest_entry(b"m", b"b", model, BASE))
+    with pytest.raises(ValueError, match="revoked"):
+        revoked_versions(old)
