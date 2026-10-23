@@ -8,6 +8,7 @@ from typing import Any
 
 import aiohttp
 
+from ..const import MAX_WEATHER_BYTES
 from ..core.features import HORIZONS, Hourly
 from ..core.ingest import merge_hourly, parse_open_meteo, weather_by_horizon_from_previous_runs
 from ..core.zones import Point, Zone
@@ -73,6 +74,7 @@ async def fetch_forecast(
                 "forecast_days": FORECAST_DAYS,
                 "timezone": "GMT",
             },
+            MAX_WEATHER_BYTES,
         )
         out |= await run_blocking(
             _parse, parse_open_meteo, body, FORECAST_URL, list(points), variables
@@ -113,6 +115,7 @@ async def fetch_previous_runs(
                     "end_date": chunk_end.isoformat(),
                     "timezone": "GMT",
                 },
+                MAX_WEATHER_BYTES,
             )
             await run_blocking(_add_chunk, out, body, list(points), variables)
     return out
