@@ -31,6 +31,10 @@ class SourceRateLimited(SourceError):
     """The source kept answering HTTP 429."""
 
 
+class SourceNotFound(SourceError):
+    """The source answered HTTP 404: what was asked for does not exist (yet)."""
+
+
 async def pause(seconds: float) -> None:
     """Wait between requests; the single seam tests replace to avoid sleeping."""
     await asyncio.sleep(seconds)
@@ -50,7 +54,7 @@ async def get_body(session: aiohttp.ClientSession, url: str, params: dict[str, A
     Up to ``ATTEMPTS`` tries for HTTP 429, 5xx, connection errors and timeouts, with a
     back-off doubling from ``FIRST_BACKOFF``; after a 429 it waits at least
     ``RATE_LIMIT_WAIT``. Other HTTP errors fail at once. Raises ``SourceRateLimited`` if
-    the last try was a 429, else ``SourceError``.
+    the last try was a 429, ``SourceNotFound`` on a 404, else ``SourceError``.
     """
     backoff = FIRST_BACKOFF
     for attempt in range(1, ATTEMPTS + 1):
@@ -71,6 +75,8 @@ async def get_body(session: aiohttp.ClientSession, url: str, params: dict[str, A
             elif status >= 500:
                 error = SourceError(f"{url}: HTTP {status}")
                 wait = backoff
+            elif status == 404:
+                raise SourceNotFound(f"{url}: HTTP 404")
             else:
                 raise SourceError(f"{url}: HTTP {status}")
         if attempt == ATTEMPTS:

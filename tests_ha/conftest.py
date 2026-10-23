@@ -11,6 +11,7 @@ from datetime import UTC, date, datetime, time, timedelta
 import json
 import logging
 from pathlib import Path
+import re
 import sys
 from typing import Any
 from zoneinfo import ZoneInfo
@@ -38,7 +39,13 @@ from pytest_homeassistant_custom_component.test_util.aiohttp import (
 # so the repo root has to be on sys.path; pytest only adds the test directory.
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from custom_components.spot_forecast.const import CONF_BACKFILL_DAYS, CONF_ZONE, DOMAIN
+from custom_components.spot_forecast.const import (
+    CONF_AUTO_UPDATE,
+    CONF_BACKFILL_DAYS,
+    CONF_ZONE,
+    DOMAIN,
+    MANIFEST_URL,
+)
 from custom_components.spot_forecast.core.zones import DE_LU
 from custom_components.spot_forecast.sources import http
 
@@ -76,6 +83,7 @@ def hass_with_recorder(recorder_mock, enable_custom_integrations, hass) -> HomeA
 EC_URL = "https://api.energy-charts.info/price"
 FORECAST_URL = "https://api.open-meteo.com/v1/forecast"
 PREVIOUS_RUNS_URL = "https://previous-runs-api.open-meteo.com/v1/forecast"
+MODELS_BASE = MANIFEST_URL.rsplit("/", 1)[0] + "/"  # the ``models`` release's download URL
 BERLIN = ZoneInfo("Europe/Berlin")
 RECORDED_DAYS = 4  # 2026-10-19 … 2026-10-22, the part both price fixtures share
 # 80 days of tiled history before 2026-10-19 (from 2026-07-31, all CEST): the 40 days a
@@ -103,11 +111,19 @@ class Sources:
 
     Open-Meteo previous runs answer every request with the whole recording (target hours
     2026-10-01 … 2026-10-22 GMT), whatever ``start_date``/``end_date`` asks for.
+
+    The ``models`` release serves ``release`` (URL -> body), read at request time; every
+    other file of it, the manifest included while ``release`` is empty, is HTTP 404.
     """
 
     def __init__(self, mock: AiohttpClientMocker, recorded: Callable[[str], Any]) -> None:
         self._mock = mock
         self._recorded = recorded
+        self.release: dict[str, bytes] = {}
+
+    def release_calls(self, url: str = MODELS_BASE) -> int:
+        """How many requests went to ``url`` (by default: anywhere in the release)."""
+        return sum(str(u).startswith(url) for _, u, _, _ in self._mock.mock_calls)
 
     def serve(
         self,
@@ -167,6 +183,14 @@ class Sources:
                     PREVIOUS_RUNS_URL, params={"latitude": latitudes}, json=self._recorded(name)
                 )
 
+        async def release(method, url, data):
+            body = self.release.get(str(url))
+            if body is None:
+                return AiohttpClientMockResponse(method, url, status=404)
+            return AiohttpClientMockResponse(method, url, response=body)
+
+        self._mock.get(re.compile("^" + re.escape(MODELS_BASE)), side_effect=release)
+
     def fail_all(self) -> None:
         """Every source answers HTTP 500."""
         self.serve(prices_status=500, weather_status=500, previous_runs_status=500)
@@ -192,14 +216,19 @@ SetUp = Callable[..., Awaitable[MockConfigEntry]]
 
 @pytest.fixture
 async def set_up(
-    hass_with_recorder: HomeAssistant, sources: Sources, freezer: FrozenDateTimeFactory
+    hass_with_recorder: HomeAssistant,
+    sources: Sources,
+    freezer: FrozenDateTimeFactory,
+    tmp_path: Path,
 ) -> AsyncIterator[SetUp]:
     """Set up a DE-LU entry at 2026-10-22 10:00; unloaded again after the test.
 
-    Backfill is off unless ``options`` set ``CONF_BACKFILL_DAYS``. With ``wait=False`` a
-    started backfill is not waited for.
+    Backfill and model updates are off unless ``options`` set ``CONF_BACKFILL_DAYS`` or
+    ``CONF_AUTO_UPDATE``. With ``wait=False`` a started backfill is not waited for. The
+    config directory is ``tmp_path``: downloaded models land in its ``.storage``.
     """
     hass = hass_with_recorder
+    hass.config.config_dir = str(tmp_path)
     freezer.move_to(T10)
     entries: list[MockConfigEntry] = []
 
@@ -212,7 +241,7 @@ async def set_up(
             title="Spot Forecast DE-LU",
             unique_id="DE-LU",
             data={CONF_ZONE: "DE-LU"},
-            options={CONF_BACKFILL_DAYS: 0, **(options or {})},
+            options={CONF_BACKFILL_DAYS: 0, CONF_AUTO_UPDATE: False, **(options or {})},
         )
         entry.add_to_hass(hass)
         assert await hass.config_entries.async_setup(entry.entry_id)

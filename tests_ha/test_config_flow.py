@@ -15,6 +15,7 @@ import pytest
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
 from custom_components.spot_forecast.const import (
+    CONF_AUTO_UPDATE,
     CONF_BACKFILL_DAYS,
     CONF_PEAK_THRESHOLD,
     CONF_ZONE,
@@ -96,14 +97,20 @@ async def test_options_flow_saves_threshold_and_backfill(
         model.peak_threshold / 10, 1
     )
     assert _default(result["data_schema"], CONF_BACKFILL_DAYS) == 60
+    assert _default(result["data_schema"], CONF_AUTO_UPDATE) is True
 
     result = await hass.config_entries.options.async_configure(
-        result["flow_id"], {CONF_PEAK_THRESHOLD: 22.5, CONF_BACKFILL_DAYS: 90.0}
+        result["flow_id"],
+        {CONF_PEAK_THRESHOLD: 22.5, CONF_BACKFILL_DAYS: 90.0, CONF_AUTO_UPDATE: False},
     )
     await hass.async_block_till_done()
 
     assert result["type"] is FlowResultType.CREATE_ENTRY
-    assert entry.options == {CONF_PEAK_THRESHOLD: 22.5, CONF_BACKFILL_DAYS: 90}
+    assert entry.options == {
+        CONF_PEAK_THRESHOLD: 22.5,
+        CONF_BACKFILL_DAYS: 90,
+        CONF_AUTO_UPDATE: False,
+    }
     assert isinstance(entry.options[CONF_BACKFILL_DAYS], int)
     # the update listener reloaded the entry
     assert entry.state is ConfigEntryState.LOADED

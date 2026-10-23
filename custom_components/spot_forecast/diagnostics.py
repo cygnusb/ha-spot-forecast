@@ -30,6 +30,7 @@ async def async_get_config_entry_diagnostics(
         "options": dict(entry.options),
         "model": {
             "version": model.version,
+            "source": coordinator.model_source,
             "train_cutoff": model.train_cutoff.isoformat(),
             "created": model.created.isoformat(),
         },

@@ -77,6 +77,7 @@ class SpotData:
     last_success: datetime | None
     stale: bool  # the last run attempt failed, or the last success is over 7 h old
     model: ModelFile
+    model_source: str  # "bundled" or "downloaded"
     entries: list[dict]  # the ``prices`` attribute, from today 00:00 (market local time)
     accuracy: dict
 
@@ -102,7 +103,14 @@ class SpotForecastCoordinator(DataUpdateCoordinator[SpotData]):
 
     config_entry: ConfigEntry
 
-    def __init__(self, hass: HomeAssistant, entry: ConfigEntry, model: ModelFile) -> None:
+    def __init__(
+        self,
+        hass: HomeAssistant,
+        entry: ConfigEntry,
+        model: ModelFile,
+        backfill: bytes,
+        model_source: str,
+    ) -> None:
         self.zone: Zone = ZONES[entry.data[CONF_ZONE]]
         super().__init__(
             hass,
@@ -112,6 +120,8 @@ class SpotForecastCoordinator(DataUpdateCoordinator[SpotData]):
             update_interval=None,
         )
         self.model = model
+        self.model_source = model_source  # "bundled" or "downloaded"
+        self.backfill = backfill  # raw gzip bytes of the backfill file that fits ``model``
         self._store = ForecastStore(hass, entry.entry_id)
         self._ledger = Ledger()
         self._market: list[MarketSlot] = []
@@ -137,6 +147,19 @@ class SpotForecastCoordinator(DataUpdateCoordinator[SpotData]):
         """Peak threshold in ct/kWh: the option, else the model's (EUR/MWh) rounded to 0.1."""
         option = self.config_entry.options.get(CONF_PEAK_THRESHOLD)
         return float(option) if option is not None else round(self.model.peak_threshold / 10, 1)
+
+    async def set_model(self, model: ModelFile, source: str, backfill: bytes) -> None:
+        """Use ``model`` (with its backfill file) from the next run on.
+
+        Under the run lock, so a run uses one model throughout. The ledger and the written
+        statistics stay: forecasts already shown keep the model that made them. The shown
+        data and the ``model_outdated`` issue follow the new model at once.
+        """
+        async with self._run_lock:
+            self.model, self.model_source, self.backfill = model, source, backfill
+            now = dt_util.utcnow()
+            async_check_model_age(self.hass, self.config_entry.entry_id, model, self._today(now))
+            self._rebuild(now)
 
     @property
     def ledger(self) -> Ledger:
@@ -374,6 +397,7 @@ class SpotForecastCoordinator(DataUpdateCoordinator[SpotData]):
             last_success=self._last_success,
             stale=is_stale(self._last_success, now, self._last_attempt_failed),
             model=self.model,
+            model_source=self.model_source,
             entries=prices_attribute(
                 self._market,
                 forecast,

@@ -8,7 +8,14 @@ import numpy as np
 import pytest
 
 from core.features import FEATURE_NAMES
-from core.model import ModelCorrupt, ModelMismatch, Trees, dump_model, load_model
+from core.model import (
+    ModelCorrupt,
+    ModelMismatch,
+    Trees,
+    dump_model,
+    load_model,
+    sample_check,
+)
 
 
 def _X(n: int, seed: int = 0) -> np.ndarray:
@@ -207,3 +214,20 @@ def test_load_model_overflow_is_corrupt(tiny_model_file, trees, field, value):
 
     with pytest.raises(ModelCorrupt, match="OverflowError"):
         load_model(_mutated(tiny_model_file, change))
+
+
+def test_sample_check_passes_a_sound_model(tiny_model_file):
+    sample_check(tiny_model_file)
+    sample_check(load_model(dump_model(tiny_model_file)))
+
+
+def test_sample_check_rejects_nan_model(tiny_model_file):
+    nan_leaves = replace(tiny_model_file.p90, value=np.full_like(tiny_model_file.p90.value, np.nan))
+    with pytest.raises(ModelCorrupt, match="p90"):
+        sample_check(replace(tiny_model_file, p90=nan_leaves))
+
+
+def test_sample_check_rejects_huge_predictions(tiny_model_file):
+    huge = replace(tiny_model_file.p10, baseline=1e3)
+    with pytest.raises(ModelCorrupt, match="p10"):
+        sample_check(replace(tiny_model_file, p10=huge))
