@@ -14,14 +14,19 @@ from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.util import dt as dt_util
 
 from . import SpotForecastConfigEntry
-from .const import DOMAIN
+from .const import CONF_VAT, DEFAULT_VAT, DOMAIN
 from .coordinator import BACKFILL_STATES, SpotForecastCoordinator
-from .core.output import current_price, day_summaries, with_surcharge
+from .core.output import current_price, day_summaries, total_price, with_surcharge
 from .entity import SpotEntity
 
 UNIT = "EUR/kWh"
 WEATHER_ATTRIBUTION = "Open-Meteo (CC BY 4.0)"
 DAYS = 7
+
+
+def _vat(coordinator: SpotForecastCoordinator) -> float:
+    """VAT in percent on the exchange part of the total price (entries without it: Germany)."""
+    return float(coordinator.config_entry.options.get(CONF_VAT, DEFAULT_VAT))
 
 
 async def async_setup_entry(
@@ -84,12 +89,14 @@ class PriceSensor(_SpotSensor):
             "model_version": data.model.version,
             "stale": data.stale,
             "surcharge": self.coordinator.surcharge,  # for the cards' total-price view
+            "vat": _vat(self.coordinator),
         }
 
 
 class TotalPriceSensor(_SpotSensor):
-    """Market price plus the surcharge option; ``prices`` likewise, for SBP or automations.
+    """Market price with VAT plus the surcharge; ``prices`` likewise, for SBP or automations.
 
+    The surcharge is gross (VAT included), so VAT is added to the market price only.
     Only while a surcharge is set. Statistics, error figures and the risk sensors stay
     on the market price.
     """
@@ -108,15 +115,20 @@ class TotalPriceSensor(_SpotSensor):
     @property
     def native_value(self) -> float | None:
         price = current_price(self.coordinator.data.market, dt_util.utcnow())
-        return None if price is None else round(price + self.coordinator.surcharge, 5)
+        if price is None:
+            return None
+        return total_price(price, self.coordinator.surcharge, _vat(self.coordinator))
 
     @property
     def extra_state_attributes(self) -> dict[str, Any]:
         data = self.coordinator.data
         return {
-            "prices": with_surcharge(data.entries, self.coordinator.surcharge),
+            "prices": with_surcharge(
+                data.entries, self.coordinator.surcharge, _vat(self.coordinator)
+            ),
             "unit": UNIT,
             "surcharge": self.coordinator.surcharge,
+            "vat": _vat(self.coordinator),
             "issued_at": None if data.issued_at is None else data.issued_at.isoformat(),
             "anchor_day": data.anchor.isoformat(),
             "model_version": data.model.version,

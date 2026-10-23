@@ -1,4 +1,4 @@
-"""Config flow (choose the zone) and options flow (surcharge, peak threshold, backfill, updates)."""
+"""Config flow (choose the zone) and options flow (total price, threshold, backfill, updates)."""
 
 from __future__ import annotations
 
@@ -27,14 +27,17 @@ from .const import (
     CONF_BACKFILL_DAYS,
     CONF_PEAK_THRESHOLD,
     CONF_SURCHARGE,
+    CONF_VAT,
     CONF_ZONE,
     DEFAULT_AUTO_UPDATE,
     DEFAULT_BACKFILL_DAYS,
     DEFAULT_PEAK_THRESHOLD,
     DEFAULT_SURCHARGE,
+    DEFAULT_VAT,
     DOMAIN,
     MAX_BACKFILL_DAYS,
     MAX_SURCHARGE,
+    MAX_VAT,
 )
 from .core.zones import ZONES
 
@@ -71,7 +74,7 @@ class SpotForecastConfigFlow(ConfigFlow, domain=DOMAIN):
 
 
 class SpotForecastOptionsFlow(OptionsFlow):
-    """Surcharge, peak threshold, backfill window and automatic model updates."""
+    """Surcharge and VAT, peak threshold, backfill window and automatic model updates."""
 
     def __init__(self, entry: ConfigEntry) -> None:
         # Own reference: OptionsFlow.config_entry is read-only from HA 2024.12 on.
@@ -83,8 +86,9 @@ class SpotForecastOptionsFlow(OptionsFlow):
             options: dict[str, Any] = {
                 CONF_BACKFILL_DAYS: int(user_input[CONF_BACKFILL_DAYS]),
                 CONF_AUTO_UPDATE: bool(user_input[CONF_AUTO_UPDATE]),
+                CONF_VAT: round(float(user_input[CONF_VAT]), 1),
             }
-            surcharge = round(float(user_input[CONF_SURCHARGE]), 3)
+            surcharge = round(float(user_input[CONF_SURCHARGE]), 4)
             if surcharge:  # 0: no total-price sensor
                 options[CONF_SURCHARGE] = surcharge
             threshold = round(float(user_input[CONF_PEAK_THRESHOLD]), 1)
@@ -105,8 +109,20 @@ class SpotForecastOptionsFlow(OptionsFlow):
                         NumberSelectorConfig(
                             min=0,
                             max=MAX_SURCHARGE,
-                            step=0.001,
+                            step="any",  # HA allows 0.001 at the finest; saved to 0.0001
                             unit_of_measurement="EUR/kWh",
+                            mode=NumberSelectorMode.BOX,
+                        )
+                    ),
+                    vol.Required(
+                        CONF_VAT,
+                        default=options.get(CONF_VAT, DEFAULT_VAT),
+                    ): NumberSelector(
+                        NumberSelectorConfig(
+                            min=0,
+                            max=MAX_VAT,
+                            step=0.1,
+                            unit_of_measurement="%",
                             mode=NumberSelectorMode.BOX,
                         )
                     ),

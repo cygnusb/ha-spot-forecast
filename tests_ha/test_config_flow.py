@@ -19,10 +19,13 @@ from custom_components.spot_forecast.const import (
     CONF_BACKFILL_DAYS,
     CONF_PEAK_THRESHOLD,
     CONF_SURCHARGE,
+    CONF_VAT,
     CONF_ZONE,
     DOMAIN,
 )
 
+PRICE = "sensor.spot_forecast_de_lu_price"
+TOTAL = "sensor.spot_forecast_de_lu_total_price"
 CONFIG_FLOW = Path(__file__).parent.parent / "custom_components" / DOMAIN / "config_flow.py"
 
 
@@ -42,6 +45,13 @@ def _default(schema, key: str):
     for marker in schema.schema:
         if marker == key:
             return marker.default()
+    raise AssertionError(f"{key} not in schema")
+
+
+def _selector(schema, key: str) -> dict:
+    for marker, selector in schema.schema.items():
+        if marker == key:
+            return selector.config
     raise AssertionError(f"{key} not in schema")
 
 
@@ -100,11 +110,16 @@ async def test_options_flow_saves_threshold_and_backfill(
     assert _default(result["data_schema"], CONF_BACKFILL_DAYS) == 60
     assert _default(result["data_schema"], CONF_AUTO_UPDATE) is True
     assert _default(result["data_schema"], CONF_SURCHARGE) == 0.0
+    assert _default(result["data_schema"], CONF_VAT) == 19.0
+    assert _selector(result["data_schema"], CONF_SURCHARGE)["step"] == "any"  # 4 decimals kept
+    vat = _selector(result["data_schema"], CONF_VAT)
+    assert (vat["min"], vat["max"], vat["step"], vat["unit_of_measurement"]) == (0, 30, 0.1, "%")
 
     result = await hass.config_entries.options.async_configure(
         result["flow_id"],
         {
             CONF_SURCHARGE: 0,
+            CONF_VAT: 8.04,
             CONF_PEAK_THRESHOLD: 22.5,
             CONF_BACKFILL_DAYS: 90.0,
             CONF_AUTO_UPDATE: False,
@@ -114,6 +129,7 @@ async def test_options_flow_saves_threshold_and_backfill(
 
     assert result["type"] is FlowResultType.CREATE_ENTRY
     assert entry.options == {
+        CONF_VAT: 8.0,
         CONF_PEAK_THRESHOLD: 22.5,
         CONF_BACKFILL_DAYS: 90,
         CONF_AUTO_UPDATE: False,
@@ -135,14 +151,49 @@ async def test_options_flow_saves_the_surcharge(
     result = await hass.config_entries.options.async_init(entry.entry_id)
     result = await hass.config_entries.options.async_configure(
         result["flow_id"],
-        {CONF_SURCHARGE: 0.1872, CONF_BACKFILL_DAYS: 60, CONF_AUTO_UPDATE: True},
+        {CONF_SURCHARGE: 0.18723, CONF_BACKFILL_DAYS: 60, CONF_AUTO_UPDATE: True},
     )
     await hass.async_block_till_done()
 
-    assert entry.options[CONF_SURCHARGE] == 0.187  # 0.1 ct
-    assert entry.runtime_data.coordinator.surcharge == 0.187
+    assert entry.options[CONF_SURCHARGE] == 0.1872  # 0.01 ct
+    assert entry.options[CONF_VAT] == 19.0  # not entered: the default
+    assert entry.runtime_data.coordinator.surcharge == 0.1872
+    result = await hass.config_entries.options.async_init(entry.entry_id)
+    assert _default(result["data_schema"], CONF_SURCHARGE) == 0.1872
+    assert await hass.config_entries.async_unload(entry.entry_id)
+
+
+async def test_surcharge_without_a_vat_option_gets_german_vat(
+    hass_with_recorder: HomeAssistant, recorded_sources: None
+) -> None:
+    """An entry from before the VAT option: same surcharge, total now with 19 % on the spot."""
+    hass = hass_with_recorder
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        title="Spot Forecast DE-LU",
+        unique_id="DE-LU",
+        data={CONF_ZONE: "DE-LU"},
+        options={CONF_SURCHARGE: 0.187, CONF_BACKFILL_DAYS: 60, CONF_AUTO_UPDATE: True},
+    )
+    entry.add_to_hass(hass)
+    assert await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_block_till_done()
+
+    spot = float(hass.states.get(PRICE).state)
+    total = hass.states.get(TOTAL)
+    assert float(total.state) == round(spot * 1.19 + 0.187, 5)
+    assert total.attributes["vat"] == 19.0
+    assert hass.states.get(PRICE).attributes["vat"] == 19.0  # the cards read it here
+
     result = await hass.config_entries.options.async_init(entry.entry_id)
     assert _default(result["data_schema"], CONF_SURCHARGE) == 0.187
+    assert _default(result["data_schema"], CONF_VAT) == 19.0
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"],
+        {CONF_SURCHARGE: 0.187, CONF_VAT: 8, CONF_BACKFILL_DAYS: 60, CONF_AUTO_UPDATE: True},
+    )
+    await hass.async_block_till_done()
+    assert float(hass.states.get(TOTAL).state) == round(spot * 1.08 + 0.187, 5)
     assert await hass.config_entries.async_unload(entry.entry_id)
 
 
@@ -172,7 +223,7 @@ async def test_options_flow_threshold_at_the_model_default_follows_the_model(
     )
     await hass.async_block_till_done()
 
-    assert entry.options == {CONF_BACKFILL_DAYS: 60, CONF_AUTO_UPDATE: True}
+    assert entry.options == {CONF_BACKFILL_DAYS: 60, CONF_AUTO_UPDATE: True, CONF_VAT: 19.0}
     assert entry.runtime_data.coordinator.peak_threshold == default
     assert await hass.config_entries.async_unload(entry.entry_id)
 

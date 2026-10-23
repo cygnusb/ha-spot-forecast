@@ -16,8 +16,9 @@
 #
 # With the integration's option "grid fees and taxes" set (attribute `surcharge` of the
 # price sensor), two buttons top right switch between the market price ("Börse") and
-# the price with that surcharge added ("mit Abgaben"); the peak-risk warning keeps
-# comparing the market price with its threshold. As in the look-back card, the choice is
+# the total price ("mit Abgaben": the market price with VAT, attribute `vat`, plus the
+# surcharge, as the total-price sensor); the peak-risk warning keeps comparing the
+# market price with its threshold. As in the look-back card, the choice is
 # kept in `window.spotForecastPrices`, as the card redraws itself from this YAML after a
 # click: it holds until the page is reloaded and is shared by all forecast cards on it.
 #
@@ -95,12 +96,15 @@ entities:
             const today = wall(now).slice(0, 10);
             const yesterday = addDays(today, -1);
             const entries = hass.states[PRICE]?.attributes?.prices ?? [];
-            // Grid fees and taxes from the integration's option, added while the button asks.
+            // Total price from the integration's options, while the button asks: VAT on the
+            // market price plus the gross grid fees and taxes, as the total-price sensor.
             const surcharge = ct(hass.states[PRICE]?.attributes?.surcharge) ?? 0;
+            const vat = +(hass.states[PRICE]?.attributes?.vat ?? 19);
             const withFees = surcharge > 0 && window.spotForecastPrices?.fees === true;
-            const cp = (v) => (ct(v) == null ? null : ct(v) + (withFees ? surcharge : 0));
+            const total = (v) => (withFees ? v * (1 + vat / 100) + surcharge : v);
+            const cp = (v) => (ct(v) == null ? null : total(ct(v)));
             const raw = ct(hass.states[PEAK]?.attributes?.threshold);
-            const threshold = raw == null ? null : raw + (withFees ? surcharge : 0);
+            const threshold = raw == null ? null : total(raw);
 
             const y = vars.yesterday ?? { xs: [], ys: [] };
             const known = series([
@@ -298,7 +302,7 @@ layout:
       $fn ({ vars, css_vars }) => {
         const fees = vars.sf.fees;
         const f1 = (v) => v.toLocaleString("de-DE", { minimumFractionDigits: 1, maximumFractionDigits: 1 });
-        const unit = fees.on ? `ct/kWh mit ${f1(fees.ct)} ct Abgaben` : "ct/kWh ohne Abgaben";
+        const unit = fees.on ? `ct/kWh brutto mit ${f1(fees.ct)} ct Abgaben` : "ct/kWh ohne Abgaben";
         // under ~560 px the full line would run under the buttons
         const sub = fees.available && vars.sf.width < 560
           ? unit

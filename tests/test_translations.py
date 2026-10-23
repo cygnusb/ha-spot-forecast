@@ -99,7 +99,13 @@ def test_every_config_field_has_label(language):
     fields = _flow_fields()
     assert fields == {
         ("config", "user"): {"zone"},
-        ("options", "init"): {"surcharge", "peak_threshold", "backfill_days", "auto_update"},
+        ("options", "init"): {
+            "surcharge",
+            "vat",
+            "peak_threshold",
+            "backfill_days",
+            "auto_update",
+        },
     }
     doc = _load(language)
     for (section, step), expected in fields.items():
@@ -108,3 +114,18 @@ def test_every_config_field_has_label(language):
         assert set(body["data_description"]) == expected, f"{language} {section}.{step} help"
         assert all(text.strip() for text in body["data"].values())
         assert all(text.strip() for text in body["data_description"].values())
+
+
+def _strings(node: dict) -> list[str]:
+    return [
+        text
+        for value in node.values()
+        for text in (_strings(value) if isinstance(value, dict) else [value])
+    ]
+
+
+def test_reference_language_has_no_german():
+    """German names (the card's buttons, say) do not leak into the English texts."""
+    for text in _strings(_load(REFERENCE_LANGUAGE)):
+        assert not set(text) & set("äöüÄÖÜß„“"), text
+        assert not {"mit", "Abgaben", "Börse"} & set(text.replace('"', " ").split()), text
