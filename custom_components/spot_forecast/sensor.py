@@ -18,10 +18,7 @@ from .core.output import current_price, day_summaries
 from .entity import SpotEntity
 
 UNIT = "EUR/kWh"
-ATTRIBUTION = (
-    "Prices: Bundesnetzagentur | SMARD.de via Energy-Charts (CC BY 4.0); "
-    "weather: Open-Meteo (CC BY 4.0)"
-)
+WEATHER_ATTRIBUTION = "Open-Meteo (CC BY 4.0)"
 DAYS = 7
 
 
@@ -46,11 +43,13 @@ class PriceSensor(SpotEntity, SensorEntity):
 
     _attr_native_unit_of_measurement = UNIT
     _attr_state_class = SensorStateClass.MEASUREMENT
-    _attr_attribution = ATTRIBUTION
     _unrecorded_attributes = frozenset({"prices"})  # up to ~300 entries, above 16 KB
 
     def __init__(self, coordinator: SpotForecastCoordinator) -> None:
         super().__init__(coordinator, "price")
+        self._attr_attribution = (
+            f"Prices: {coordinator.zone.price_attribution}; weather: {WEATHER_ATTRIBUTION}"
+        )
 
     @property
     def native_value(self) -> float | None:

@@ -18,3 +18,7 @@ def test_zone_registry_and_slug():
 
     assert ZONES == {"DE-LU": DE_LU}
     assert DE_LU.slug == "de_lu"
+
+
+def test_price_attribution_names_the_publisher():
+    assert "SMARD" in DE_LU.price_attribution and "CC BY 4.0" in DE_LU.price_attribution

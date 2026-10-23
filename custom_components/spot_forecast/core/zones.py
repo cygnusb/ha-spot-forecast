@@ -25,6 +25,7 @@ class Zone:
     nb_wind: tuple[str, ...]
     nb_hydro: tuple[str, ...]
     nb_nordic: tuple[str, ...]
+    price_attribution: str  # who publishes the zone's day-ahead prices, and the licence
     evening_hours: tuple[int, int] = (18, 21)
     scale_floor: float = 50.0
     scale_divisor: float = 100.0
@@ -71,6 +72,7 @@ DE_LU = Zone(
     nb_wind=("nb_nl", "nb_be", "nb_dk_west", "nb_pl_north", "nb_se_south"),
     nb_hydro=("nb_alps_ch", "nb_alps_at", "nb_no_south", "nb_se_north"),
     nb_nordic=("nb_no_south", "nb_se_north", "nb_fi"),
+    price_attribution="Bundesnetzagentur | SMARD.de via Energy-Charts (CC BY 4.0)",
 )
 
 ZONES: dict[str, Zone] = {z.code: z for z in (DE_LU,)}
