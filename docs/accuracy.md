@@ -100,7 +100,13 @@ the 2026 gas price rise. That is why models are retrained monthly and
 
 `sensor.spot_forecast_de_lu_forecast_error` shows the mean absolute error of
 the last 30 days, per horizon in its attributes, computed from your own stored
-forecasts. The [look-back card](cards.md#look-back-card) shows the same over
+forecasts. Of several runs with the same anchor day, the integration keeps the
+last one, made on the anchor day itself before the next day's prices appear.
+Its weather is the ECMWF run fetched around 08:15 UTC that day (10:15 in
+summer, 09:15 in winter, local time), close to the training's convention of
+the weather run available at 06:00 on the anchor day. Your figures therefore
+measure about the same thing as the backtest, with a slightly fresher weather
+forecast. The [look-back card](cards.md#look-back-card) shows the same over
 any range up to six months, and the
 [project website](https://cygnusb.github.io/ha-spot-forecast/#accuracy) shows
 the bundled model's backtest as an interactive chart.

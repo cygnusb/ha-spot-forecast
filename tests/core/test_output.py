@@ -10,6 +10,7 @@ from core.output import (
     day_summaries,
     flag_window,
     prices_attribute,
+    total_price,
     with_surcharge,
 )
 
@@ -132,22 +133,50 @@ def test_prices_attribute_is_parsed_by_sbp_entsoe_adapter():
     assert [s.price for s in slots] == [e["price"] for e in out]
 
 
+def test_total_price_adds_vat_on_the_spot_part_then_the_surcharge():
+    # the surcharge is gross (VAT included); VAT is charged on the exchange price only
+    assert total_price(0.10, 0.15, 19.0) == 0.269
+    assert total_price(-0.05, 0.15, 19.0) == 0.0905
+    assert total_price(0.10, 0.15, 0.0) == 0.25
+
+
 def test_with_surcharge_shifts_prices_and_bands_only():
     m0 = datetime(2026, 3, 9, 23, tzinfo=UTC)
     out = prices_attribute(_market(m0, 4), _forecast(m0 + timedelta(hours=1), 2), P90, P10, TZ, m0)
-    total = with_surcharge(out, 0.187)
+    total = with_surcharge(out, 0.187, 19.0)
     assert total is not out and out[0]["price"] == 0.05  # the input is left alone
-    assert [e["price"] for e in total] == [round(e["price"] + 0.187, 5) for e in out]
-    assert total[0] == {**out[0], "price": 0.237}
+    assert [e["price"] for e in total] == [round(e["price"] * 1.19 + 0.187, 5) for e in out]
+    assert total[0] == {**out[0], "price": 0.2465}
     fc = total[-1]
-    assert fc["p90"] == round(out[-1]["p90"] + 0.187, 5)
-    assert fc["p10"] == round(out[-1]["p10"] + 0.187, 5)
+    assert fc["p90"] == round(out[-1]["p90"] * 1.19 + 0.187, 5)
+    assert fc["p10"] == round(out[-1]["p10"] * 1.19 + 0.187, 5)
     assert {k: fc[k] for k in ("time", "source", "h")} == {
         k: out[-1][k] for k in ("time", "source", "h")
     }
     # still the ENTSO-E format SBP reads
     attrs = {"prices": total, "unit": "EUR/kWh"}
     assert detect_adapter(attrs).name == "entsoe"
+
+
+def test_with_surcharge_applies_vat_to_price_and_bands():
+    entries = [
+        {"time": "2026-03-10T00:00:00+01:00", "price": 0.10, "source": "market"},
+        {
+            "time": "2026-03-10T01:00:00+01:00",
+            "price": -0.05,
+            "source": "forecast",
+            "p90": 0.10,
+            "p10": -0.05,
+            "h": 1,
+        },
+    ]
+    total = with_surcharge(entries, surcharge=0.15, vat=19.0)
+    assert total[0] == {**entries[0], "price": 0.269}
+    assert {k: total[1][k] for k in ("price", "p90", "p10")} == {
+        "price": 0.0905,
+        "p90": 0.269,
+        "p10": 0.0905,
+    }
 
 
 def test_current_price():

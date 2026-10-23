@@ -22,12 +22,14 @@
         "title": "Spot Forecast Optionen",
         "data": {
           "surcharge": "Netzentgelte und Abgaben",
+          "vat": "MwSt. auf den Börsenpreis",
           "peak_threshold": "Schwelle für Preisspitzen",
           "backfill_days": "Rückwirkender Zeitraum (Tage)",
           "auto_update": "Modelle automatisch aktualisieren"
         },
         "data_description": {
-          "surcharge": "Wird pro kWh auf den Börsenpreis aufgeschlagen, für den Endpreis-Sensor und die Ansicht „mit Abgaben“ der Prognose-Karte, in EUR/kWh (Netzentgelte, Umlagen, Steuern; so, wie du sie bezahlst). 0 entfernt den Endpreis-Sensor. Preissensor, Statistik, Preisspitzen und negative Preise bleiben beim Börsenpreis.",
+          "surcharge": "Bruttobetrag pro kWh für den Endpreis-Sensor und die Ansicht „mit Abgaben“ der Prognose-Karte, in EUR/kWh (Netzentgelte, Umlagen, Steuern, inklusive MwSt.; so, wie du sie bezahlst). Der Endpreis ist der Börsenpreis plus MwSt. (nächste Option) plus dieser Betrag. 0 entfernt den Endpreis-Sensor. Preissensor, Statistik, Preisspitzen und negative Preise bleiben beim Börsenpreis.",
+          "vat": "Mehrwertsteuer in Prozent auf den Börsenpreis, für den Endpreis: Börsenpreis × (1 + MwSt./100) + Netzentgelte und Abgaben. In Deutschland 19; Luxemburg erhebt auf Strom einen anderen Satz, trage den deiner Rechnung ein.",
           "peak_threshold": "Börsenpreis, ab dem eine Stunde als Preisspitze gilt, in ct/kWh ohne Steuern und Netzentgelte. Der Standardwert stammt aus den Trainingsdaten des Modells.",
           "backfill_days": "Für wie viele vergangene Tage beim ersten Start Prognosen nachberechnet werden, damit die Genauigkeitsstatistik Verlauf hat. 0 schaltet das ab.",
           "auto_update": "Lädt einmal am Tag ein neueres Prognosemodell für diese Zone, sobald eines veröffentlicht ist. Es wird nur verwendet, wenn es zu dieser Version der Integration passt und seine Prüfungen besteht."

@@ -23,6 +23,8 @@ other integrations can rely on them: a German instance also gets
 * `stale`: `true` when the last run failed or is more than 7 hours old.
 * `surcharge`: the option [grid fees and taxes](configuration.md#options) in
   EUR/kWh, 0 when unset; the forecast card reads it for its "mit Abgaben" view.
+* `vat`: the option VAT on the market price in percent (19 unless set), for the
+  same view.
 * `attribution`: the data sources and their licences.
 
 An entry of `prices`:
@@ -61,22 +63,23 @@ example:
 Only while the option [grid fees and taxes](configuration.md#options) is set;
 setting it back to 0 removes the sensor.
 
-* **State:** the current exchange price plus the surcharge.
-* **`prices`:** the same entries as on the [price sensor](#price), with the
-  surcharge added to `price`, `p90` and `p10`. Smart Battery Pilot reads it like
-  the price sensor.
-* `surcharge`, `unit`, `issued_at`, `anchor_day`, `model_version`, `stale`: as on
-  the price sensor.
+* **State:** the current exchange price with VAT, plus the surcharge:
+  price × (1 + `vat` / 100) + `surcharge`.
+* **`prices`:** the same entries as on the [price sensor](#price), with `price`,
+  `p90` and `p10` turned into total prices the same way. Smart Battery Pilot
+  reads it like the price sensor.
+* `surcharge`, `vat`, `unit`, `issued_at`, `anchor_day`, `model_version`,
+  `stale`, `attribution`: as on the price sensor.
 
 ## Peak risk
 
 `binary_sensor.spot_forecast_de_lu_peak_risk`
 
 On when a price at or above the [peak threshold](configuration.md#options) is
-certain or likely in the next 48 hours: a known market price above it, or a
-forecast hour whose peak risk (P90) is above it. Counting both keeps the
-meaning stable across the day-ahead publication: when tomorrow's peak becomes
-a known price, the sensor stays on.
+certain or likely in the next 48 hours: a known market price at or above it,
+or a forecast hour whose peak risk (P90) is at or above it. Counting both
+keeps the meaning stable across the day-ahead publication: when tomorrow's
+peak becomes a known price, the sensor stays on.
 
 Attributes: `slots` (the flagged entries of `prices`), `threshold` (EUR/kWh)
 and `certain` (`true` when at least one flagged slot is a known price).
@@ -94,7 +97,10 @@ Attributes as for peak risk.
 `sensor.spot_forecast_de_lu_day_0` … `sensor.spot_forecast_de_lu_day_6`,
 **disabled by default**. Day 0 is today. State: the mean price of the day,
 weighted by slot length. Attributes: `date`, `min`, `max`, `p90_max` and
-`p10_min` (forecast slots only) and `source`. They make automations such as
+`p10_min` (forecast slots only) and `source`: `market` when every slot of
+the day is a known price, `forecast` when every slot is a forecast, `mixed`
+when the day has both, and `null` with the other values when the day has no
+slots. They make automations such as
 "is Thursday cheaper than Wednesday?" easy.
 
 ## Diagnostics
@@ -112,9 +118,10 @@ on the [accuracy page](accuracy.md).
 
 ## Long-term statistics
 
-Every forecast the integration makes is kept until its target day is over and
-its prices are known. Then, per completed day, it writes hourly external
-statistics (EUR/kWh):
+Every forecast the integration makes is kept until its target day's prices
+are known. Once they are published, around 13:00 the day before, it writes
+that day's hourly external statistics (EUR/kWh); the forecast rows are not
+held back until the day is over:
 
 | Statistic id | Content |
 |---|---|

@@ -35,8 +35,9 @@ One time axis from yesterday to the end of the forecast:
 * nights shaded from `sun.sun`, and a dotted "jetzt" line where the forecast
   begins;
 * with the option [grid fees and taxes](configuration.md#options) set, two
-  buttons top right: "Börse" (the default) and "mit Abgaben", which adds the
-  surcharge to every price, band and day maximum. The "⚠" warning still
+  buttons top right: "Börse" (the default) and "mit Abgaben", which shows every
+  price, band and day maximum as the [total price](entities.md#total-price):
+  VAT on the exchange price plus the surcharge. The "⚠" warning still
   compares the exchange price with the threshold. The choice holds until the
   page is reloaded.
 

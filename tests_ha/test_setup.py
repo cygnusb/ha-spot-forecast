@@ -144,20 +144,21 @@ async def test_price_attribute_has_market_then_forecast_and_sbp_keys(
     assert set(prices[0]) == {"time", "price", "source"}
 
 
-async def test_total_price_sensor_adds_the_surcharge(
+async def test_total_price_sensor_adds_vat_and_the_surcharge(
     hass_with_recorder: HomeAssistant, set_up: SetUp, recorded
 ) -> None:
     hass = hass_with_recorder
     await set_up({CONF_SURCHARGE: 0.187})
 
     price, total = hass.states.get(PRICE), hass.states.get(TOTAL)
-    assert float(total.state) == round(_market_price(recorded, T10) + 0.187, 5)
+    # no VAT option set: 19 % on the market price, then the gross surcharge
+    assert float(total.state) == round(_market_price(recorded, T10) * 1.19 + 0.187, 5)
     assert total.attributes["unit_of_measurement"] == "EUR/kWh"
     assert total.attributes["surcharge"] == 0.187
     assert price.attributes["surcharge"] == 0.187  # the cards read it here
     market, shifted = price.attributes["prices"], total.attributes["prices"]
     assert [e["time"] for e in shifted] == [e["time"] for e in market]
-    assert [e["price"] for e in shifted] == [round(e["price"] + 0.187, 5) for e in market]
+    assert [e["price"] for e in shifted] == [round(e["price"] * 1.19 + 0.187, 5) for e in market]
     first_fc = next(e for e in shifted if e["source"] == "forecast")
     assert set(first_fc) == {"time", "price", "source", "p90", "p10", "h"}
     # everything else stays on the market price
