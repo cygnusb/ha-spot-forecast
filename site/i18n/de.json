@@ -91,7 +91,7 @@
   },
   "how": {
     "title": "So funktioniert’s",
-    "lede": "Ein Lauf dauert auf einem Desktop-Rechner deutlich unter einer Sekunde und braucht nur numpy, ist also für kleine Hardware wie einen Raspberry Pi gebaut. Er wiederholt sich nach jedem neuen Lauf des Wettermodells, viermal am Tag, und noch einmal, wenn das Auktionsergebnis für morgen erscheint.",
+    "lede": "Ein Lauf braucht nur numpy: Auf einem Raspberry Pi 5 dauert er samt Downloads etwa 1,2 Sekunden. Er wiederholt sich nach jedem neuen Lauf des Wettermodells, viermal am Tag, und noch einmal, wenn das Auktionsergebnis für morgen erscheint.",
     "items": {
       "prices": {
         "title": "Bekannte Preise",

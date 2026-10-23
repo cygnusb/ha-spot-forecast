@@ -29,7 +29,9 @@ One time axis from yesterday to the end of the forecast:
 * per day the **4 dearest (▲) and 4 cheapest (▼) hours**;
 * above each day its weekday, date and maximum, and "⚠ bis NN" in red when
   the peak risk crosses the threshold of the
-  [peak-risk sensor](entities.md#peak-risk);
+  [peak-risk sensor](entities.md#peak-risk); on a narrow card the header
+  shortens step by step to "Mo 26." / "27 ct" / "⚠ 25" and then to the weekday
+  alone;
 * nights shaded from `sun.sun`, and a dotted "jetzt" line where the forecast
   begins.
 

@@ -11,7 +11,8 @@
 # chance (hatched green down to P10), the 4 dearest (▲) and cheapest (▼) hours of each
 # day, nights from sun.sun and a dotted "now" line. Above each day: weekday, date, the
 # maximum and "⚠ bis NN" when the peak risk crosses the threshold of the peak-risk
-# sensor (the option "peak threshold" of the integration).
+# sensor (the option "peak threshold" of the integration). Narrow cards get a
+# shorter header ("Mo 26." / "27 ct" / "⚠ 25", below 480 px only the weekday).
 #
 # Times are handed to Plotly as wall-clock strings in the card's time zone (Home
 # Assistant's profile setting, as the card resolves it). The repeated hour of the
@@ -149,8 +150,11 @@ entities:
             const first = dayList.includes(yesterday) ? yesterday : (dayList[0] ?? today);
             const last = dayList.at(-1) ?? today;
             const width = get("layout.width") || 600;
+            const shown = dayList.filter((d) => d >= first);
             vars.sf = {
               C, rgba, dark, wall, addDays, now: wall(now), width, narrow: width < 480,
+              // Under ~62 px per day the full day header ("Mo 26.10." / "max 27 ct") runs together.
+              dense: (width - 60) / Math.max(shown.length, 1) < 62,
               threshold, fcStart, hasForecast: forecast.length > 0,
               range: [first + " 00:00", addDays(last, 1) + " 00:00"],
               fc: {
@@ -158,7 +162,7 @@ entities:
                 p90: fcLine.map((p) => p.p90), p10: fcLine.map((p) => p.p10),
               },
               dear, cheap,
-              days: dayList.filter((d) => d >= first).map((d) => days.get(d)),
+              days: shown.map((d) => days.get(d)),
               ink: css_vars["primary-text-color"], ink2: css_vars["secondary-text-color"], bg,
             };
             return { xs: knownLine.map((p) => p.w), ys: knownLine.map((p) => p.v) };
@@ -335,9 +339,9 @@ layout:
         const wd = WD[new Date(day.d + "T12:00:00Z").getUTCDay()];
         const date = `${day.d.slice(8, 10)}.${day.d.slice(5, 7)}.`;
         const risk = day.fc && sf.threshold != null && day.p90 > sf.threshold;
-        const warn = risk ? `<span style="color:${sf.C.risk}">⚠ ${sf.narrow ? "" : "bis "}${f0(day.p90)}</span>` : " ";
-        const head = sf.narrow ? `<b>${wd}</b>` : `<b>${wd} ${date}</b>`;
-        const max = sf.narrow ? f0(day.max) : `max ${f0(day.max)} ct`;
+        const warn = risk ? `<span style="color:${sf.C.risk}">⚠ ${sf.narrow || sf.dense ? "" : "bis "}${f0(day.p90)}</span>` : " ";
+        const head = sf.narrow ? `<b>${wd}</b>` : sf.dense ? `<b>${wd} ${date.slice(0, 3)}</b>` : `<b>${wd} ${date}</b>`;
+        const max = sf.narrow ? f0(day.max) : sf.dense ? `${f0(day.max)} ct` : `max ${f0(day.max)} ct`;
         return {
           x: day.d + " 12:00", xref: "x", y: 1, yref: "paper", yanchor: "bottom",
           showarrow: false, align: "center",
