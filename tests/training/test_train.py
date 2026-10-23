@@ -137,7 +137,7 @@ def test_run_fails_when_raw_data_ends_before_cutoff(monkeypatch, tmp_path):
     import training.train as train
 
     monkeypatch.setattr(
-        train, "load_raw", lambda path: _raw_until(*[datetime(2026, 9, 20, tzinfo=UTC)] * 2)
+        train, "load_raw", lambda path, zone: _raw_until(*[datetime(2026, 9, 20, tzinfo=UTC)] * 2)
     )
     with pytest.raises(ValueError, match="refetch the raw data"):
         train.run(

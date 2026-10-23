@@ -1,7 +1,9 @@
 """Monthly CI training: train, run the quality gate, build the release manifest.
 
-python -m training.ci --raw DIR --out DIR --cutoff YYYY-MM-DD
+python -m training.ci --raw DIR --out DIR --cutoff YYYY-MM-DD [--zone CODE]
     [--previous-manifest FILE] [--previous-model FILE ...] [--capacity-month YYYY-MM]
+
+One zone per run; ``training.ci_zones`` runs every zone and chains the manifests.
 
 Besides the training outputs (see ``training.train``) it writes to ``--out``:
 
@@ -41,7 +43,7 @@ import zlib
 from core.ledger import runs_from_backfill_file
 from core.manifest import MAX_CUTOFF_AHEAD
 from core.model import ModelFile, ModelMismatch, load_model, sample_check
-from core.zones import ZONES
+from core.zones import ZONES, zone_by_slug
 
 from . import gate, train
 from .dataset import Dataset
@@ -164,7 +166,7 @@ def check_outputs(
         raise ValueError(f"model file says version {model.version}, expected {version}")
     if (why := _future_cutoff(model.train_cutoff, today)) is not None:
         raise ValueError(f"model {model.version}: {why}")
-    tz = next(z.tz for z in ZONES.values() if z.slug == zone)
+    tz = zone_by_slug(zone).tz
     try:
         runs = runs_from_backfill_file(backfill_bytes, version, tz)
     except (OSError, EOFError, zlib.error, ValueError, KeyError, TypeError) as e:
@@ -195,6 +197,12 @@ def _parse(argv: list[str]) -> argparse.Namespace:
     ap.add_argument("--raw", required=True, help="raw-data directory (fetch output)")
     ap.add_argument("--out", type=Path, required=True)
     ap.add_argument("--cutoff", type=date.fromisoformat, required=True)
+    ap.add_argument(
+        "--zone",
+        choices=list(ZONES),
+        default=next(iter(ZONES)),
+        help="bidding zone (default: %(default)s)",
+    )
     ap.add_argument("--previous-manifest", type=Path, default=None)
     ap.add_argument(
         "--previous-model",
@@ -222,6 +230,7 @@ def run(argv: list[str], max_iter: int = 600, today: date | None = None) -> int:
         print(f"refusing to train: {why}", file=sys.stderr)
         return 1
     train_argv = ["--raw", args.raw, "--out", str(args.out), "--cutoff", args.cutoff.isoformat()]
+    train_argv += ["--zone", args.zone]
     if args.capacity_month:
         train_argv += ["--capacity-month", args.capacity_month]
     try:

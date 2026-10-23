@@ -1,6 +1,6 @@
 """Training CLI: model file, out-of-sample backfill and accuracy report.
 
-python -m training.train --raw DIR --out DIR --cutoff YYYY-MM-DD
+python -m training.train --raw DIR --out DIR --cutoff YYYY-MM-DD [--zone CODE]
     [--walk-forward-from YYYY-MM-DD] [--backfill-days 180] [--capacity-month YYYY-MM]
 """
 
@@ -18,15 +18,14 @@ from zoneinfo import ZoneInfo
 import numpy as np
 from sklearn.ensemble import HistGradientBoostingRegressor
 
-from core.features import FEATURE_NAMES, FEATURE_SCHEMA, HORIZONS, Hourly
+from core.features import FEATURE_SCHEMA, HORIZONS, Hourly, feature_names, uses_capacity
 from core.model import FORMAT, ModelFile, dump_model
-from core.zones import DE_LU
+from core.zones import ZONES
 
 from .dataset import Dataset, RawData, build_dataset, load_raw
 from .export import trees_from_sklearn
 from .report import Predictions, evaluate, render_markdown, window_offsets
 
-ZONE = "de_lu"
 BACKFILL_FORMAT = 1
 PEAK_PERCENTILE = 97
 QUANTILES = {"median": None, "p90_raw": 0.9, "p10_raw": 0.1}
@@ -122,14 +121,14 @@ def walk_forward(ds: Dataset, first_anchor: date, cutoff: date, max_iter: int = 
     return Predictions(**{k: np.concatenate([getattr(p, k) for p in parts]) for k in fields})
 
 
-def _local_midnight_utc(d: date) -> datetime:
-    return datetime.combine(d, time(), ZoneInfo(DE_LU.tz)).astimezone(UTC)
+def _local_midnight_utc(d: date, tz: str) -> datetime:
+    return datetime.combine(d, time(), ZoneInfo(tz)).astimezone(UTC)
 
 
-def peak_threshold(prices: Hourly, cutoff: date) -> float:
-    """97th percentile of the hourly prices in the 365 days before ``cutoff``."""
-    first = _local_midnight_utc(cutoff - timedelta(days=365))
-    hours = int((_local_midnight_utc(cutoff) - first) / timedelta(hours=1))
+def peak_threshold(prices: Hourly, cutoff: date, tz: str) -> float:
+    """97th percentile of the hourly prices in the 365 local days before ``cutoff``."""
+    first = _local_midnight_utc(cutoff - timedelta(days=365), tz)
+    hours = int((_local_midnight_utc(cutoff, tz) - first) / timedelta(hours=1))
     return float(np.nanpercentile(prices.window(first, hours), PEAK_PERCENTILE))
 
 
@@ -145,7 +144,7 @@ def check_data_reaches(raw: RawData, cutoff: date) -> None:
     model would silently be trained on less data than its version name promises.
     """
     last_day = cutoff - timedelta(days=1)
-    need = _local_midnight_utc(last_day)
+    need = _local_midnight_utc(last_day, raw.zone.tz)
     series = {"prices": raw.prices}
     for offset, by_name in sorted(raw.weather.items()):
         series.update({f"weather {name} (offset {offset})": s for name, s in by_name.items()})
@@ -161,7 +160,9 @@ def check_data_reaches(raw: RawData, cutoff: date) -> None:
 
 def capacity_at(raw: RawData, cutoff: date, month: str | None = None) -> dict[str, float]:
     """Installed capacity of the last training anchor's month (the day before the cutoff),
-    or of ``month`` ("YYYY-MM") when given."""
+    or of ``month`` ("YYYY-MM") when given; empty for a zone whose features do not use it."""
+    if not uses_capacity(raw.zone):
+        return {}
     month = month or f"{cutoff - timedelta(days=1):%Y-%m}"
     if month not in raw.capacity:
         raise DataLag(
@@ -202,6 +203,12 @@ def _parse(argv: list[str]) -> argparse.Namespace:
         help="train on target days before this date",
     )
     ap.add_argument(
+        "--zone",
+        choices=list(ZONES),
+        default=next(iter(ZONES)),
+        help="bidding zone (default: %(default)s)",
+    )
+    ap.add_argument(
         "--walk-forward-from",
         type=date.fromisoformat,
         default=None,
@@ -226,9 +233,10 @@ def run(argv: list[str], max_iter: int = 600) -> TrainResult:
     cutoff = args.cutoff
     backfill_from = cutoff - timedelta(days=args.backfill_days)
     report_from = args.walk_forward_from or backfill_from
-    version = f"{ZONE}-{cutoff:%Y-%m}"
+    zone = ZONES[args.zone]
+    version = f"{zone.slug}-{cutoff:%Y-%m}"
 
-    raw = load_raw(args.raw)
+    raw = load_raw(args.raw, zone)
     check_data_reaches(raw, cutoff)
     capacity = capacity_at(raw, cutoff, args.capacity_month)
     ds = build_training_data(raw, cutoff)
@@ -237,15 +245,15 @@ def run(argv: list[str], max_iter: int = 600) -> TrainResult:
     first_anchor = min(report_from, backfill_from - timedelta(days=max(HORIZONS)))
     wf = walk_forward(ds, first_anchor, cutoff, max_iter)
 
-    threshold = peak_threshold(raw.prices, cutoff)
+    threshold = peak_threshold(raw.prices, cutoff, zone.tz)
     metrics = evaluate(wf, report_from, cutoff, threshold)
     final = {k: trees_from_sklearn(fit(ds, q, max_iter)) for k, q in QUANTILES.items()}
     model = ModelFile(
         format=FORMAT,
-        zone=ZONE,
+        zone=zone.slug,
         version=version,
         feature_schema=FEATURE_SCHEMA,
-        features=tuple(FEATURE_NAMES),
+        features=feature_names(zone),
         train_cutoff=cutoff,
         created=datetime.now(UTC),
         median=final["median"],

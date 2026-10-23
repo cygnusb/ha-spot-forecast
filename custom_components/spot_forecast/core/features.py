@@ -90,6 +90,11 @@ def feature_names(zone: Zone) -> tuple[str, ...]:
     return tuple(names)
 
 
+def uses_capacity(zone: Zone) -> bool:
+    """Whether the zone's features include the installed capacity (DE-LU only)."""
+    return bool(set(CAPACITY_NAMES) & set(feature_names(zone)))
+
+
 def _radiation_points(zone: Zone) -> tuple[str, ...]:
     return tuple(p for p in zone.solar if "shortwave_radiation" in point_vars(p))
 

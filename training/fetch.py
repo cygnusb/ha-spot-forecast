@@ -1,12 +1,13 @@
-"""Download the raw DE-LU training inputs into a cache directory (no API key needed).
+"""Download the raw training inputs of the zones into a cache directory (no API key needed).
 
-Sources: Energy-Charts day-ahead prices DE-LU (data from SMARD, CC BY 4.0), Energy-Charts
-installed capacity, Open-Meteo Previous Runs API (archived ECMWF IFS 0.25 forecasts).
-Same layout as research/data/raw: prices/DE-LU/*.json, weather/<point>_<YYYY-MM>.json,
-installed_power.json. Chunks whose cached data reaches the chunk end are reused; chunks near
-the end are refetched.
+Sources: Energy-Charts day-ahead prices per zone (data from SMARD, CC BY 4.0), Energy-Charts
+installed capacity (Germany, for DE-LU), Open-Meteo Previous Runs API (archived ECMWF IFS
+0.25 forecasts). Same layout as research/data/raw, shared by the zones:
+prices/<zone code>/*.json, weather/<point>_<YYYY-MM>.json (one file set per point, whatever
+zones use it), installed_power.json. Chunks whose cached data reaches the chunk end are
+reused; chunks near the end are refetched.
 
-Usage: python -m training.fetch --raw training/data/raw [--end YYYY-MM-DD]
+Usage: python -m training.fetch --raw training/data/raw [--end YYYY-MM-DD] [--zones DE-LU,NL]
 """
 
 from __future__ import annotations
@@ -21,7 +22,8 @@ import time
 
 import requests
 
-from core.zones import DE_LU
+from core.features import uses_capacity
+from core.zones import ZONES, Point, Zone
 
 from .constants import OFFSETS, WEATHER_MODEL
 
@@ -98,19 +100,19 @@ def _is_complete(path: Path, chunk_end: dt.date, end: dt.date) -> bool:
     return last is not None and last >= chunk_stop - _END_TOLERANCE
 
 
-def fetch_prices(raw: Path, end: dt.date, start: dt.date = START) -> None:
-    out = raw / "prices" / DE_LU.code
+def fetch_prices(raw: Path, end: dt.date, zone: Zone, start: dt.date = START) -> None:
+    out = raw / "prices" / zone.code
     out.mkdir(parents=True, exist_ok=True)
     # Energy-Charts rate-limits aggressively: few large requests with pauses.
     for a, b in month_chunks(start - dt.timedelta(days=40), end, months=6):
         path = out / f"{a:%Y-%m}_6m.json"
         if _is_complete(path, b, end):
             continue
-        print(f"prices {DE_LU.code} {a}..{b}")
+        print(f"prices {zone.code} {a}..{b}")
         data = _get(
             "https://api.energy-charts.info/price",
             {
-                "bzn": DE_LU.code,
+                "bzn": zone.code,
                 "start": f"{a}T00:00Z",
                 "end": f"{b + dt.timedelta(days=1)}T00:00Z",
             },
@@ -160,11 +162,35 @@ def fetch_weather(
             time.sleep(3)
 
 
-def fetch_all(raw: Path, end: dt.date) -> None:
-    fetch_installed(raw)
-    fetch_prices(raw, end)
-    fetch_weather(raw, end, DE_LU.points, DE_LU.weather_vars)
-    fetch_weather(raw, end, DE_LU.neighbor_points, DE_LU.neighbor_vars)
+def weather_sets(zones: list[Zone]) -> list[tuple[dict[str, Point], tuple[str, ...]]]:
+    """The zones' point sets with every point once (a point has one variable set)."""
+    seen: set[str] = set()
+    out = []
+    for zone in zones:
+        for points, variables in zone.point_sets():
+            new = {name: coords for name, coords in points.items() if name not in seen}
+            seen |= set(new)
+            if new:
+                out.append((new, variables))
+    return out
+
+
+def fetch_all(raw: Path, end: dt.date, zones: list[Zone]) -> None:
+    if any(uses_capacity(z) for z in zones):
+        fetch_installed(raw)
+    for zone in zones:  # serial, with the pauses in fetch_prices: Energy-Charts rate limits
+        fetch_prices(raw, end, zone)
+    for points, variables in weather_sets(zones):
+        fetch_weather(raw, end, points, variables)
+
+
+def _zones(value: str) -> list[Zone]:
+    """argparse type for a comma-separated list of zone codes."""
+    codes = [c.strip() for c in value.split(",") if c.strip()]
+    unknown = [c for c in codes if c not in ZONES]
+    if unknown or not codes:
+        raise argparse.ArgumentTypeError(f"unknown zones {unknown}; known: {', '.join(ZONES)}")
+    return [ZONES[c] for c in dict.fromkeys(codes)]
 
 
 def main(argv: list[str] | None = None) -> None:
@@ -176,8 +202,14 @@ def main(argv: list[str] | None = None) -> None:
         default=dt.date.today() - dt.timedelta(days=1),
         help="last day to fetch (default: yesterday)",
     )
+    p.add_argument(
+        "--zones",
+        type=_zones,
+        default=list(ZONES.values()),
+        help=f"comma-separated zone codes (default: all, {','.join(ZONES)})",
+    )
     args = p.parse_args(argv)
-    fetch_all(args.raw, args.end)
+    fetch_all(args.raw, args.end, args.zones)
 
 
 if __name__ == "__main__":

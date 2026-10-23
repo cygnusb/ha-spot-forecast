@@ -22,12 +22,13 @@ BASE = "https://example.test/models"
 
 
 TINY = None  # tests/conftest.py's tiny_model_file, the base of every model file here
+TINY_NL = None  # and tiny_nl_model_file
 
 
 @pytest.fixture(autouse=True)
-def _tiny(tiny_model_file):
-    global TINY
-    TINY = tiny_model_file
+def _tiny(tiny_model_file, tiny_nl_model_file):
+    global TINY, TINY_NL
+    TINY, TINY_NL = tiny_model_file, tiny_nl_model_file
 
 
 def _model(cutoff: str = "2026-11-01", **changes) -> bytes:
@@ -241,7 +242,7 @@ def _flipped(data: bytes) -> bytes:
     [
         ("corrupt model", "does not load"),
         ("implausible model", "does not load"),
-        ("other zone", "is for zone 'at'"),
+        ("other zone", "is for zone 'nl', not 'de_lu'"),
         ("other version", "manifest de_lu-2026-11"),
         ("other cutoff", "has cutoff 2026-11-02"),
         ("corrupt backfill", "does not parse"),
@@ -259,7 +260,7 @@ def test_fetch_published_model_checks_the_files_as_the_integration(
         median = replace(TINY.median, value=TINY.median.value * 1e6)
         model = _model(median=median)
     elif case == "other zone":
-        model = _model(zone="at")
+        model = _nl_model("2026-11-01", version="de_lu-2026-11")
     elif case == "other version":
         model = _model(version="de_lu-2026-10")
     elif case == "other cutoff":
@@ -304,3 +305,42 @@ def test_fetch_published_model_rejects_a_malformed_manifest(monkeypatch, models_
     before = _snapshot(models_dir)
     assert _run(monkeypatch, web, models_dir) == 1
     assert _snapshot(models_dir) == before
+
+
+def _nl_model(cutoff: str, **changes) -> bytes:
+    model = replace(TINY_NL, version=f"nl-{cutoff[:7]}", train_cutoff=date.fromisoformat(cutoff))
+    return dump_model(replace(model, **changes))
+
+
+def _nl_entry(model: bytes, backfill: bytes, schema: int = FEATURE_SCHEMA) -> dict:
+    entry = _entry(model, backfill, schema)
+    version = entry["version"] = "nl-2026-11"
+    entry["model"] = _asset(f"{version}.json.gz", model)
+    entry["backfill"] = _asset(f"{version}.backfill.json.gz", backfill)
+    return entry
+
+
+@pytest.mark.parametrize("nl_schema", [FEATURE_SCHEMA, FEATURE_SCHEMA + 1], ids=["same", "newer"])
+def test_fetch_published_model_handles_every_bundled_zone(monkeypatch, models_dir, nl_schema):
+    """DE-LU and NL bundled: each zone is updated or kept on its own (a published NL model of
+    another feature schema keeps the bundled NL files and does not stop DE-LU)."""
+    (models_dir / "nl.json.gz").write_bytes(_nl_model("2026-10-01"))
+    (models_dir / "nl.backfill.json.gz").write_bytes(_backfill("nl-2026-10"))
+    bundled_nl = _snapshot(models_dir)
+    de_model, de_backfill = _model(), _backfill()
+    nl_model = _nl_model("2026-11-01", feature_schema=nl_schema)
+    nl_backfill = _backfill("nl-2026-11")
+    files = _published(_entry(de_model, de_backfill), de_model, de_backfill)
+    doc = _manifest_doc(files)
+    doc["zones"]["nl"] = _nl_entry(nl_model, nl_backfill, nl_schema)
+    _set_manifest(files, doc)
+    files[f"{BASE}/nl-2026-11.json.gz"] = nl_model
+    files[f"{BASE}/nl-2026-11.backfill.json.gz"] = nl_backfill
+    assert _run(monkeypatch, FakeWeb(files), models_dir) == 0
+    after = _snapshot(models_dir)
+    assert (after["de_lu.json.gz"], after["de_lu.backfill.json.gz"]) == (de_model, de_backfill)
+    if nl_schema == FEATURE_SCHEMA:
+        assert (after["nl.json.gz"], after["nl.backfill.json.gz"]) == (nl_model, nl_backfill)
+    else:
+        assert after["nl.json.gz"] == bundled_nl["nl.json.gz"]
+        assert after["nl.backfill.json.gz"] == bundled_nl["nl.backfill.json.gz"]

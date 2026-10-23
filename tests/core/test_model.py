@@ -57,29 +57,11 @@ def test_rejects_reordered_features(tiny_model_file):
         load_model(dump_model(replace(tiny_model_file, features=tuple(feats))))
 
 
-def _nl_model(tiny_model_file):
-    from core.features import feature_names
-    from core.zones import NL
-    from tests.conftest import make_random_trees
-
-    n = len(feature_names(NL))
-    return replace(
-        tiny_model_file,
-        zone="nl",
-        version="nl-2026-11",
-        features=feature_names(NL),
-        median=make_random_trees(5, 4, n, seed=20),
-        p90=make_random_trees(5, 4, n, seed=21),
-        p10=make_random_trees(5, 4, n, seed=22),
-        capacity={},
-    )
-
-
-def test_nl_model_roundtrip(tiny_model_file):
+def test_nl_model_roundtrip(tiny_nl_model_file):
     from core.features import feature_names
     from core.zones import NL
 
-    m = load_model(dump_model(_nl_model(tiny_model_file)))
+    m = load_model(dump_model(tiny_nl_model_file))
     assert m.zone == "nl" and m.features == feature_names(NL) and m.capacity == {}
     sample_check(m)
 
@@ -89,16 +71,15 @@ def test_nl_model_roundtrip(tiny_model_file):
     [("nl", "de_lu"), ("de_lu", "nl"), ("at", "de_lu")],
     ids=["nl-with-de_lu-features", "de_lu-with-nl-features", "unknown-zone"],
 )
-def test_rejects_features_of_another_zone(tiny_model_file, zone, features):
+def test_rejects_features_of_another_zone(tiny_model_file, tiny_nl_model_file, zone, features):
     """A model file is checked against its own zone's layout, never mis-applied."""
-    nl = _nl_model(tiny_model_file)
-    source = nl if features == "nl" else tiny_model_file
+    source = tiny_nl_model_file if features == "nl" else tiny_model_file
     with pytest.raises(ModelMismatch, match="zone") as err:
         load_model(dump_model(replace(source, zone=zone)))
     assert not isinstance(err.value, ModelCorrupt)
 
 
-def test_rejects_nl_tree_feature_past_its_layout(tiny_model_file):
+def test_rejects_nl_tree_feature_past_its_layout(tiny_nl_model_file):
     """The feature-index bound is the zone's feature count (NL has fewer than DE-LU)."""
     from core.features import feature_names
     from core.zones import NL
@@ -107,7 +88,7 @@ def test_rejects_nl_tree_feature_past_its_layout(tiny_model_file):
         d["median"]["feature"][_first_internal(d["median"])] = len(feature_names(NL))
 
     with pytest.raises(ModelCorrupt, match="feature index out of range"):
-        load_model(_mutated(_nl_model(tiny_model_file), change))
+        load_model(_mutated(tiny_nl_model_file, change))
 
 
 def test_split_semantics_and_nan_routing():

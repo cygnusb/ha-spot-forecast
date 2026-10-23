@@ -12,13 +12,14 @@ import numpy as np
 import pandas as pd
 
 from core.features import (
-    FEATURE_NAMES,
     HORIZONS,
     Hourly,
     InsufficientHistory,
     build_features,
     daily_stats,
     decode,
+    feature_names,
+    uses_capacity,
 )
 from core.ingest import (
     hourly_prices,
@@ -26,23 +27,22 @@ from core.ingest import (
     parse_energy_charts,
     weather_by_horizon_from_previous_runs,
 )
-from core.zones import DE_LU
-
-_COL = {name: i for i, name in enumerate(FEATURE_NAMES)}
+from core.zones import DE_LU, Zone
 
 
 @dataclass(frozen=True, eq=False)
 class RawData:
     prices: Hourly  # EUR/MWh, hourly means
     weather: dict[int, dict[str, Hourly]]  # offset -> "{point}__{var}" -> series
-    capacity: dict[str, dict[str, float]]  # "YYYY-MM" -> cap_* (forward-filled)
+    capacity: dict[str, dict[str, float]]  # "YYYY-MM" -> cap_* (forward-filled); {} if unused
+    zone: Zone = DE_LU
 
 
 @dataclass(frozen=True, eq=False)
 class Dataset:
     """One row per (anchor, target hour); all arrays have ``n`` rows."""
 
-    X: np.ndarray  # n x len(FEATURE_NAMES)
+    X: np.ndarray  # n x len(feature_names(zone))
     y_price: np.ndarray  # actual price, EUR/MWh
     times: np.ndarray  # target hour start, UTC datetime (object array)
     h: np.ndarray
@@ -68,19 +68,17 @@ def _json_files(directory: Path, pattern: str) -> list[Path]:
     return sorted(f for f in directory.glob(pattern) if not f.name.startswith("."))
 
 
-def _load_prices(raw: Path) -> Hourly:
+def _load_prices(raw: Path, zone: Zone) -> Hourly:
     slots = {}
-    for f in _json_files(raw / "prices" / DE_LU.code, "*.json"):
+    for f in _json_files(raw / "prices" / zone.code, "*.json"):
         for s in parse_energy_charts(json.loads(f.read_text())):
             slots.setdefault(s.start, s)
     return hourly_prices(sorted(slots.values(), key=lambda s: s.start))
 
 
-def _load_weather(raw: Path) -> dict[int, dict[str, Hourly]]:
-    point_vars = {
-        **dict.fromkeys(DE_LU.points, DE_LU.weather_vars),
-        **dict.fromkeys(DE_LU.neighbor_points, DE_LU.neighbor_vars),
-    }
+def _load_weather(raw: Path, zone: Zone) -> dict[int, dict[str, Hourly]]:
+    """The series of the zone's own and neighbour points (the files of other points stay)."""
+    point_vars = {name: variables for points, variables in zone.point_sets() for name in points}
     out: dict[int, dict[str, Hourly]] = {h + 1: {} for h in HORIZONS}
     for name, variables in point_vars.items():
         files = [
@@ -108,8 +106,11 @@ def _load_capacity(raw: Path) -> dict[str, dict[str, float]]:
     return {month: {k: float(v) for k, v in row.items()} for month, row in caps.iterrows()}
 
 
-def load_raw(raw: Path) -> RawData:
-    return RawData(_load_prices(raw), _load_weather(raw), _load_capacity(raw))
+def load_raw(raw: Path, zone: Zone = DE_LU) -> RawData:
+    """The zone's prices and weather from the shared raw directory (``training.fetch``),
+    and the installed capacity if its features use it."""
+    capacity = _load_capacity(raw) if uses_capacity(zone) else {}
+    return RawData(_load_prices(raw, zone), _load_weather(raw, zone), capacity, zone)
 
 
 def build_dataset(raw: RawData, first_anchor: date, last_anchor: date) -> Dataset:
@@ -118,7 +119,9 @@ def build_dataset(raw: RawData, first_anchor: date, last_anchor: date) -> Datase
     Anchors without 30 days of history are skipped; rows without an actual price,
     ``wind_mean`` or ``p_lastweek`` are dropped (research ``dropna``).
     """
-    daily = daily_stats(raw.prices, DE_LU)  # once; build_features ignores prices after the anchor
+    zone = raw.zone
+    col = {name: i for i, name in enumerate(feature_names(zone))}
+    daily = daily_stats(raw.prices, zone)  # once; build_features ignores prices after the anchor
     weather = {h: raw.weather[h + 1] for h in HORIZONS}
     cols: dict[str, list[np.ndarray]] = {k: [] for k in Dataset.__dataclass_fields__}
     for anchor in (
@@ -126,12 +129,12 @@ def build_dataset(raw: RawData, first_anchor: date, last_anchor: date) -> Datase
     ):
         capacity = raw.capacity.get(f"{anchor:%Y-%m}", {})
         try:
-            fm = build_features(anchor, raw.prices, daily, weather, capacity, DE_LU)
+            fm = build_features(anchor, raw.prices, daily, weather, capacity, zone)
         except InsufficientHistory:
             continue
         price = np.array([raw.prices.at(t) for t in fm.times])
-        p_lastweek = decode(fm.X[:, _COL["p_lastweek"]], fm)  # back to EUR/MWh
-        keep = ~(np.isnan(price) | np.isnan(fm.X[:, _COL["wind_mean"]]) | np.isnan(p_lastweek))
+        p_lastweek = decode(fm.X[:, col["p_lastweek"]], fm)  # back to EUR/MWh
+        keep = ~(np.isnan(price) | np.isnan(fm.X[:, col["wind_mean"]]) | np.isnan(p_lastweek))
         n = len(fm.times)
         rows = {
             "X": fm.X,
@@ -147,5 +150,5 @@ def build_dataset(raw: RawData, first_anchor: date, last_anchor: date) -> Datase
         for k, v in rows.items():
             cols[k].append(v[keep])
     if not cols["X"]:
-        return Dataset(**{k: np.empty((0, len(FEATURE_NAMES)) if k == "X" else 0) for k in cols})
+        return Dataset(**{k: np.empty((0, len(col)) if k == "X" else 0) for k in cols})
     return Dataset(**{k: np.concatenate(v) for k, v in cols.items()})

@@ -148,3 +148,24 @@ def tiny_model_file():
         capacity={"cap_solar": 100.5, "cap_wind_on": 70.0, "cap_wind_off": 9.0},
         metrics={"mae_ct": 2.14, "note": "tiny"},
     )
+
+
+@pytest.fixture(scope="session")
+def tiny_nl_model_file(tiny_model_file):
+    """``tiny_model_file`` for zone NL: its feature layout, trees over it, no capacity."""
+    from dataclasses import replace
+
+    from core.features import feature_names
+    from core.zones import NL
+
+    n = len(feature_names(NL))
+    return replace(
+        tiny_model_file,
+        zone="nl",
+        version="nl-2026-11",
+        features=feature_names(NL),
+        median=make_random_trees(5, 4, n, seed=20),
+        p90=make_random_trees(5, 4, n, seed=21),
+        p10=make_random_trees(5, 4, n, seed=22),
+        capacity={},
+    )

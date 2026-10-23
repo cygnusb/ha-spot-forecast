@@ -117,7 +117,7 @@ def _weather():
     """Previous-runs weather by forecast offset, exactly as training loads it."""
     from training.dataset import _load_weather
 
-    return _load_weather(RESEARCH / "data" / "raw")
+    return _load_weather(RESEARCH / "data" / "raw", DE_LU)
 
 
 def _midnight(day: date, zone: Zone) -> datetime:
