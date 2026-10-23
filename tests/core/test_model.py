@@ -7,12 +7,15 @@ import time
 import numpy as np
 import pytest
 
+from core import ledger, model
 from core.features import FEATURE_NAMES
 from core.model import (
+    MAX_DEPTH,
     ModelCorrupt,
     ModelMismatch,
     Trees,
     dump_model,
+    gunzip_limited,
     load_model,
     sample_check,
 )
@@ -187,6 +190,92 @@ def test_rejects_feature_out_of_range(tiny_model_file):
 
     with pytest.raises(ModelCorrupt, match="feature"):
         load_model(_mutated(tiny_model_file, change))
+
+
+def test_rejects_leaf_feature_out_of_range(tiny_model_file):
+    """``predict`` indexes the feature of every current node, leaves included."""
+
+    def change(d):
+        d["p90"]["feature"][d["p90"]["is_leaf"].index(1)] = len(FEATURE_NAMES) + 5
+
+    err = _load_within(_mutated(tiny_model_file, change))
+    assert isinstance(err, ModelCorrupt) and "feature" in str(err)
+
+
+def test_rejects_too_many_nodes(tiny_model_file, monkeypatch):
+    n = len(tiny_model_file.median.feature)
+    monkeypatch.setattr(model, "MAX_NODES", n - 1)
+    with pytest.raises(ModelCorrupt, match="nodes"):
+        load_model(dump_model(tiny_model_file))
+    monkeypatch.setattr(model, "MAX_NODES", n)
+    load_model(dump_model(tiny_model_file))
+
+
+def _chain(depth: int) -> dict:
+    """One tree whose left branch is ``depth`` splits deep (its deepest leaf at ``depth``)."""
+    n = 2 * depth + 1  # inner node at 2k, its right leaf at 2k + 1, the last left leaf at n - 1
+    inner = [i % 2 == 0 and i < n - 1 for i in range(n)]
+    return {
+        "baseline": 0.0,
+        "feature": [0] * n,
+        "threshold": [0.0] * n,
+        "left": [i + 2 if inner[i] else 0 for i in range(n)],
+        "right": [i + 1 if inner[i] else 0 for i in range(n)],
+        "missing_left": [1] * n,
+        "is_leaf": [0 if x else 1 for x in inner],
+        "value": [0.0] * n,
+        "roots": [0],
+    }
+
+
+def test_depth_limit(tiny_model_file):
+    def deep(depth):
+        return _mutated(tiny_model_file, lambda d: d.update(p10=_chain(depth)))
+
+    m = load_model(deep(MAX_DEPTH))
+    assert m.p10.predict(np.zeros((1, len(FEATURE_NAMES)))).tolist() == [0.0]
+    err = _load_within(deep(MAX_DEPTH + 1))
+    assert isinstance(err, ModelCorrupt) and "deeper" in str(err)
+
+
+def test_rejects_deeply_nested_json():
+    with pytest.raises(ModelCorrupt, match="RecursionError"):
+        load_model(gzip.compress(b"[" * 100_000 + b"]" * 100_000))
+
+
+def test_rejects_a_model_above_the_decompressed_limit(tiny_model_file, monkeypatch):
+    data = dump_model(tiny_model_file)
+    monkeypatch.setattr(model, "MAX_MODEL_JSON_BYTES", len(gzip.decompress(data)) - 1)
+    with pytest.raises(ModelCorrupt, match="limit"):
+        load_model(data)
+
+
+def test_gunzip_limited():
+    payload = b"x" * 1000
+    data = gzip.compress(payload)
+    assert gunzip_limited(data, 1000) == payload
+    with pytest.raises(ModelCorrupt, match="limit"):
+        gunzip_limited(data, 999)
+    with pytest.raises(ModelCorrupt, match="limit"):
+        gunzip_limited(gzip.compress(b"\0" * 10**8), 10**6)  # a bomb stops at the limit
+    with pytest.raises(ModelCorrupt, match="truncated"):
+        gunzip_limited(data[:-3], 1000)
+    with pytest.raises(ModelCorrupt, match="trailing"):
+        gunzip_limited(data + b"junk", 1000)
+    with pytest.raises(ModelCorrupt):
+        gunzip_limited(b"not gzip", 1000)
+    flipped = bytearray(gzip.compress(json.dumps(list(range(500))).encode()))
+    flipped[20] ^= 0xFF
+    with pytest.raises(ModelCorrupt):
+        gunzip_limited(bytes(flipped), 10**6)
+
+
+def test_backfill_parser_has_a_decompressed_limit(monkeypatch):
+    data = gzip.compress(json.dumps({"format": 1, "rows": []}).encode())
+    assert ledger.runs_from_backfill_file(data, "v", "UTC") == []
+    monkeypatch.setattr(ledger, "MAX_BACKFILL_JSON_BYTES", 10)
+    with pytest.raises(ModelCorrupt, match="limit"):
+        ledger.runs_from_backfill_file(data, "v", "UTC")
 
 
 def test_rejects_non_finite_leaf_value(tiny_model_file):

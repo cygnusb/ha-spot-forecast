@@ -16,6 +16,11 @@ from .features import FEATURE_NAMES, FEATURE_SCHEMA, HORIZONS
 FORMAT = 1
 _ROW_CHUNK = 4096
 SAMPLE_LIMIT = 1e3  # |prediction| bound of the sample check (scaled deviations, not EUR/MWh)
+# decompressed sizes (bytes); the published files hold ~10 MB and ~2 MB of JSON
+MAX_MODEL_JSON_BYTES = 64 * 1024 * 1024
+MAX_BACKFILL_JSON_BYTES = 32 * 1024 * 1024
+MAX_NODES = 2_000_000  # per ensemble; the published ones have ~37,000
+MAX_DEPTH = 64  # splits from a root to its deepest leaf
 
 
 class ModelMismatch(ValueError):
@@ -24,6 +29,26 @@ class ModelMismatch(ValueError):
 
 class ModelCorrupt(ModelMismatch):
     """The model file cannot be decoded or its trees are not well-formed."""
+
+
+def gunzip_limited(data: bytes, max_size: int) -> bytes:
+    """``data`` (one gzip member) decompressed; ``ModelCorrupt`` past ``max_size`` bytes.
+
+    Stops decompressing at the limit, so a small file cannot expand into all memory. Also
+    ``ModelCorrupt`` if ``data`` is not gzip, is truncated or has bytes after the member.
+    """
+    d = zlib.decompressobj(wbits=31)  # gzip header and trailer
+    try:
+        out = d.decompress(data, max_size + 1)
+    except zlib.error as e:
+        raise ModelCorrupt(f"not valid gzip: {e}") from e
+    if len(out) > max_size:
+        raise ModelCorrupt(f"more than the limit of {max_size} bytes decompressed")
+    if not d.eof:
+        raise ModelCorrupt("gzip data is truncated")
+    if d.unused_data:
+        raise ModelCorrupt("trailing data after the gzip member")
+    return out
 
 
 @dataclass(frozen=True, eq=False)
@@ -120,6 +145,8 @@ def _trees_from_json(d: dict[str, Any], name: str) -> Trees:
 def _check_trees(t: Trees, name: str) -> None:
     """Structural checks that make ``predict`` safe: in bounds, finite, and terminating."""
     n = len(t.feature)
+    if n > MAX_NODES:
+        raise ModelCorrupt(f"{name}: {n} nodes, more than {MAX_NODES}")
     nodes = [getattr(t, field) for field, _ in _TREE_FIELDS if field != "roots"]
     if any(a.ndim != 1 or len(a) != n for a in nodes):
         raise ModelCorrupt(f"{name}: node arrays differ in length")
@@ -133,11 +160,21 @@ def _check_trees(t: Trees, name: str) -> None:
     for child in (t.left[inner], t.right[inner]):
         if ((child <= inner) | (child >= n)).any():
             raise ModelCorrupt(f"{name}: child index out of bounds or not after its parent")
-    feature = t.feature[inner]
-    if ((feature < 0) | (feature >= len(FEATURE_NAMES))).any():
+    # leaves too: ``_predict_chunk`` looks up the feature of every current node
+    if ((t.feature < 0) | (t.feature >= len(FEATURE_NAMES))).any():
         raise ModelCorrupt(f"{name}: feature index out of range")
     if not np.isfinite(t.threshold[inner]).all():
         raise ModelCorrupt(f"{name}: non-finite split threshold")
+    # level by level from the roots (after the acyclicity check, so the levels stay small)
+    level = t.roots
+    for _ in range(MAX_DEPTH):
+        level = level[~t.is_leaf[level]]
+        if len(level) == 0:
+            break
+        level = np.unique(np.concatenate((t.left[level], t.right[level])))
+    else:
+        if not t.is_leaf[level].all():
+            raise ModelCorrupt(f"{name}: a tree is deeper than {MAX_DEPTH}")
 
 
 def _offsets(d: dict[str, Any], name: str) -> dict[int, float]:
@@ -176,18 +213,20 @@ def load_model(data: bytes) -> ModelFile:
     if it cannot be decoded or is not well-formed.
     """
     try:
-        return _model_from_json(json.loads(gzip.decompress(data)))
+        raw = gunzip_limited(data, MAX_MODEL_JSON_BYTES)
+    except ModelCorrupt as e:
+        raise ModelCorrupt(f"model file is corrupt: {e}") from e
+    try:
+        return _model_from_json(json.loads(raw))
     except ModelMismatch:
         raise
     except (
-        OSError,
-        EOFError,
-        zlib.error,
         ValueError,
         KeyError,
         TypeError,
         AttributeError,
         OverflowError,  # JSON integers too large for numpy
+        RecursionError,  # JSON nested too deeply
     ) as e:
         raise ModelCorrupt(f"model file is corrupt: {type(e).__name__}: {e}") from e
 
