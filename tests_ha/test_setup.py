@@ -36,6 +36,7 @@ from custom_components.spot_forecast import sensor, store
 from custom_components.spot_forecast.const import (
     CONF_PEAK_THRESHOLD,
     CONF_SURCHARGE,
+    CONF_VAT,
     CONF_ZONE,
     DOMAIN,
 )
@@ -184,6 +185,50 @@ async def test_total_price_sensor_only_with_a_surcharge(
     await hass.async_block_till_done()
     assert hass.states.get(TOTAL) is None
     assert er.async_get(hass).async_get(TOTAL) is None
+
+
+async def test_display_options_apply_without_a_reload(
+    hass_with_recorder: HomeAssistant, set_up: SetUp, aioclient_mock: AiohttpClientMocker
+) -> None:
+    """Surcharge, VAT and peak threshold: the same coordinator, no fetch, entities updated."""
+    hass = hass_with_recorder
+    entry = await set_up({CONF_SURCHARGE: 0.1, CONF_PEAK_THRESHOLD: 1000.0})
+    coordinator = entry.runtime_data.coordinator
+    assert hass.states.get(PEAK).state == STATE_OFF
+    calls = aioclient_mock.call_count
+
+    options = {**entry.options, CONF_SURCHARGE: 0.2, CONF_VAT: 7.0, CONF_PEAK_THRESHOLD: 0.0}
+    with patch.object(
+        hass.config_entries, "async_reload", wraps=hass.config_entries.async_reload
+    ) as reload:
+        hass.config_entries.async_update_entry(entry, options=options)
+        await hass.async_block_till_done()
+
+    reload.assert_not_called()
+    assert entry.runtime_data.coordinator is coordinator
+    assert aioclient_mock.call_count == calls
+    assert coordinator.vat == 7.0
+    assert hass.states.get(PRICE).attributes["surcharge"] == 0.2
+    assert hass.states.get(TOTAL).attributes["surcharge"] == 0.2
+    peak = hass.states.get(PEAK)
+    assert peak.state == STATE_ON
+    assert peak.attributes["threshold"] == 0.0
+
+
+async def test_other_options_reload_the_entry(
+    hass_with_recorder: HomeAssistant, set_up: SetUp
+) -> None:
+    hass = hass_with_recorder
+    entry = await set_up({CONF_SURCHARGE: 0.1})
+    coordinator = entry.runtime_data.coordinator
+
+    options = {**entry.options, CONF_SURCHARGE: 0.2, "something_else": 1}
+    hass.config_entries.async_update_entry(entry, options=options)
+    await hass.async_block_till_done()
+
+    assert entry.state is ConfigEntryState.LOADED
+    assert entry.runtime_data.coordinator is not coordinator
+    assert hass.states.get(TOTAL).attributes["surcharge"] == 0.2
 
 
 async def test_anchor_switches_after_publication(

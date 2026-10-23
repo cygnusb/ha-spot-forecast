@@ -3,11 +3,12 @@
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import date, datetime, time, timedelta
 import logging
 import math
+from typing import Any
 from zoneinfo import ZoneInfo
 
 from homeassistant.config_entries import ConfigEntry
@@ -25,9 +26,11 @@ from .const import (
     CONF_BACKFILL_DAYS,
     CONF_PEAK_THRESHOLD,
     CONF_SURCHARGE,
+    CONF_VAT,
     CONF_ZONE,
     DEFAULT_BACKFILL_DAYS,
     DEFAULT_SURCHARGE,
+    DEFAULT_VAT,
     DOMAIN,
     PRICE_HISTORY_DAYS,
 )
@@ -126,6 +129,7 @@ class SpotForecastCoordinator(DataUpdateCoordinator[SpotData]):
         self.model = model
         self.model_source = model_source  # "bundled" or "downloaded"
         self.backfill = backfill  # raw gzip bytes of the backfill file that fits ``model``
+        self.options: dict[str, Any] = dict(entry.options)  # the options this setup applies
         self._store = ForecastStore(hass, entry.entry_id)
         self._ledger = Ledger()
         self._market: list[MarketSlot] = []
@@ -157,6 +161,26 @@ class SpotForecastCoordinator(DataUpdateCoordinator[SpotData]):
     def surcharge(self) -> float:
         """Grid fees and taxes in EUR/kWh added for the total price; 0 means none."""
         return float(self.config_entry.options.get(CONF_SURCHARGE, DEFAULT_SURCHARGE))
+
+    @property
+    def vat(self) -> float:
+        """VAT in percent, charged on the exchange part of the total price."""
+        return float(self.config_entry.options.get(CONF_VAT, DEFAULT_VAT))
+
+    async def async_apply_options(self, options: Mapping[str, Any]) -> None:
+        """Take over options that only change what is shown, without a reload.
+
+        Surcharge, VAT and peak threshold are read from the entry where they are used; the
+        30-day accuracy (its peak error) follows the new threshold, and the entities update
+        at once. Under the run lock, like every change of the shown data.
+        """
+        async with self._run_lock:
+            self.options = dict(options)
+            now = dt_util.utcnow()
+            self._p90_off, self._p10_off, self._accuracy = await self.hass.async_add_executor_job(
+                self._calibration, self._ledger, now, self.peak_threshold
+            )
+            self._rebuild(now)
 
     async def set_model(self, model: ModelFile, source: str, backfill: bytes) -> None:
         """Use ``model`` (with its backfill file) from the next run on.
