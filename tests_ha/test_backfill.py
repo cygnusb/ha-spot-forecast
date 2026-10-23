@@ -16,7 +16,7 @@ import logging
 from typing import Any
 from zoneinfo import ZoneInfo
 
-from conftest import PREVIOUS_RUNS_URL, T10, SetUp, Sources, advance, stat_rows
+from conftest import MODEL_FIXTURES, PREVIOUS_RUNS_URL, T10, SetUp, Sources, advance, stat_rows
 from freezegun.api import FrozenDateTimeFactory
 from homeassistant.config_entries import ConfigEntryState
 from homeassistant.core import HomeAssistant
@@ -28,7 +28,6 @@ from custom_components.spot_forecast import backfill as backfill_module
 from custom_components.spot_forecast.const import CONF_BACKFILL_DAYS, DOMAIN
 from custom_components.spot_forecast.coordinator import LEDGER_KEEP_DAYS
 from custom_components.spot_forecast.core.ledger import Ledger
-from custom_components.spot_forecast.model_loader import MODELS_DIR
 
 BERLIN = ZoneInfo("Europe/Berlin")
 TODAY = date(2026, 10, 22)
@@ -54,7 +53,7 @@ def _previous_runs_calls(aioclient_mock: AiohttpClientMocker) -> int:
 
 def _bundled_medians(h: int, day: date) -> dict[datetime, float]:
     """EUR/kWh medians of the bundled backfill file for target day ``day`` at horizon ``h``."""
-    doc = json.loads(gzip.decompress((MODELS_DIR / "de_lu.backfill.json.gz").read_bytes()))
+    doc = json.loads(gzip.decompress((MODEL_FIXTURES / "de_lu.backfill.json.gz").read_bytes()))
     hours = set(_hours(day))
     return {
         t: round(median / 1000, 5)

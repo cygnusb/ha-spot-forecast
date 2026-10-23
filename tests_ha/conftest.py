@@ -52,6 +52,10 @@ from custom_components.spot_forecast.sources import http
 pytest_plugins = "pytest_homeassistant_custom_component"
 
 FIXTURES = Path(__file__).parent / "fixtures"
+# A copy of the model and backfill file the tests were written against. The integration's
+# own `models/` is replaced by every model refresh and by the release workflow; the dates
+# the tests freeze to and the backfill days they expect belong to this pair.
+MODEL_FIXTURES = FIXTURES / "model"
 
 
 def pytest_configure(config: pytest.Config) -> None:
@@ -62,6 +66,14 @@ def pytest_configure(config: pytest.Config) -> None:
     terminal between the progress dots.
     """
     logging.getLogger("sqlalchemy.engine").setLevel(logging.WARNING)
+
+
+@pytest.fixture(autouse=True)
+def _bundled_model_fixture(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Load the "bundled" model from `fixtures/model`, not from the integration's `models/`."""
+    from custom_components.spot_forecast import model_loader
+
+    monkeypatch.setattr(model_loader, "MODELS_DIR", MODEL_FIXTURES)
 
 
 @pytest.fixture
