@@ -11,6 +11,7 @@ from homeassistant import config_entries
 from homeassistant.config_entries import ConfigEntryState
 from homeassistant.core import HomeAssistant
 from homeassistant.data_entry_flow import FlowResultType
+from homeassistant.helpers import entity_registry as er
 import pytest
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
@@ -184,6 +185,11 @@ async def test_surcharge_without_a_vat_option_gets_german_vat(
     assert float(total.state) == round(spot * 1.19 + 0.187, 5)
     assert total.attributes["vat"] == 19.0
     assert hass.states.get(PRICE).attributes["vat"] == 19.0  # the cards read it here
+    # EUR/kWh to 0.01 ct, so a 4-decimal surcharge shows in the total
+    registry = er.async_get(hass)
+    for entity_id in (PRICE, TOTAL, "sensor.spot_forecast_de_lu_forecast_error"):
+        options = registry.async_get(entity_id).options["sensor"]
+        assert options["suggested_display_precision"] == 4, entity_id
 
     result = await hass.config_entries.options.async_init(entry.entry_id)
     assert _default(result["data_schema"], CONF_SURCHARGE) == 0.187

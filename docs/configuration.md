@@ -30,8 +30,9 @@ right after setup and without access to GitHub.
 
 | Option | Default | Range | What it does |
 |---|---|---|---|
-| Grid fees and taxes | 0 | 0–1 EUR/kWh, in steps of 0.001 | Added per kWh to the exchange price for the [total-price sensor](entities.md#total-price) and the "mit Abgaben" view of the [forecast card](cards.md#forecast-card). 0 means no total-price sensor. |
-| Peak price threshold | the model's, 21.2 ct/kWh | 0–100 ct/kWh | Wholesale price above which an hour counts as a price peak, for the [peak-risk sensor](entities.md#peak-risk). |
+| Grid fees and taxes | 0 | 0–1 EUR/kWh, to 0.0001 | Gross amount per kWh, VAT included, added for the [total-price sensor](entities.md#total-price) and the "mit Abgaben" view of the [forecast card](cards.md#forecast-card). 0 means no total-price sensor. |
+| VAT on the market price | 19 % | 0–30 %, in steps of 0.1 | Value-added tax charged on the exchange price for the total price. |
+| Peak price threshold | the model's, 21.2 ct/kWh | 0–100 ct/kWh | Wholesale price at or above which an hour counts as a price peak, for the [peak-risk sensor](entities.md#peak-risk). |
 | Backfill window (days) | 60 | 0–180 | How many past days of forecasts are reconstructed on first start, so the look-back card and the calibration have history. 0 turns the backfill off. |
 | Update models automatically | on | | Check for a newer model for the zone after setup and once a day between 03:00 and 06:00, and download it if it passes its checks. Off stops further downloads; a model downloaded before stays in use (see [model updates](model.md#model-updates)). |
 
@@ -42,11 +43,21 @@ yours is kept.
 
 All other prices are the bare exchange price, without grid fees, taxes or
 supplier margin. The surcharge is one fixed amount per kWh: enter what you pay
-on top of the exchange price, value-added tax included. The statistics, the
-look-back, the error figures and the peak-risk and negative-price sensors stay
-on the exchange price, so they keep comparing like with like. A consumer such
-as [Smart Battery Pilot](smart-battery-pilot.md) can read either sensor; with
-the total-price sensor, set its own offset to 0 so the fees do not count twice.
+on top of the exchange price, value-added tax included. VAT is also charged on
+the exchange price itself, so the total price is
+
+```text
+total price = exchange price × (1 + VAT / 100) + grid fees and taxes
+```
+
+The default VAT is Germany's 19 %. Luxembourg, the other half of the bidding
+zone, charges a different rate on electricity: enter the one on your bill. A
+negative exchange price lowers the total by its amount plus VAT. The
+statistics, the look-back, the error figures and the peak-risk and
+negative-price sensors stay on the exchange price, so they keep comparing like
+with like. A consumer such as [Smart Battery Pilot](smart-battery-pilot.md) can
+read either sensor; with the total-price sensor, set its own offset to 0 so the
+fees do not count twice.
 
 ## First start and the backfill
 

@@ -20,6 +20,7 @@ from .core.output import current_price, day_summaries, total_price, with_surchar
 from .entity import SpotEntity
 
 UNIT = "EUR/kWh"
+PRECISION = 4  # EUR/kWh to 0.01 ct, as the surcharge option is kept
 WEATHER_ATTRIBUTION = "Open-Meteo (CC BY 4.0)"
 DAYS = 7
 
@@ -65,6 +66,7 @@ class PriceSensor(_SpotSensor):
     """Current market price; the ``prices`` attribute holds market then forecast slots."""
 
     _attr_native_unit_of_measurement = UNIT
+    _attr_suggested_display_precision = PRECISION
     _attr_state_class = SensorStateClass.MEASUREMENT
     _unrecorded_attributes = frozenset({"prices"})  # up to ~300 entries, above 16 KB
 
@@ -103,6 +105,7 @@ class TotalPriceSensor(_SpotSensor):
 
     KEY = "total_price"
     _attr_native_unit_of_measurement = UNIT
+    _attr_suggested_display_precision = PRECISION
     _attr_state_class = SensorStateClass.MEASUREMENT
     _unrecorded_attributes = frozenset({"prices"})
 
@@ -176,6 +179,7 @@ class ForecastErrorSensor(_SpotSensor):
     """Mean absolute error of the median forecast over the last 30 days, all horizons."""
 
     _attr_native_unit_of_measurement = UNIT
+    _attr_suggested_display_precision = PRECISION
     _attr_state_class = SensorStateClass.MEASUREMENT
     _attr_entity_category = EntityCategory.DIAGNOSTIC
 
@@ -222,6 +226,7 @@ class DaySensor(_SpotSensor):
     """Mean price of the local day ``offset`` days from today; min, max, P90/P10 as attributes."""
 
     _attr_native_unit_of_measurement = UNIT
+    _attr_suggested_display_precision = PRECISION
     _attr_entity_registry_enabled_default = False
 
     def __init__(self, coordinator: SpotForecastCoordinator, offset: int) -> None:

@@ -22,7 +22,8 @@ tomorrow. Anyone who plans a home battery, an electric car or a heat pump
 further ahead has to guess. Spot Forecast is a Home Assistant integration that
 fills the six days after the last published price with an hourly forecast for
 the DE-LU bidding zone, and says how far to trust it: an expected price per
-hour, a **peak-risk** value that is exceeded only about one hour in ten, and a
+hour, a **peak-risk** value that the price exceeded in 12–13 % of the hours of
+the backtest (the target is one in ten), and a
 **low-price** value for likely negative prices.
 
 It runs on open data (Energy-Charts and Open-Meteo), needs no account and no
@@ -135,8 +136,9 @@ options (*Configure* on the integration):
 
 | Option | Default | What it does |
 |---|---|---|
-| Grid fees and taxes | 0 | Per-kWh surcharge (EUR/kWh) for a total-price sensor and the forecast card's "mit Abgaben" view; 0 = none. |
-| Peak price threshold | from the model, 21.2 ct/kWh | Wholesale price above which an hour counts as a peak, for the peak-risk sensor. |
+| Grid fees and taxes | 0 | Gross per-kWh surcharge (EUR/kWh, VAT included) for a total-price sensor and the forecast card's "mit Abgaben" view; 0 = none. |
+| VAT on the market price | 19 % | VAT charged on the exchange price for the total price: price × (1 + VAT/100) + surcharge. Set your own rate, e.g. in Luxembourg. |
+| Peak price threshold | from the model, 21.2 ct/kWh | Wholesale price at or above which an hour counts as a peak, for the peak-risk sensor. |
 | Backfill window (days) | 60 | Past days of forecasts reconstructed on first start, so the look-back and the calibration have history (0–180, 0 = off). |
 | Update models automatically | on | Check for a newer model after setup and once a day, and download it if it passes its checks. Off stops further downloads; a model downloaded before stays in use. |
 
@@ -151,8 +153,8 @@ instance language.
 | Entity | Description |
 |---|---|
 | `sensor.spot_forecast_de_lu_price` | Current price. Attribute `prices`: every slot from today 00:00 to the end of the forecast |
-| `sensor.spot_forecast_de_lu_total_price` | Current price plus the grid fees and taxes option, `prices` likewise (only while the option is set) |
-| `binary_sensor.spot_forecast_de_lu_peak_risk` | On if a price above the threshold is known or likely (P90) in the next 48 h |
+| `sensor.spot_forecast_de_lu_total_price` | Current price with VAT plus the grid fees and taxes option, `prices` likewise (only while that option is set) |
+| `binary_sensor.spot_forecast_de_lu_peak_risk` | On if a price at or above the threshold is known or likely (P90) in the next 48 h |
 | `binary_sensor.spot_forecast_de_lu_negative_price` | On if a negative price is known or likely (P10) in the next 48 h |
 | `sensor.spot_forecast_de_lu_day_0` … `_day_6` | Mean price per day, with min, max, P90 max and P10 min (disabled by default) |
 | `sensor.spot_forecast_de_lu_last_run` | Last successful forecast run (diagnostic) |
