@@ -7,7 +7,7 @@ sources serve the recorded payloads (see ``conftest.Sources``).
 from __future__ import annotations
 
 import asyncio
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 import logging
 from typing import Any
 from unittest.mock import patch
@@ -819,3 +819,64 @@ async def test_runs_never_change_a_published_ledger(
     assert coordinator.ledger is not published
     assert coordinator.ledger.to_json() != saved
     assert published.to_json() == saved
+
+
+async def test_fall_back_day_end_to_end(
+    hass_with_recorder: HomeAssistant,
+    set_up: SetUp,
+    sources: Sources,
+    freezer: FrozenDateTimeFactory,
+) -> None:
+    """2026-10-25 has 25 hours: in the forecast, in the statistics and on the clock."""
+    hass = hass_with_recorder
+    fall_back = date(2026, 10, 25)
+    first_two = datetime(2026, 10, 25, 0, tzinfo=UTC)  # 02:00 CEST
+    second_two = datetime(2026, 10, 25, 1, tzinfo=UTC)  # 02:00 CET
+    freezer.move_to(datetime(2026, 10, 24, 10, tzinfo=BERLIN))
+    sources.serve("energy_charts_price_tomorrow.json", through=date(2026, 10, 24))
+    await set_up()
+
+    attrs = hass.states.get(PRICE).attributes
+    assert attrs["anchor_day"] == "2026-10-24"
+    day = [e for e in attrs["prices"] if e["time"].startswith("2026-10-25")]
+    assert len(day) == 25
+    assert {e["source"] for e in day} == {"forecast"} and {e["h"] for e in day} == {1}
+    times = [e["time"] for e in day]
+    assert times[2:4] == ["2026-10-25T02:00:00+02:00", "2026-10-25T02:00:00+01:00"]
+
+    # 14:00: the fall-back day's 100 quarter hours are published
+    sources.serve(
+        "energy_charts_price_tomorrow.json",
+        through=fall_back,
+        price_overrides={first_two: 11.0, second_two: 22.0},
+    )
+    await advance(hass, freezer, datetime(2026, 10, 24, 14, tzinfo=BERLIN))
+    attrs = hass.states.get(PRICE).attributes
+    assert attrs["anchor_day"] == "2026-10-25"
+    market = [e for e in attrs["prices"] if e["time"].startswith("2026-10-25")]
+    assert len(market) == 100 and {e["source"] for e in market} == {"market"}
+
+    def of_day(rows: list[dict]) -> list[datetime]:
+        starts = [datetime.fromtimestamp(r["start"], UTC) for r in rows]
+        return [t for t in starts if t.astimezone(BERLIN).date() == fall_back]
+
+    for statistic_id in (STAT_PRICE, STAT_H1):
+        hours = of_day(await stat_rows(hass, statistic_id))
+        assert len(hours) == len(set(hours)) == 25, statistic_id
+
+    # the clock across both 02:00: the price follows the quarter hours
+    shown = {}
+    for at in (
+        first_two - timedelta(minutes=15),
+        first_two,
+        first_two + timedelta(minutes=45),
+        second_two,
+        second_two + timedelta(minutes=15),
+    ):
+        await advance(hass, freezer, at)
+        state = hass.states.get(PRICE)
+        assert state.state != STATE_UNAVAILABLE
+        shown[at] = float(state.state)
+    assert shown[first_two] == 0.011
+    assert shown[second_two] == 0.022
+    assert hass.states.get(PEAK).state in (STATE_ON, STATE_OFF)
