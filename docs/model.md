@@ -45,6 +45,17 @@ recent evening price level (the median of the 18–21 h prices over the last
 the price, so this level follows the fuel cost without a gas price feed, and
 it lets price spikes grow with it.
 
+The price features are in the same units: the anchor day's price at the
+target hour, the price of that hour a week before, and the anchor day's mean,
+minimum and maximum with their 7- and 30-day windows are given as their
+distance from the 7-day mean, divided by the evening level; the spreads
+(standard deviations) are divided by it. So when prices rise, the trees do not
+meet price levels they have never seen. In the research backtest this cut the
+error by 0.15 ct in the year of the gas price rise and halved the bias, and it
+changed nothing in the calm summer of 2025. The two price lags take the same
+local clock hour, also across a daylight-saving switch: 18:00 a week before
+stays 18:00, not 17:00 or 19:00.
+
 The trees are exported to a compact JSON file
 (`custom_components/spot_forecast/models/de_lu.json.gz`): the feature list and
 order, the tree arrays, training period, version, backtest metrics, default
@@ -101,6 +112,10 @@ and they reach your install **separately from integration releases**:
   download counts only if it is newer than the bundled model.
   `sensor.spot_forecast_de_lu_model_version` shows which one runs (`source`:
   `bundled` or `downloaded`).
+* An integration update that changes the features (a new feature schema)
+  cannot use the models downloaded before: they are deleted, and the bundled
+  model runs until the first model of the new schema is published. An older
+  integration skips models of a newer schema and keeps its own.
 
 Each integration release bundles the latest published model, so a fresh
 install works without GitHub. Forecasts already written stay as they were;

@@ -188,6 +188,14 @@ In the rising-price year the gain is 0.15 ct and the negative bias halves: the t
 longer meet price levels they have never seen. In the calm 2025 summer (prices flat, little
 to extrapolate) `rel` is even (−0.003 ct overall), so it costs nothing where it does not help.
 
+**Adopted:** `rel` and the wall-clock lags together are feature schema 2 of `core.features`
+(the lags are `dst_lags` of `holidays_dst/build.py`, both checked bit for bit on the full
+training dataset). The bundled model `de_lu-2026-10`, retrained on them with the same cutoff
+and walk-forward window (issue days 2025-04-01 … 2026-09-30, all three quantile models),
+measures the two together: MAE 2.10 → 2.02 ct (D+1 1.79 → 1.70, D+6 2.48 → 2.43), last three
+months 2.79 → 2.48 ct, peak bias D+1 −8.4 → −7.5 ct; P90 exceedance (12 %) and the naive
+baseline (3.39 ct) unchanged. The research scripts are in `zones/` and `holidays_dst/`.
+
 ### Low-price chance (P10)
 
 A P10 quantile model (`--quantile 0.1 --target gq`) with the mirrored rolling conformal
