@@ -1,0 +1,389 @@
+
+const D = JSON.parse(document.getElementById("data").textContent);
+const T = D.t, A = D.actual;
+const ISSUE = "2026-09-20", NOW = "2026-09-20 10:00", PEAK = 21, BT_END = "2026-10-20";
+const H = [1, 2, 3, 4, 5, 6];
+const WD = ["So", "Mo", "Di", "Mi", "Do", "Fr", "Sa"];
+
+Plotly.register({
+  moduleType: "locale", name: "de", dictionary: {},
+  format: {
+    days: ["Sonntag", "Montag", "Dienstag", "Mittwoch", "Donnerstag", "Freitag", "Samstag"],
+    shortDays: WD,
+    months: ["Januar", "Februar", "März", "April", "Mai", "Juni", "Juli", "August", "September", "Oktober", "November", "Dezember"],
+    shortMonths: ["Jan", "Feb", "Mär", "Apr", "Mai", "Jun", "Jul", "Aug", "Sep", "Okt", "Nov", "Dez"],
+    date: "%d.%m.%Y", decimal: ",", thousands: ".",
+  },
+});
+const CFG = { displayModeBar: false, responsive: true, locale: "de", scrollZoom: false, doubleClick: false };
+
+const byDay = new Map();
+T.forEach((t, i) => { const d = t.slice(0, 10); if (!byDay.has(d)) byDay.set(d, []); byDay.get(d).push(i); });
+const DAYS = [...byDay.keys()];
+const addDays = (d, n) => { const x = new Date(d + "T12:00:00Z"); x.setUTCDate(x.getUTCDate() + n); return x.toISOString().slice(0, 10); };
+const dayLabel = d => WD[new Date(d + "T12:00:00Z").getUTCDay()] + " " + d.slice(8, 10) + "." + d.slice(5, 7) + ".";
+const wd = d => WD[new Date(d + "T12:00:00Z").getUTCDay()];
+const f1 = v => v == null || Number.isNaN(v) ? "–" : v.toLocaleString("de-DE", { minimumFractionDigits: 1, maximumFractionDigits: 1 });
+const f0 = v => Math.round(v).toLocaleString("de-DE");
+const mean = a => { const v = a.filter(x => x != null); return v.length ? v.reduce((s, x) => s + x, 0) / v.length : NaN; };
+const maxOf = a => Math.max(...a.filter(x => x != null));
+const minOf = a => Math.min(...a.filter(x => x != null));
+const hourOf = i => +T[i].slice(11, 13);
+const nextT = i => T[i + 1] || T[i];
+
+function rgba(hex, a) {
+  const m = hex.replace("#", "");
+  const n = parseInt(m.length === 3 ? m.split("").map(c => c + c).join("") : m, 16);
+  return `rgba(${(n >> 16) & 255}, ${(n >> 8) & 255}, ${n & 255}, ${a})`;
+}
+function C() {
+  const s = getComputedStyle(document.documentElement);
+  const g = n => s.getPropertyValue(n).trim();
+  return {
+    bg: g("--board"), ink: g("--ink"), ink2: g("--ink-2"), grid: g("--grid"), rule: g("--rule"),
+    h: H.map(k => g("--h" + k)), cheap: g("--cheap"), dear: g("--dear"), risk: g("--risk"), dev: g("--dev"), night: g("--night"),
+    div: [g("--div-lo"), g("--div-lo2"), g("--div-mid"), g("--div-hi2"), g("--div-hi")],
+  };
+}
+const FONT = '"Atkinson Hyperlegible Next", "Segoe UI", system-ui, sans-serif';
+const DISPLAY = '"Archivo", "Arial Narrow", system-ui, sans-serif';
+function base(c, extra) {
+  return Object.assign({
+    paper_bgcolor: c.bg, plot_bgcolor: c.bg, separators: ",.",
+    font: { family: FONT, size: 12, color: c.ink2 },
+    margin: { t: 40, r: 10, b: 40, l: 46 },
+    hoverlabel: { bgcolor: c.bg, bordercolor: c.rule, font: { color: c.ink, family: FONT, size: 12 } },
+    legend: { orientation: "h", x: 0, y: -0.12, yanchor: "top", font: { size: 12, color: c.ink2 } },
+    dragmode: false,
+  }, extra);
+}
+const ax = (c, o) => Object.assign({ gridcolor: c.grid, linecolor: c.rule, zerolinecolor: c.rule, tickcolor: c.rule, fixedrange: true, automargin: true }, o);
+const btnStyle = c => ({ bgcolor: c.bg, bordercolor: c.rule, borderwidth: 1, font: { color: c.ink, size: 12 }, active: 0, showactive: true, pad: { r: 2, l: 2, t: 2, b: 2 } });
+const reveal = () => document.getElementById("reveal").checked;
+const narrow = el => el.clientWidth < 600;
+
+// Forecast issued on day X: horizon h covers day X+h.
+function issueForecast(X) {
+  return H.map(h => {
+    const d = addDays(X, h), ix = byDay.get(d) || [];
+    const med = ix.map(i => D.pred[h][i]);
+    return { h, d, ix, med, p90: ix.map((i, k) => D.p90[h][i] == null ? null : Math.max(D.p90[h][i], med[k])), act: ix.map(i => A[i]) };
+  });
+}
+function rankHours(vals) {
+  const order = vals.map((v, k) => [v, k]).filter(p => p[0] != null).sort((a, b) => a[0] - b[0]);
+  return { cheap: new Set(order.slice(0, 4).map(p => p[1])), dear: new Set(order.slice(-4).map(p => p[1])) };
+}
+function nightShapes(c, firstDay, lastDay) {
+  const out = [];
+  for (let d = addDays(firstDay, -1); d <= lastDay; d = addDays(d, 1)) {
+    out.push({ type: "rect", xref: "x", yref: "paper", x0: d + " 19:20", x1: addDays(d, 1) + " 07:15", y0: 0, y1: 1, fillcolor: c.night, line: { width: 0 }, layer: "below" });
+  }
+  return out;
+}
+
+/* ---------- A: Verlauf ---------- */
+function aForecast(el) {
+  const c = C(), nar = narrow(el);
+  const knownDays = [addDays(ISSUE, -1), ISSUE];
+  const known = knownDays.flatMap(d => byDay.get(d));
+  const fc = issueForecast(ISSUE);
+  const fIx = fc.flatMap(f => f.ix), med = fc.flatMap(f => f.med), p9 = fc.flatMap(f => f.p90);
+  const fx = fIx.map(i => T[i]).concat([nextT(fIx.at(-1))]);
+  const fy = med.concat([med.at(-1)]), qy = p9.concat([p9.at(-1)]);
+  const kx = known.map(i => T[i]).concat([T[fIx[0]]]), ky = known.map(i => A[i]).concat([A[known.at(-1)]]);
+  const traces = [
+    { x: fx, y: fy, mode: "lines", line: { width: 0, shape: "hv" }, hoverinfo: "skip", showlegend: false },
+    { x: fx, y: qy, mode: "lines", name: "Spitzenrisiko (P90)", line: { width: 1, shape: "hv", color: rgba(c.risk, 0.55) }, fill: "tonexty",
+      fillcolor: rgba(c.risk, 0.06), fillpattern: { shape: "/", size: 7, solidity: 0.22, fgcolor: rgba(c.risk, 0.6), bgcolor: rgba(c.risk, 0.05) },
+      hovertemplate: "bis %{y:.1f} ct möglich<extra></extra>" },
+    { x: fx, y: fy, mode: "lines", name: "Prognose", line: { width: 2.4, shape: "hv", color: c.h[0] }, hovertemplate: "Prognose %{y:.1f} ct<extra></extra>" },
+    { x: kx, y: ky, mode: "lines", name: "Börsenpreis", line: { width: 2.4, shape: "hv", color: c.ink }, hovertemplate: "Börse %{y:.1f} ct<extra></extra>" },
+  ];
+  if (reveal()) {
+    traces.push({ x: fx, y: fc.flatMap(f => f.act).concat([null]), mode: "lines", name: "tatsächlich (Rückblick)", line: { width: 1.6, shape: "hv", color: c.ink, dash: "dot" }, hovertemplate: "tatsächlich %{y:.1f} ct<extra></extra>" });
+  }
+  const mk = { cheap: { x: [], y: [] }, dear: { x: [], y: [] } };
+  const dayAnn = [];
+  const allDays = [...knownDays.map(d => ({ d, ix: byDay.get(d), v: byDay.get(d).map(i => A[i]), p90: null })), ...fc.map(f => ({ d: f.d, ix: f.ix, v: f.med, p90: f.p90, h: f.h }))];
+  for (const day of allDays) {
+    const r = rankHours(day.v);
+    day.ix.forEach((i, k) => {
+      const x = T[i].slice(0, 14) + "30";
+      if (r.cheap.has(k)) { mk.cheap.x.push(x); mk.cheap.y.push(day.v[k]); }
+      if (r.dear.has(k)) { mk.dear.x.push(x); mk.dear.y.push(day.v[k]); }
+    });
+    const risk = day.p90 ? maxOf(day.p90) : null;
+    let text = nar ? `<b>${wd(day.d)}</b><br>${f0(maxOf(day.v))}` : `<b>${dayLabel(day.d)}</b><br>Ø ${f1(mean(day.v))}  max ${f1(maxOf(day.v))}`;
+    text += risk && risk > PEAK ? `<br><span style="color:${c.risk}">⚠ ${nar ? "" : "bis "}${f0(risk)}</span>` : "<br> ";
+    dayAnn.push({ x: day.d + " 12:00", xref: "x", y: 1, yref: "paper", yanchor: "bottom", showarrow: false, align: "center", font: { size: nar ? 10 : 11, color: c.ink }, text });
+  }
+  traces.push(
+    { x: mk.dear.x, y: mk.dear.y, mode: "markers", name: "4 teuerste Stunden", marker: { symbol: "triangle-up", size: 8, color: c.dear, line: { width: 1.5, color: c.bg } }, hoverinfo: "skip" },
+    { x: mk.cheap.x, y: mk.cheap.y, mode: "markers", name: "4 günstigste Stunden", marker: { symbol: "triangle-down", size: 8, color: c.cheap, line: { width: 1.5, color: c.bg } }, hoverinfo: "skip" },
+  );
+  const shapes = nightShapes(c, knownDays[0], fc.at(-1).d);
+  shapes.push({ type: "line", xref: "x", yref: "paper", x0: NOW, x1: NOW, y0: 0, y1: 1, line: { color: c.ink2, width: 1, dash: "dot" } });
+  dayAnn.push({ x: NOW, xref: "x", y: 0, yref: "paper", yanchor: "bottom", xanchor: "left", showarrow: false, font: { size: 11, color: c.ink2 }, text: " jetzt, ab hier Prognose" });
+  Plotly.react(el, traces, base(c, {
+    height: 430, hovermode: "x unified", margin: { t: 64, r: 10, b: 40, l: 46 },
+    xaxis: ax(c, { type: "date", dtick: 86400000, tickformat: "%d.%m.", hoverformat: "%a %d.%m. %H:%M", showgrid: true, range: [knownDays[0] + " 00:00", addDays(fc.at(-1).d, 1) + " 00:00"] }),
+    yaxis: ax(c, { ticksuffix: " ct", zeroline: true }),
+    shapes, annotations: dayAnn, legend: { orientation: "h", x: 0, y: -0.1, yanchor: "top", font: { size: 12, color: c.ink2 } },
+  }), CFG);
+}
+
+function aBacktest(el) {
+  const c = C();
+  const ix = []; for (let i = 0; i < T.length; i++) { const d = T[i].slice(0, 10); if (d >= addDays(BT_END, -180) && d <= BT_END) ix.push(i); }
+  const x = ix.map(i => T[i]), act = ix.map(i => A[i]);
+  const traces = [{ x, y: act, mode: "lines", name: "Börsenpreis", line: { width: 1.6, color: c.ink }, hovertemplate: "Börse %{y:.1f} ct<extra></extra>" }];
+  for (const h of H) {
+    traces.push({ x, y: act, mode: "lines", line: { width: 0 }, hoverinfo: "skip", showlegend: false, visible: h === 2 });
+    traces.push({ x, y: ix.map(i => D.pred[h][i]), mode: "lines", name: `Prognose ${h} Tag${h > 1 ? "e" : ""} vorher`, visible: h === 2,
+      line: { width: 1.6, color: c.h[h - 1] }, fill: "tonexty", fillcolor: rgba(c.dev, 0.17), hovertemplate: `D+${h} %{y:.1f} ct<extra></extra>` });
+  }
+  const vis = sel => [true, ...H.flatMap(h => [sel === h, sel === h || sel === 0])];
+  const fill = sel => [null, ...H.flatMap(() => [null, sel === 0 ? "none" : "tonexty"])];
+  const state = { h: 2 };
+  const last = BT_END + " 23:00";
+  const layout = base(c, {
+    height: 460, hovermode: "x unified", margin: { t: 92, r: 10, b: 40, l: 46 },
+    xaxis: ax(c, { type: "date", range: [addDays(BT_END, -29) + " 00:00", last], tickformat: "%d.%m.", hoverformat: "%a %d.%m. %H:%M",
+      rangeselector: { x: 1, xanchor: "right", y: 1.2, yanchor: "bottom", ...btnStyle(c), activecolor: c.grid,
+        buttons: [{ count: 7, step: "day", stepmode: "backward", label: "7 T" }, { count: 30, step: "day", stepmode: "backward", label: "30 T" },
+          { count: 3, step: "month", stepmode: "backward", label: "3 M" }, { count: 6, step: "month", stepmode: "backward", label: "6 M" }] } }),
+    yaxis: ax(c, { ticksuffix: " ct", zeroline: true }),
+    updatemenus: [{ type: "buttons", direction: "right", x: 0, xanchor: "left", y: 1.2, yanchor: "bottom", ...btnStyle(c), active: 1,
+      buttons: [...H.map(h => ({ label: `D+${h}`, method: "restyle", args: [{ visible: vis(h), fill: fill(h) }] })), { label: "alle", method: "restyle", args: [{ visible: vis(0), fill: fill(0) }] }] }],
+    annotations: [],
+  });
+  Plotly.react(el, traces, layout, CFG).then(() => { updateMae(); });
+  function updateMae() {
+    const r = el.layout.xaxis.range.map(v => String(v).slice(0, 16));
+    const sel = ix.filter(i => T[i] >= r[0] && T[i] <= r[1]);
+    const hs = state.h ? [state.h] : H;
+    const parts = hs.map(h => {
+      const e = sel.filter(i => A[i] != null && D.pred[h][i] != null);
+      const mae = mean(e.map(i => Math.abs(D.pred[h][i] - A[i])));
+      const pk = e.filter(i => A[i] > PEAK), pmae = mean(pk.map(i => Math.abs(D.pred[h][i] - A[i])));
+      return state.h ? `Ø Abweichung <b>${f1(mae)} ct</b>   in Spitzen über ${PEAK} ct: <b>${pk.length ? f1(pmae) + " ct" : "keine"}</b>` : `D+${h} <b>${f1(mae)}</b>`;
+    });
+    Plotly.relayout(el, { annotations: [{ xref: "paper", x: 0, y: 1.02, yref: "paper", yanchor: "bottom", xanchor: "left", showarrow: false, align: "left",
+      font: { size: 12, color: c.ink }, text: state.h ? parts[0] : "Ø Abweichung in ct: " + parts.join("   ") }] });
+  }
+  el.removeAllListeners?.("plotly_relayout"); el.removeAllListeners?.("plotly_buttonclicked");
+  el.on("plotly_relayout", ev => { if (Object.keys(ev).some(k => k.startsWith("xaxis"))) updateMae(); });
+  el.on("plotly_buttonclicked", ev => { if (ev.menu && ev.menu.type === "buttons" && ev.button) { const l = ev.button.label; state.h = l === "alle" ? 0 : +l.slice(2); setTimeout(updateMae, 0); } });
+}
+
+/* ---------- B: Tageskacheln ---------- */
+function gridDomains(n, cols, gapX, gapY, top, bottom) {
+  const rows = Math.ceil(n / cols), w = (1 - gapX * (cols - 1)) / cols, hgt = (1 - top - bottom - gapY * (rows - 1)) / rows;
+  return Array.from({ length: n }, (_, k) => {
+    const r = Math.floor(k / cols), col = k % cols, y1 = 1 - top - r * (hgt + gapY);
+    return { x: [col * (w + gapX), col * (w + gapX) + w], y: [y1 - hgt, y1], col, row: r };
+  });
+}
+function bForecast(el) {
+  const c = C(), cols = narrow(el) ? 2 : 4, rows = 8 / cols;
+  const fc = issueForecast(ISSUE);
+  const panels = [{ d: ISSUE, v: byDay.get(ISSUE).map(i => A[i]), p90: null, act: null, tag: "heute, bekannt" },
+    ...fc.map(f => ({ d: f.d, v: f.med, p90: f.p90, act: f.act, tag: `Prognose D+${f.h}` }))];
+  const all = panels.flatMap(p => [...p.v, ...(p.p90 || []), ...(reveal() && p.act ? p.act : [])]);
+  const yr = [Math.min(0, minOf(all)) - 1, maxOf(all) * 1.08];
+  const pxTop = 54, height = rows * 180 + pxTop + 50;
+  const dom = gridDomains(8, cols, 0.03, 70 / height, pxTop / height, 50 / height);
+  const traces = [], ann = [], layout = base(c, { height, margin: { t: 10, r: 8, b: 10, l: 40 }, bargap: 0.18, hovermode: "closest", showlegend: true,
+    legend: { orientation: "h", x: 0, y: 0, yanchor: "top", font: { size: 12, color: c.ink2 } } });
+  const hours = Array.from({ length: 24 }, (_, k) => k);
+  panels.forEach((p, k) => {
+    const n = k + 1, xa = "x" + (n > 1 ? n : ""), ya = "y" + (n > 1 ? n : "");
+    const r = rankHours(p.v);
+    traces.push({ type: "bar", x: hours, y: p.v, xaxis: xa, yaxis: ya, showlegend: false,
+      marker: { color: p.v.map((_, j) => r.dear.has(j) ? c.dear : r.cheap.has(j) ? c.cheap : rgba(c.ink2, 0.35)), line: { width: 0 } },
+      error_y: p.p90 ? { type: "data", symmetric: false, array: p.p90.map((q, j) => q - p.v[j]), arrayminus: p.v.map(() => 0), color: c.risk, thickness: 1.3, width: 0 } : { visible: false },
+      customdata: p.p90 || p.v, hovertemplate: p.p90 ? "%{x} Uhr: %{y:.1f} ct<br>bis %{customdata:.1f} ct möglich<extra></extra>" : "%{x} Uhr: %{y:.1f} ct<extra></extra>" });
+    if (reveal() && p.act) traces.push({ type: "scatter", mode: "markers", x: hours, y: p.act, xaxis: xa, yaxis: ya, showlegend: false, marker: { symbol: "line-ew-open", size: 9, line: { width: 2, color: c.ink } }, hovertemplate: "tatsächlich %{y:.1f} ct<extra></extra>" });
+    layout["xaxis" + (n > 1 ? n : "")] = ax(c, { domain: dom[k].x, anchor: ya, tickvals: [0, 6, 12, 18], ticktext: ["0", "6", "12", "18 h"], range: [-0.6, 23.6], showgrid: false, tickfont: { size: 10 } });
+    layout["yaxis" + (n > 1 ? n : "")] = ax(c, { domain: dom[k].y, anchor: xa, range: yr, showticklabels: dom[k].col === 0, ticksuffix: " ct", nticks: 5, tickfont: { size: 10 }, zeroline: true });
+    const risk = p.p90 ? maxOf(p.p90) : 0;
+    ann.push({ xref: "paper", yref: "paper", x: dom[k].x[0], y: dom[k].y[1] + 4 / height, xanchor: "left", yanchor: "bottom", align: "left", showarrow: false,
+      font: { size: 12, color: c.ink }, text: `<b>${dayLabel(p.d)}</b>  <span style="color:${c.ink2}">${p.tag}</span><br>Ø ${f1(mean(p.v))}  max ${f1(maxOf(p.v))}` +
+        (risk > PEAK ? `  <span style="color:${c.risk}">⚠ bis ${f0(risk)}</span>` : "") });
+  });
+  // Week summary panel: daily min..max range, mean dot, peak risk.
+  const n = 8, xa = "x8", ya = "y8", lab = panels.map(p => wd(p.d) + " " + p.d.slice(8, 10) + ".");
+  traces.push({ type: "bar", x: lab, base: panels.map(p => minOf(p.v)), y: panels.map(p => maxOf(p.v) - minOf(p.v)), xaxis: xa, yaxis: ya, width: 0.5, showlegend: false,
+    marker: { color: rgba(c.h[0], 0.35), line: { width: 0 } }, customdata: panels.map(p => [minOf(p.v), maxOf(p.v)]), hovertemplate: "%{x}: %{customdata[0]:.1f} bis %{customdata[1]:.1f} ct<extra></extra>" });
+  traces.push({ type: "scatter", mode: "markers", x: lab, y: panels.map(p => mean(p.v)), xaxis: xa, yaxis: ya, showlegend: false, marker: { size: 8, color: c.h[0], line: { width: 2, color: c.bg } }, hovertemplate: "Ø %{y:.1f} ct<extra></extra>" });
+  const rk = panels.filter(p => p.p90 && maxOf(p.p90) > PEAK);
+  traces.push({ type: "scatter", mode: "markers", x: rk.map(p => wd(p.d) + " " + p.d.slice(8, 10) + "."), y: rk.map(p => maxOf(p.p90)), xaxis: xa, yaxis: ya, showlegend: false,
+    marker: { symbol: "triangle-up", size: 9, color: c.risk, line: { width: 1.5, color: c.bg } }, hovertemplate: "bis %{y:.1f} ct möglich<extra></extra>" });
+  layout.xaxis8 = ax(c, { domain: dom[7].x, anchor: ya, type: "category", showgrid: false, tickfont: { size: 10 }, tickangle: 0 });
+  layout.yaxis8 = ax(c, { domain: dom[7].y, anchor: xa, range: yr, showticklabels: dom[7].col === 0, ticksuffix: " ct", nticks: 5, tickfont: { size: 10 }, zeroline: true });
+  ann.push({ xref: "paper", yref: "paper", x: dom[7].x[0], y: dom[7].y[1] + 4 / height, xanchor: "left", yanchor: "bottom", align: "left", showarrow: false,
+    font: { size: 12, color: c.ink }, text: `<b>Woche</b>  <span style="color:${c.ink2}">Spanne und Ø je Tag</span><br> ` });
+  // Legend entries (dummy traces keep the legend native to Plotly).
+  const dummy = (name, marker, extra = {}) => ({ type: "scatter", mode: "markers", x: [null], y: [null], name, marker, hoverinfo: "skip", ...extra });
+  traces.push(dummy("4 günstigste Stunden", { symbol: "square", size: 11, color: c.cheap }), dummy("4 teuerste Stunden", { symbol: "square", size: 11, color: c.dear }),
+    dummy("Spitzenrisiko (P90)", { symbol: "line-ns-open", size: 12, line: { width: 2, color: c.risk } }));
+  if (reveal()) traces.push(dummy("tatsächlich", { symbol: "line-ew-open", size: 11, line: { width: 2, color: c.ink } }));
+  layout.annotations = ann;
+  layout.legend.y = 30 / height; layout.legend.yanchor = "top";
+  Plotly.react(el, traces, layout, CFG);
+}
+
+function bBacktest(el) {
+  const c = C(), cols = narrow(el) ? 2 : 3, rows = 6 / cols;
+  const issues = DAYS.filter(d => d >= "2026-08-15" && addDays(d, 6) <= BT_END);
+  const startIdx = issues.indexOf(ISSUE);
+  const pxTop = 52, pxBottom = 170, height = rows * 190 + pxTop + pxBottom;
+  const dom = gridDomains(6, cols, 0.035, 64 / height, pxTop / height, pxBottom / height);
+  const X = Array.from({ length: 25 }, (_, k) => k);
+  const ext = a => a.concat([a.at(-1)]);
+  function snapshot(X0) {
+    const fc = issueForecast(X0);
+    const ys = [], ann = [];
+    fc.forEach((f, k) => {
+      ys.push(ext(f.med), ext(f.p90), ext(f.act), ext(f.med));
+      const mae = mean(f.med.map((m, j) => f.act[j] == null ? null : Math.abs(m - f.act[j])));
+      ann.push({ xref: "paper", yref: "paper", x: dom[k].x[0], y: dom[k].y[1] + 4 / height, xanchor: "left", yanchor: "bottom", showarrow: false, align: "left",
+        font: { size: 12, color: c.ink }, text: `<b>D+${f.h}</b>  ${dayLabel(f.d)}` });
+      ann.push({ xref: "paper", yref: "paper", x: dom[k].x[1], y: dom[k].y[1] + 4 / height, xanchor: "right", yanchor: "bottom", showarrow: false, align: "right",
+        font: { size: 12, color: c.ink2 }, text: `Ø Abw. ${f1(mae)} ct` });
+    });
+    return { ys, ann, fc };
+  }
+  const s0 = snapshot(ISSUE);
+  const all = issues.flatMap(X0 => issueForecast(X0).flatMap(f => [...f.act, ...f.p90]));
+  const yr = [Math.min(0, minOf(all)) - 1, Math.min(maxOf(all), 75) * 1.05];
+  const traces = [];
+  const layout = base(c, { height, margin: { t: 10, r: 8, b: 10, l: 40 }, hovermode: "x unified", showlegend: true,
+    legend: { orientation: "h", x: 0, y: (pxBottom - 22) / height, yanchor: "top", font: { size: 12, color: c.ink2 } } });
+  H.forEach((h, k) => {
+    const n = k + 1, xa = "x" + (n > 1 ? n : ""), ya = "y" + (n > 1 ? n : "");
+    traces.push(
+      { x: X, y: s0.ys[k * 4], xaxis: xa, yaxis: ya, mode: "lines", line: { width: 0, shape: "hv" }, hoverinfo: "skip", showlegend: false },
+      { x: X, y: s0.ys[k * 4 + 1], xaxis: xa, yaxis: ya, mode: "lines", name: "Spitzenrisiko (P90)", legendgroup: "p90", showlegend: k === 0,
+        line: { width: 0.8, shape: "hv", color: rgba(c.risk, 0.5) }, fill: "tonexty", fillcolor: rgba(c.risk, 0.05),
+        fillpattern: { shape: "/", size: 6, solidity: 0.2, fgcolor: rgba(c.risk, 0.55), bgcolor: rgba(c.risk, 0.04) }, hovertemplate: "P90 %{y:.1f}<extra></extra>" },
+      { x: X, y: s0.ys[k * 4 + 2], xaxis: xa, yaxis: ya, mode: "lines", name: "Börsenpreis", legendgroup: "act", showlegend: k === 0, line: { width: 1.8, shape: "hv", color: c.ink }, hovertemplate: "Börse %{y:.1f}<extra></extra>" },
+      { x: X, y: s0.ys[k * 4 + 3], xaxis: xa, yaxis: ya, mode: "lines", name: `D+${h}`, line: { width: 2, shape: "hv", color: c.h[k] }, hovertemplate: "Prognose %{y:.1f}<extra></extra>" },
+    );
+    layout["xaxis" + (n > 1 ? n : "")] = ax(c, { domain: dom[k].x, anchor: ya, range: [0, 24], tickvals: [0, 6, 12, 18, 24], ticktext: ["0", "6", "12", "18", "24 h"], tickfont: { size: 10 }, hoverformat: "d" });
+    layout["yaxis" + (n > 1 ? n : "")] = ax(c, { domain: dom[k].y, anchor: xa, range: yr, showticklabels: dom[k].col === 0, ticksuffix: " ct", nticks: 5, tickfont: { size: 10 }, zeroline: true });
+  });
+  layout.annotations = s0.ann;
+  layout.sliders = [{
+    active: startIdx, x: 0, len: 1, y: (pxBottom - 80) / height, yanchor: "top", pad: { t: 0, b: 0 },
+    bgcolor: c.grid, bordercolor: c.rule, activebgcolor: c.ink, tickcolor: c.rule, ticklen: 3, minorticklen: 0,
+    font: { size: 1, color: "rgba(0,0,0,0)" },
+    currentvalue: { prefix: "Prognose erstellt am ", xanchor: "left", font: { size: 14, color: c.ink, family: FONT } },
+    steps: issues.map(X0 => { const s = snapshot(X0); return { label: dayLabel(X0) + new Date(X0).getFullYear(), method: "update", args: [{ y: s.ys }, { annotations: s.ann }] }; }),
+  }];
+  Plotly.react(el, traces, layout, CFG);
+}
+
+/* ---------- C: Kalender ---------- */
+function divScale(c) {
+  return [[0, c.div[0]], [0.25, c.div[1]], [0.5, c.div[2]], [0.75, c.div[3]], [1, c.div[4]]];
+}
+function cForecast(el) {
+  const c = C(), nar = narrow(el);
+  const fc = issueForecast(ISSUE), knownDays = [addDays(ISSUE, -1), ISSUE];
+  const rows = [...knownDays.map(d => ({ d, v: byDay.get(d).map(i => A[i]), p90: null, lab: dayLabel(d) })),
+    ...fc.map(f => ({ d: f.d, v: reveal() ? f.act : f.med, p90: f.p90, lab: (nar ? wd(f.d) + " " + f.d.slice(8, 10) + "." : dayLabel(f.d)) + `  D+${f.h}` }))];
+  const z = rows.map(r => r.v.slice(0, 24)), y = rows.map(r => r.lab);
+  const flat = z.flat().filter(v => v != null);
+  const mid = flat.slice().sort((a, b) => a - b)[Math.floor(flat.length / 2)];
+  const span = Math.max(mid - minOf(flat), maxOf(flat) - mid, 8);
+  const cd = rows.map(r => r.v.slice(0, 24).map((v, j) => r.p90 ? r.p90[j] : v));
+  const shapes = [];
+  rows.forEach((r, ri) => r.p90 && r.p90.forEach((q, j) => {
+    if (q > PEAK && j < 24) shapes.push({ type: "rect", xref: "x", yref: "y", x0: j - 0.46, x1: j + 0.46, y0: ri - 0.44, y1: ri + 0.44, line: { color: c.risk, width: 2.2 }, fillcolor: "rgba(0,0,0,0)" });
+  }));
+  shapes.push({ type: "line", xref: "paper", yref: "y", x0: 0, x1: 1, y0: 1.5, y1: 1.5, line: { color: c.ink, width: 2 } });
+  Plotly.react(el, [{
+    type: "heatmap", z, y, x: Array.from({ length: 24 }, (_, k) => k), xgap: 2, ygap: 2,
+    colorscale: divScale(c), zmid: mid, zmin: mid - span, zmax: mid + span,
+    text: z.map(r => r.map(v => v == null ? "" : f0(v))), texttemplate: nar ? "" : "%{text}", textfont: { size: 10, family: FONT },
+    customdata: cd, hovertemplate: "%{y}, %{x} Uhr<br>%{z:.1f} ct/kWh<br>bis %{customdata:.1f} ct möglich<extra></extra>",
+    colorbar: { orientation: "h", y: -0.16, yanchor: "top", x: 0, xanchor: "left", len: 0.6, thickness: 10, outlinewidth: 0, ticksuffix: " ct", tickfont: { size: 11, color: c.ink2 },
+      title: { text: "Börsenpreis bzw. Prognose", side: "top", font: { size: 11, color: c.ink2 } } },
+  }], base(c, {
+    height: 400, margin: { t: 26, r: 8, b: 86, l: 10 },
+    xaxis: ax(c, { side: "top", tickvals: [0, 3, 6, 9, 12, 15, 18, 21], ticktext: ["0", "3", "6", "9", "12", "15", "18", "21 Uhr"], showgrid: false, zeroline: false }),
+    yaxis: ax(c, { autorange: "reversed", showgrid: false, zeroline: false, ticks: "", tickfont: { size: 12, color: c.ink } }),
+    shapes,
+    annotations: [{ xref: "paper", yref: "paper", x: 1, xanchor: "right", y: -0.16, yanchor: "top", showarrow: false, align: "right", font: { size: 11, color: c.ink2 },
+      text: `<span style="color:${c.risk}">▢</span> Spitzenrisiko: P90 über ${PEAK} ct` + (reveal() ? "<br>Prognosezeilen zeigen den echten Preis" : "") }],
+  }), CFG);
+}
+
+function cBacktest(el) {
+  const c = C(), nar = narrow(el);
+  const days = DAYS.filter(d => d >= addDays(BT_END, -179) && d <= BT_END);
+  const hours = Array.from({ length: 24 }, (_, k) => k);
+  const ylab = days.map(d => dayLabel(d));
+  const build = h => {
+    const z = [], cd = [], mae = [];
+    for (const d of days) {
+      const ix = byDay.get(d).slice(0, 24);
+      const row = ix.map(i => D.pred[h][i] == null || A[i] == null ? null : D.pred[h][i] - A[i]);
+      z.push(row); cd.push(ix.map(i => [D.pred[h][i], A[i]])); mae.push(mean(row.map(v => v == null ? null : Math.abs(v))));
+    }
+    return { z, cd, mae };
+  };
+  const b = build(2), N = days.length;
+  const title = (h, m) => `Vorlauf <b>D+${h}</b>   Ø Abweichung im ganzen Zeitraum <b>${f1(mean(m))} ct</b>`;
+  const view = n => [N - 0.5, N - n - 0.5];
+  Plotly.react(el, [
+    { type: "heatmap", x: hours, y: ylab, z: b.z, customdata: b.cd, xgap: 1, ygap: 1, colorscale: [[0, c.div[4]], [0.25, c.div[3]], [0.5, c.div[2]], [0.75, c.div[1]], [1, c.div[0]]],
+      zmin: -10, zmax: 10, zmid: 0,
+      hovertemplate: "%{y}, %{x} Uhr<br>Prognose %{customdata[0]:.1f} ct, echt %{customdata[1]:.1f} ct<br>Abweichung %{z:.1f} ct<extra></extra>",
+      colorbar: { orientation: "h", y: -0.07, yanchor: "top", x: 0, xanchor: "left", len: 0.62, thickness: 10, outlinewidth: 0, ticksuffix: " ct", tickfont: { size: 11, color: c.ink2 },
+        tickvals: [-10, -5, 0, 5, 10], ticktext: ["≤ −10", "−5", "0", "5", "≥ 10 ct"], title: { text: "Prognose zu niedrig ← → zu hoch", side: "top", font: { size: 11, color: c.ink2 } } } },
+    { type: "bar", orientation: "h", x: b.mae, y: ylab, xaxis: "x2", yaxis: "y", marker: { color: rgba(c.ink2, 0.45) }, hovertemplate: "%{y}: Ø %{x:.1f} ct<extra></extra>" },
+  ], base(c, {
+    height: 560, showlegend: false, margin: { t: 104, r: 8, b: 70, l: 10 },
+    xaxis: ax(c, { domain: [0, 0.8], side: "top", tickvals: [0, 6, 12, 18], ticktext: ["0", "6", "12", "18 Uhr"], showgrid: false, zeroline: false }),
+    xaxis2: ax(c, { domain: [0.83, 1], side: "top", anchor: "y", ticksuffix: " ct", nticks: 3, zeroline: false, tickfont: { size: 10 } }),
+    yaxis: ax(c, { range: view(30), showgrid: false, zeroline: false, ticks: "", tickfont: { size: nar ? 10 : 11, color: c.ink } }),
+    annotations: [{ xref: "paper", yref: "paper", x: 0, y: 1, yshift: 66, xanchor: "left", yanchor: "bottom", showarrow: false, font: { size: 12, color: c.ink }, text: title(2, b.mae) }],
+    updatemenus: [
+      { type: "buttons", direction: "right", x: 0, xanchor: "left", y: 1, yanchor: "bottom", pad: { b: 30, t: 0, l: 0, r: 0 }, ...btnStyle(c), active: 1,
+        buttons: H.map(h => { const r = build(h); return { label: `D+${h}`, method: "update", args: [{ z: [r.z, null], customdata: [r.cd, null], x: [hours, r.mae] }, { "annotations[0].text": title(h, r.mae) }] }; }) },
+      { type: "buttons", direction: "right", x: 1, xanchor: "right", y: 1, yanchor: "bottom", pad: { b: 30, t: 0, l: 0, r: 0 }, ...btnStyle(c), active: 1,
+        buttons: [14, 30, 90, 180].map(n => ({ label: n === 180 ? "6 M" : `${n} T`, method: "relayout", args: [{ "yaxis.range": view(n) }] })) },
+    ],
+  }), CFG);
+}
+
+/* ---------- wiring ---------- */
+const RENDER = { a: [["a-f", aForecast], ["a-b", aBacktest]], b: [["b-f", bForecast], ["b-b", bBacktest]], c: [["c-f", cForecast], ["c-b", cBacktest]] };
+let current = "a";
+function render(which = current, only) {
+  for (const [id, fn] of RENDER[which]) { if (!only || only === id) fn(document.getElementById(id)); }
+}
+document.querySelectorAll(".tab").forEach(btn => btn.addEventListener("click", () => {
+  current = btn.dataset.v;
+  document.querySelectorAll(".tab").forEach(b => b.setAttribute("aria-selected", String(b === btn)));
+  document.querySelectorAll(".variant").forEach(s => { s.hidden = s.id !== "v-" + current; });
+  try { localStorage.setItem("spot-variant", current); } catch (e) {}
+  render();
+}));
+document.getElementById("reveal").addEventListener("change", () => render(current, current + "-f"));
+let lastNarrow = {};
+window.addEventListener("resize", () => {
+  for (const [id] of RENDER[current]) {
+    const el = document.getElementById(id), n = narrow(el);
+    if (lastNarrow[id] !== undefined && lastNarrow[id] !== n) render(current, id);
+    lastNarrow[id] = n;
+  }
+});
+new MutationObserver(() => render()).observe(document.documentElement, { attributes: true, attributeFilter: ["data-theme"] });
+matchMedia("(prefers-color-scheme: dark)").addEventListener("change", () => render());
+try { const v = localStorage.getItem("spot-variant"); if (v && RENDER[v]) current = v; } catch (e) {}
+const hv = location.hash.slice(1); if (RENDER[hv]) current = hv;
+document.querySelector(`.tab[data-v="${current}"]`).click();
