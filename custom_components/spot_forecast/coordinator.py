@@ -7,6 +7,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import date, datetime, time, timedelta
 import logging
+import math
 from zoneinfo import ZoneInfo
 
 from homeassistant.config_entries import ConfigEntry
@@ -33,7 +34,7 @@ from .const import (
 from .core.features import HORIZONS, Hourly, InsufficientHistory
 from .core.forecast import Slot, run_forecast
 from .core.ingest import MarketSlot, hourly_prices
-from .core.ledger import CALIBRATION_DAYS, PRICE, Ledger, Run
+from .core.ledger import CALIBRATION_DAYS, PRICE, Ledger, Run, statistic_id
 from .core.model import ModelFile
 from .core.output import prices_attribute
 from .core.schedule import choose_anchor, is_expired, is_stale, next_run
@@ -211,7 +212,7 @@ class SpotForecastCoordinator(DataUpdateCoordinator[SpotData]):
         entry_id = self.config_entry.entry_id
         self.config_entry.async_on_unload(lambda: async_delete_model_issue(self.hass, entry_id))
         stored = await self._store.async_load()
-        self._ledger = stored.ledger
+        self._ledger = await self._async_reconciled(stored.ledger)
         self._market = list(stored.market)
         self._last_success = stored.last_success
         self._backfill_done_days = stored.backfill_done_days
@@ -219,6 +220,39 @@ class SpotForecastCoordinator(DataUpdateCoordinator[SpotData]):
         self._p90_off, self._p10_off, self._accuracy = await self.hass.async_add_executor_job(
             self._calibration, self._ledger, dt_util.utcnow(), self.peak_threshold
         )
+
+    async def _async_reconciled(self, ledger: Ledger) -> Ledger:
+        """``ledger`` with the days after the recorder's last price row marked unwritten.
+
+        A day counts as written once its statistics are queued with the recorder; a crash
+        before the recorder commits them, or a restored database, loses them while the
+        Store keeps the marks. The next ``finalize`` then writes those days again (the
+        import replaces rows of the same hour). One read of the recorder, at setup.
+        """
+        written = [day for day, series in ledger.finalized if series == PRICE]
+        if not written:
+            return ledger
+        try:
+            last = await long_term_statistics.async_last_start(
+                self.hass, statistic_id(DOMAIN, self.zone.slug, PRICE)
+            )
+        except Exception as err:  # noqa: BLE001 - the statistics stay as they are
+            _LOGGER.warning("Cannot read the last price statistic: %s: %s", type(err).__name__, err)
+            return ledger
+        last_day = None if last is None else last.astimezone(ZoneInfo(self.zone.tz)).date()
+        if last_day is not None and last_day >= max(written):
+            return ledger
+        _LOGGER.info(
+            "The recorder holds price statistics up to %s, the forecast data up to %s: "
+            "writing the missing days again",
+            last_day,
+            max(written),
+        )
+        ledger = ledger.copy()
+        ledger.finalized = {
+            f for f in ledger.finalized if last_day is not None and f[0] <= last_day
+        }
+        return ledger
 
     async def _async_update_data(self) -> SpotData:
         async with self._run_lock:
@@ -261,12 +295,13 @@ class SpotForecastCoordinator(DataUpdateCoordinator[SpotData]):
         rows = ledger.finalize(
             self.zone.tz,
             today=self._today(now),
+            domain=DOMAIN,
             zone_id=self.zone.slug,
             default_p90=self.model.p90_offsets,
             default_p10=self.model.p10_offsets,
         )
         if prune:
-            ledger.prune(LEDGER_KEEP_DAYS)
+            ledger.prune(LEDGER_KEEP_DAYS, tz=self.zone.tz)
         p90, p10, accuracy = self._calibration(ledger, now, peak_threshold)
         return _Settled(ledger, long_term_statistics.batches(rows), p90, p10, accuracy)
 
@@ -312,7 +347,8 @@ class SpotForecastCoordinator(DataUpdateCoordinator[SpotData]):
         Holds the run lock, so it never interleaves with a run; the work happens in the
         executor on a copy of the ledger (see ``_adopt``). Nothing is pruned: the backfill
         does that once at its end (``async_finish_backfill``). Returns how many of ``runs``
-        were stored and the target days that got forecast statistics.
+        were stored new or in place of a different run (a re-import of the same run does
+        not count), and the target days that got forecast statistics.
         """
         async with self._run_lock:
             now = dt_util.utcnow()
@@ -325,8 +361,11 @@ class SpotForecastCoordinator(DataUpdateCoordinator[SpotData]):
                     ledger.record_actual(actual)
                 stored = 0
                 for run in runs:
+                    old = ledger.runs.get(run.anchor)
                     ledger.add_run(run)
-                    stored += ledger.runs.get(run.anchor) is run
+                    stored += ledger.runs.get(run.anchor) is run and (
+                        old is None or _comparable(old) != _comparable(run)
+                    )
                 settled = self._settle(ledger, now, threshold, prune=False)
                 written = {day for day, series in ledger.finalized - before if series != PRICE}
                 return stored, written, settled
@@ -566,6 +605,19 @@ class SpotForecastCoordinator(DataUpdateCoordinator[SpotData]):
             pass
         self._closed = True
         await self._store.async_flush()
+
+
+def _comparable(run: Run) -> tuple:
+    """``run`` as a value ``==`` can compare: invalid slots hold NaN, which equals nothing."""
+
+    def value(x: float) -> float | None:
+        return None if math.isnan(x) else x
+
+    slots = sorted(
+        (s.time, s.h, s.valid, value(s.median), value(s.p90_raw), value(s.p10_raw))
+        for s in run.slots
+    )
+    return run.issued_at, run.model_version, run.backfill, slots
 
 
 def _latest_live_run(ledger: Ledger) -> Run | None:

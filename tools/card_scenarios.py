@@ -37,7 +37,12 @@ from zoneinfo import ZoneInfo
 REPO = Path(__file__).resolve().parent.parent
 sys.path[:0] = [str(REPO / "custom_components" / "spot_forecast"), str(REPO)]
 
-from const import DEFAULT_BACKFILL_DAYS, MAX_BACKFILL_DAYS, PRICE_HISTORY_DAYS  # noqa: E402
+from const import (  # noqa: E402
+    DEFAULT_BACKFILL_DAYS,
+    DOMAIN,
+    MAX_BACKFILL_DAYS,
+    PRICE_HISTORY_DAYS,
+)
 
 from core.features import HORIZONS, Hourly, InsufficientHistory  # noqa: E402
 from core.forecast import run_forecast  # noqa: E402
@@ -274,6 +279,7 @@ def build(spec: Spec, zone: Zone = DE_LU) -> dict:
     rows = ledger.finalize(
         zone.tz,
         today=today,
+        domain=DOMAIN,
         zone_id=zone.slug,
         default_p90=model.p90_offsets,
         default_p10=model.p10_offsets,

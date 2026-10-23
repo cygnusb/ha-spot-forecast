@@ -490,6 +490,61 @@ async def test_restart_keeps_forecast_and_does_not_duplicate_statistics(
     assert len(await stat_rows(hass, STAT_H1)) == h1_before
 
 
+async def test_statistics_lost_by_the_recorder_are_written_again(
+    hass_with_recorder: HomeAssistant,
+    set_up: SetUp,
+    sources: Sources,
+    freezer: FrozenDateTimeFactory,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Marked written in the Store but never committed (a crash, a restored database)."""
+    hass = hass_with_recorder
+    lts = coordinator_module.long_term_statistics
+    write = lts.async_write
+    monkeypatch.setattr(lts, "async_write", lambda hass, imports: None)  # all lost
+    entry = await set_up()
+    assert entry.runtime_data.coordinator.ledger.finalized
+    assert await stat_rows(hass, STAT_PRICE) == []
+
+    monkeypatch.setattr(lts, "async_write", write)
+    sources.fail_all()  # the days come from the stored ledger, not from a run
+    assert await hass.config_entries.async_reload(entry.entry_id)
+    await hass.async_block_till_done()
+
+    rows = await stat_rows(hass, STAT_PRICE)
+    assert rows
+    assert datetime.fromtimestamp(rows[-1]["start"], UTC) == datetime(2026, 10, 22, 21, tzinfo=UTC)
+
+
+async def test_statistics_the_recorder_lacks_after_its_last_row_are_written_again(
+    hass_with_recorder: HomeAssistant,
+    set_up: SetUp,
+    sources: Sources,
+    freezer: FrozenDateTimeFactory,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    hass = hass_with_recorder
+    lts = coordinator_module.long_term_statistics
+    write = lts.async_write
+    entry = await set_up()  # price rows through 2026-10-22
+    assert len(await stat_rows(hass, STAT_PRICE)) > 0
+    monkeypatch.setattr(lts, "async_write", lambda hass, imports: None)
+    sources.serve("energy_charts_price_tomorrow.json")
+    await advance(hass, freezer, T14)  # 2026-10-23 and its D+1 rows, lost
+
+    sources.fail_all()
+    with patch.object(lts, "async_write", wraps=write) as written:
+        assert await hass.config_entries.async_reload(entry.entry_id)
+        await hass.async_block_till_done()
+
+    starts = [row["start"] for c in written.call_args_list for _, rows in c.args[1] for row in rows]
+    assert starts  # only the days after the recorder's last row
+    assert min(starts) == datetime(2026, 10, 22, 22, tzinfo=UTC)
+    price = await stat_rows(hass, STAT_PRICE)
+    assert datetime.fromtimestamp(price[-1]["start"], UTC) == datetime(2026, 10, 23, 21, tzinfo=UTC)
+    assert len(await stat_rows(hass, STAT_H1)) == 24
+
+
 async def test_setup_retries_without_data(
     hass_with_recorder: HomeAssistant, sources: Sources, freezer: FrozenDateTimeFactory
 ) -> None:

@@ -20,7 +20,12 @@ EARLY = date(2026, 1, 1)  # before every test day: days with missing hours wait
 
 def fin(led: Ledger, p90=None, p10=None, today: date = EARLY) -> list[StatRow]:
     return led.finalize(
-        TZ, today=today, zone_id="de_lu", default_p90=p90 or ZERO, default_p10=p10 or ZERO
+        TZ,
+        today=today,
+        domain="spot_forecast",
+        zone_id="de_lu",
+        default_p90=p90 or ZERO,
+        default_p10=p10 or ZERO,
     )
 
 
@@ -165,6 +170,14 @@ def test_finalize_emits_price_and_19_series_rows():
     assert all(r.start.tzinfo is not None and r.start.utcoffset() == timedelta(0) for r in rows)
 
 
+def test_finalize_names_statistics_after_the_given_domain():
+    rows = _complete_ledger(date(2026, 6, 10)).finalize(
+        TZ, today=EARLY, domain="other", zone_id="de_lu", default_p90=ZERO, default_p10=ZERO
+    )
+    assert rows and {r.statistic_id.partition(":")[0] for r in rows} == {"other"}
+    assert "other:de_lu_forecast_h1" in {r.statistic_id for r in rows}
+
+
 def test_finalize_uses_offsets_of_run_anchor():
     day = date(2026, 6, 10)
     led = _complete_ledger(day)
@@ -287,11 +300,28 @@ def test_prune_drops_old_entries():
         led.record_actual(hourly_for([a], 10.0))
     fin(led)
     assert {d for d, _ in led.finalized} == {old, new}
-    led.prune(keep_days=30)
+    led.prune(keep_days=30, tz=TZ)
     assert {d for d, _ in led.finalized} == {new}
     assert set(led.runs) == {new - timedelta(days=1)}
     assert all(t >= datetime(2026, 5, 1, tzinfo=UTC) for t in led.actual)
     assert fin(led) == []
+
+
+def test_prune_cuts_at_the_local_day():
+    """The newest entry, 2026-06-10 22:30 UTC, is local 2026-06-11: 30 days keep 2026-05-12 on."""
+    led = Ledger()
+    led.add_run(
+        make_run(date(2026, 6, 11), hs=[1], issued=datetime(2026, 6, 10, 22, 30, tzinfo=UTC))
+    )
+    for anchor in (date(2026, 5, 11), date(2026, 5, 12)):
+        led.add_run(make_run(anchor, hs=[1]))
+    first_local_hour = datetime(2026, 5, 11, 22, tzinfo=UTC)  # 2026-05-12 00:00 CEST
+    led.record_actual(Hourly(first_local_hour - timedelta(hours=1), np.array([1.0, 2.0])))
+    led.finalized = {(date(2026, 5, 11), "price"), (date(2026, 5, 12), "price")}
+    led.prune(keep_days=30, tz=TZ)
+    assert set(led.runs) == {date(2026, 5, 12), date(2026, 6, 11)}
+    assert set(led.actual) == {first_local_hour}
+    assert led.finalized == {(date(2026, 5, 12), "price")}
 
 
 def _backfill_bytes(rows, version="v1") -> bytes:

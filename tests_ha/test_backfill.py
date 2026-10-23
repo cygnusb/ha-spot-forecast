@@ -9,6 +9,7 @@ recorded previous runs (see ``conftest.Sources``).
 from __future__ import annotations
 
 import asyncio
+from dataclasses import replace
 from datetime import UTC, date, datetime, time, timedelta
 import gzip
 import json
@@ -27,7 +28,7 @@ from pytest_homeassistant_custom_component.test_util.aiohttp import AiohttpClien
 from custom_components.spot_forecast import backfill as backfill_module
 from custom_components.spot_forecast.const import CONF_BACKFILL_DAYS, DOMAIN
 from custom_components.spot_forecast.coordinator import LEDGER_KEEP_DAYS
-from custom_components.spot_forecast.core.ledger import Ledger
+from custom_components.spot_forecast.core.ledger import Ledger, runs_from_backfill_file
 
 BERLIN = ZoneInfo("Europe/Berlin")
 TODAY = date(2026, 10, 22)
@@ -269,6 +270,7 @@ async def test_bundled_rows_use_every_earlier_row_of_the_window(
     rows = pure.finalize(
         "Europe/Berlin",
         today=TODAY,
+        domain=DOMAIN,
         zone_id="de_lu",
         default_p90=coordinator.model.p90_offsets,
         default_p10=coordinator.model.p10_offsets,
@@ -458,3 +460,20 @@ async def test_wide_backfill_is_pruned_and_not_redone(
     assert {a for a, r in coordinator.ledger.runs.items() if r.backfill} == {
         a for a, r in runs.items() if r.backfill
     }
+
+
+async def test_history_counts_only_new_or_changed_runs(
+    hass_with_recorder: HomeAssistant, set_up: SetUp
+) -> None:
+    """A run stored again unchanged (a re-import of the same file) is not counted."""
+    entry = await set_up()
+    coordinator = entry.runtime_data.coordinator
+    runs = runs_from_backfill_file(
+        coordinator.backfill, coordinator.model.version, coordinator.zone.tz
+    )[-3:]
+
+    assert (await coordinator.async_add_history(runs))[0] == 3
+    assert (await coordinator.async_add_history(runs))[0] == 0
+    slot = runs[0].slots[0]
+    changed = replace(runs[0], slots=(replace(slot, median=slot.median + 1), *runs[0].slots[1:]))
+    assert (await coordinator.async_add_history([changed, *runs[1:]]))[0] == 1
