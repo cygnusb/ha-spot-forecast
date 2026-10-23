@@ -62,9 +62,14 @@ def _merge_files(parts: list[Hourly]) -> Hourly:
     )
 
 
+def _json_files(directory: Path, pattern: str) -> list[Path]:
+    """Data files, sorted, without hidden files (``._*`` AppleDouble files from macOS tar)."""
+    return sorted(f for f in directory.glob(pattern) if not f.name.startswith("."))
+
+
 def _load_prices(raw: Path) -> Hourly:
     slots = {}
-    for f in sorted((raw / "prices" / DE_LU.code).glob("*.json")):
+    for f in _json_files(raw / "prices" / DE_LU.code, "*.json"):
         for s in parse_energy_charts(json.loads(f.read_text())):
             slots.setdefault(s.start, s)
     return hourly_prices(sorted(slots.values(), key=lambda s: s.start))
@@ -79,7 +84,7 @@ def _load_weather(raw: Path) -> dict[int, dict[str, Hourly]]:
     for name, variables in point_vars.items():
         files = [
             weather_by_horizon_from_previous_runs([json.loads(f.read_text())], [name], variables)
-            for f in sorted((raw / "weather").glob(f"{name}_*.json"))
+            for f in _json_files(raw / "weather", f"{name}_*.json")
         ]
         for h in HORIZONS:
             for key in files[0][h]:

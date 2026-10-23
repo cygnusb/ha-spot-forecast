@@ -30,7 +30,15 @@ START = dt.date(2024, 3, 1)
 
 def _get(url: str, params: dict, retries: int = 5) -> dict:
     for attempt in range(retries):
-        r = requests.get(url, params=params, timeout=120)
+        try:
+            r = requests.get(url, params=params, timeout=120)
+        except (requests.Timeout, requests.ConnectionError) as err:
+            if attempt == retries - 1:
+                raise
+            wait = 30 * (attempt + 1)
+            print(f"  {type(err).__name__} - retry in {wait}s", file=sys.stderr)
+            time.sleep(wait)
+            continue
         if r.status_code == 200:
             return r.json()
         wait = 60 if r.status_code == 429 else 5 * (attempt + 1)

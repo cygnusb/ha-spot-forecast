@@ -134,7 +134,8 @@ async def test_update_switches_model_and_next_run_uses_it(
     assert diag["model"]["version"] == "de_lu-2026-11"
     assert diag["model"]["source"] == "downloaded"
     assert coordinator.peak_threshold == round(newer.peak_threshold / 10, 1)
-    device = dr.async_get(hass).async_get_device(identifiers={(DOMAIN, entry.entry_id)})
+    (device,) = dr.async_entries_for_config_entry(dr.async_get(hass), entry.entry_id)
+    assert (DOMAIN, entry.entry_id) in device.identifiers
     assert device.model == "de_lu-2026-11"
     assert entry.runtime_data.backfill == _backfill(newer)
     assert sorted(p.name for p in _model_dir(tmp_path).iterdir()) == [

@@ -162,8 +162,11 @@ class SpotForecastCoordinator(DataUpdateCoordinator[SpotData]):
             entry_id = self.config_entry.entry_id
             async_check_model_age(self.hass, entry_id, model, self._today(now))
             registry = dr.async_get(self.hass)
-            if device := registry.async_get_device(identifiers={(DOMAIN, entry_id)}):
-                registry.async_update_device(device.id, model=model.version)
+            # Not async_get_device: deprecated in recent cores, where identifiers are no
+            # longer unique across config entries. This entry's own devices are what we mean.
+            for device in dr.async_entries_for_config_entry(registry, entry_id):
+                if (DOMAIN, entry_id) in device.identifiers:
+                    registry.async_update_device(device.id, model=model.version)
             self._rebuild(now)
 
     @property
