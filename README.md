@@ -5,7 +5,7 @@
 </p>
 
 [![GitHub Release][release-badge]][release-url]
-[![GitHub Downloads (all assets, all releases)][downloads-badge]][release-url]
+[![GitHub Downloads (spot_forecast.zip, all releases)][downloads-badge]][release-url]
 [![HACS Custom][hacs-badge]][hacs-url]
 [![HA Version][ha-badge]][ha-url]
 [![License][license-badge]][license-url]
@@ -227,7 +227,7 @@ MIT
 
 [release-badge]: https://img.shields.io/github/v/release/cygnusb/ha-spot-forecast?include_prereleases
 [release-url]: https://github.com/cygnusb/ha-spot-forecast/releases
-[downloads-badge]: https://img.shields.io/github/downloads/cygnusb/ha-spot-forecast/total
+[downloads-badge]: https://img.shields.io/github/downloads/cygnusb/ha-spot-forecast/spot_forecast.zip
 [hacs-badge]: https://img.shields.io/badge/HACS-Custom-orange.svg
 [hacs-url]: https://hacs.xyz/docs/faq/custom_repositories/
 [my-hacs-badge]: https://my.home-assistant.io/badges/hacs_repository.svg
