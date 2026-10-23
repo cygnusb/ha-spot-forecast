@@ -20,7 +20,7 @@ from homeassistant.components.recorder.statistics import (
     get_metadata,
 )
 from homeassistant.config_entries import ConfigEntryState
-from homeassistant.const import STATE_OFF, STATE_ON, STATE_UNAVAILABLE
+from homeassistant.const import STATE_OFF, STATE_ON, STATE_UNAVAILABLE, STATE_UNKNOWN
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import entity_registry as er
 import pytest
@@ -259,6 +259,32 @@ async def test_peak_risk_off_above_every_price(
     assert peak.attributes["threshold"] == 10.0
 
 
+async def test_flags_unknown_without_prices_in_the_window(
+    hass_with_recorder: HomeAssistant,
+    set_up: SetUp,
+    sources: Sources,
+    freezer: FrozenDateTimeFactory,
+) -> None:
+    """Nothing known for the next 48 h is neither "risk" nor "no risk"."""
+    hass = hass_with_recorder
+    await set_up()
+    sources.fail_all()
+
+    # 2026-10-23 12:00: no market prices for today, the forecast still shown
+    await advance(hass, freezer, T10 + timedelta(hours=26))
+    for entity_id in (PEAK, NEGATIVE):
+        assert hass.states.get(entity_id).state in (STATE_ON, STATE_OFF), entity_id
+
+    # 36 h after the last success the forecast is dropped too: an empty window
+    await advance(hass, freezer, T10 + timedelta(hours=36, minutes=15))
+    assert hass.states.get(PRICE).attributes["prices"] == []
+    for entity_id in (PEAK, NEGATIVE):
+        state = hass.states.get(entity_id)
+        assert state.state == STATE_UNKNOWN, entity_id
+        assert state.attributes["slots"] == []
+        assert state.attributes["certain"] is False
+
+
 async def test_day_sensors_disabled_by_default(
     hass_with_recorder: HomeAssistant, set_up: SetUp
 ) -> None:
@@ -351,7 +377,7 @@ async def test_weather_outage_keeps_last_forecast(
     assert float(state.state) == _market_price(recorded, later, "energy_charts_price_tomorrow.json")
     prices = state.attributes["prices"]
     assert prices and {e["source"] for e in prices} == {"market"}
-    assert hass.states.get(PEAK).state != STATE_UNAVAILABLE
+    assert hass.states.get(PEAK).state in (STATE_ON, STATE_OFF)  # from the market prices
 
 
 async def test_successful_run_clears_stale(
