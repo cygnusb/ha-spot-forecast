@@ -77,13 +77,15 @@ class SpotForecastOptionsFlow(OptionsFlow):
     async def async_step_init(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
         """Show and save the options."""
         if user_input is not None:
-            return self.async_create_entry(
-                data={
-                    CONF_PEAK_THRESHOLD: float(user_input[CONF_PEAK_THRESHOLD]),
-                    CONF_BACKFILL_DAYS: int(user_input[CONF_BACKFILL_DAYS]),
-                    CONF_AUTO_UPDATE: bool(user_input[CONF_AUTO_UPDATE]),
-                }
-            )
+            options: dict[str, Any] = {
+                CONF_BACKFILL_DAYS: int(user_input[CONF_BACKFILL_DAYS]),
+                CONF_AUTO_UPDATE: bool(user_input[CONF_AUTO_UPDATE]),
+            }
+            threshold = round(float(user_input[CONF_PEAK_THRESHOLD]), 1)
+            # the model's own value is not stored: it then follows a newer (downloaded) model
+            if threshold != self._model_peak_threshold():
+                options[CONF_PEAK_THRESHOLD] = threshold
+            return self.async_create_entry(data=options)
 
         options = self._entry.options
         return self.async_show_form(

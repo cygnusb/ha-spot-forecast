@@ -12,6 +12,7 @@ from zoneinfo import ZoneInfo
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import EVENT_HOMEASSISTANT_STOP
 from homeassistant.core import CALLBACK_TYPE, Event, HassJob, HomeAssistant, callback
+from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers.event import async_track_point_in_utc_time, async_track_time_change
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
@@ -153,12 +154,16 @@ class SpotForecastCoordinator(DataUpdateCoordinator[SpotData]):
 
         Under the run lock, so a run uses one model throughout. The ledger and the written
         statistics stay: forecasts already shown keep the model that made them. The shown
-        data and the ``model_outdated`` issue follow the new model at once.
+        data, the device's model and the ``model_outdated`` issue follow the new model at once.
         """
         async with self._run_lock:
             self.model, self.model_source, self.backfill = model, source, backfill
             now = dt_util.utcnow()
-            async_check_model_age(self.hass, self.config_entry.entry_id, model, self._today(now))
+            entry_id = self.config_entry.entry_id
+            async_check_model_age(self.hass, entry_id, model, self._today(now))
+            registry = dr.async_get(self.hass)
+            if device := registry.async_get_device(identifiers={(DOMAIN, entry_id)}):
+                registry.async_update_device(device.id, model=model.version)
             self._rebuild(now)
 
     @property

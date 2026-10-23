@@ -116,6 +116,37 @@ async def test_options_flow_saves_threshold_and_backfill(
     assert entry.state is ConfigEntryState.LOADED
 
 
+async def test_options_flow_threshold_at_the_model_default_follows_the_model(
+    hass_with_recorder: HomeAssistant, recorded_sources: None
+) -> None:
+    """Saving the model's own threshold removes the option, so a newer model's applies."""
+    hass = hass_with_recorder
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        title="Spot Forecast DE-LU",
+        unique_id="DE-LU",
+        data={CONF_ZONE: "DE-LU"},
+        options={CONF_PEAK_THRESHOLD: 22.5, CONF_BACKFILL_DAYS: 60, CONF_AUTO_UPDATE: True},
+    )
+    entry.add_to_hass(hass)
+    assert await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_block_till_done()
+    default = round(entry.runtime_data.model.peak_threshold / 10, 1)
+    assert default != 22.5
+
+    result = await hass.config_entries.options.async_init(entry.entry_id)
+    assert _default(result["data_schema"], CONF_PEAK_THRESHOLD) == 22.5
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"],
+        {CONF_PEAK_THRESHOLD: default, CONF_BACKFILL_DAYS: 60, CONF_AUTO_UPDATE: True},
+    )
+    await hass.async_block_till_done()
+
+    assert entry.options == {CONF_BACKFILL_DAYS: 60, CONF_AUTO_UPDATE: True}
+    assert entry.runtime_data.coordinator.peak_threshold == default
+    assert await hass.config_entries.async_unload(entry.entry_id)
+
+
 async def test_options_flow_falls_back_without_runtime_data(
     hass_with_recorder: HomeAssistant,
 ) -> None:

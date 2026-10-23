@@ -26,7 +26,10 @@ from .const import (
     DEFAULT_AUTO_UPDATE,
     DOMAIN,
     MANIFEST_URL,
+    MAX_BACKFILL_BYTES,
     MAX_DOWNLOADED_MODELS,
+    MAX_MANIFEST_BYTES,
+    MAX_MODEL_BYTES,
     MODEL_DIR,
 )
 from .coordinator import SpotForecastCoordinator
@@ -78,8 +81,15 @@ class ModelUpdater:
     """Checks the release manifest once after setup and then daily, if the option is on."""
 
     def __init__(
-        self, hass: HomeAssistant, entry: ConfigEntry, coordinator: SpotForecastCoordinator
+        self,
+        hass: HomeAssistant,
+        entry: ConfigEntry,
+        coordinator: SpotForecastCoordinator,
+        manifest_url: str = MANIFEST_URL,
     ) -> None:
+        self._manifest_url = manifest_url
+        # assets are fetched only from the release the manifest belongs to
+        self._release_base = manifest_url.rsplit("/", 1)[0] + "/"
         self._hass = hass
         self._entry = entry
         self._coordinator = coordinator
@@ -129,11 +139,13 @@ class ModelUpdater:
 
     async def _async_check(self) -> str:
         session = async_get_clientsession(self._hass)
+        url = self._manifest_url
         try:
-            body = await get_body(session, MANIFEST_URL, {})
-            manifest = parse_manifest(decode_json(body, MANIFEST_URL))
+            # at most MAX_MANIFEST_BYTES: small enough to decode on the event loop
+            body = await get_body(session, url, {}, MAX_MANIFEST_BYTES)
+            manifest = parse_manifest(decode_json(body, url))
         except SourceNotFound:
-            _LOGGER.debug("No models published yet: %s", MANIFEST_URL)
+            _LOGGER.debug("No models published yet: %s", url)
             return UNAVAILABLE
         except (SourceError, ValueError) as e:
             _LOGGER.debug("Model manifest not usable: %s", e)
@@ -152,9 +164,14 @@ class ModelUpdater:
             return SKIPPED_SCHEMA
         if not wants_download(entry, self._coordinator.model.train_cutoff, FEATURE_SCHEMA):
             return CURRENT
+        for asset_url in (entry.model_url, entry.backfill_url):
+            if not asset_url.startswith(self._release_base):
+                error = Rejected(f"{asset_url} is not in the release {self._release_base}")
+                self._warn_once(entry.version, error)
+                return FAILED
         try:
-            model_bytes = await get_body(session, entry.model_url, {})
-            backfill = await get_body(session, entry.backfill_url, {})
+            model_bytes = await get_body(session, entry.model_url, {}, MAX_MODEL_BYTES)
+            backfill = await get_body(session, entry.backfill_url, {}, MAX_BACKFILL_BYTES)
             model = await self._hass.async_add_executor_job(
                 install, entry, self._slug, model_bytes, backfill, model_dir(self._hass)
             )

@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
+import gzip
+import json
 import logging
 from pathlib import Path
 
+from .core.ledger import BACKFILL_FORMAT
 from .core.model import ModelCorrupt, ModelFile, ModelMismatch, load_model, sample_check
 from .core.zones import ZONES
 
@@ -34,6 +37,8 @@ def load_bundled(zone: str) -> tuple[ModelFile, bytes]:
 def downloaded_models(slug: str, storage_dir: Path) -> list[Path]:
     """The downloaded model files of zone ``slug`` (``{version}.json.gz``), oldest first.
 
+    Versions are ``{slug}-YYYY-MM`` of the training cutoff, so this is also cutoff order.
+
     None when ``storage_dir`` does not exist or cannot be read.
     """
     try:
@@ -62,27 +67,59 @@ def load_active(zone_code: str, storage_dir: Path) -> tuple[ModelFile, bytes, st
 
     The newest by training cutoff of the bundled model and the downloaded ones in
     ``storage_dir`` that load, fit this code (feature schema) and pass the sample check;
-    a tie goes to the bundled model. A downloaded model without its backfill file uses
-    the bundled backfill. Unusable downloads are skipped; only a bundled model that
-    cannot be loaded raises (as ``load_bundled``). Blocking file I/O: run it in the
-    executor.
+    a tie goes to the bundled model. Downloads are tried newest first, and the first
+    usable one newer than the bundled model is taken. A download that does not load or
+    fails a check is deleted; only a bundled model that cannot be loaded raises (as
+    ``load_bundled``). A downloaded model whose backfill file is missing or unreadable
+    uses the bundled one, whose rows keep the bundled model's version (it is in the
+    file). Blocking file I/O: run it in the executor.
     """
-    model, backfill = load_bundled(zone_code)
-    active = (model, backfill, SOURCE_BUNDLED)
+    bundled, bundled_backfill = load_bundled(zone_code)
     slug = ZONES[zone_code].slug
-    for path in downloaded_models(slug, storage_dir):
+    for path in reversed(downloaded_models(slug, storage_dir)):
+        candidate = _load_download(path, slug)
+        if candidate is None or candidate.train_cutoff <= bundled.train_cutoff:
+            continue
+        backfill = _read_backfill(backfill_path(path))
+        if backfill is None:
+            _LOGGER.warning(
+                "The backfill file of the downloaded model %s is missing or unreadable; "
+                "using the bundled one",
+                candidate.version,
+            )
+            backfill = bundled_backfill
+        return candidate, backfill, SOURCE_DOWNLOADED
+    return bundled, bundled_backfill, SOURCE_BUNDLED
+
+
+def _load_download(path: Path, slug: str) -> ModelFile | None:
+    """The downloaded model at ``path``, or None (deleted when it cannot be used)."""
+    try:
+        return load_checked(path.read_bytes(), slug)
+    except ModelMismatch as e:  # corrupt, or e.g. made for another feature schema
+        log = _LOGGER.warning if isinstance(e, ModelCorrupt) else _LOGGER.info
+        log("Deleting the unusable downloaded model %s: %s", path.name, e)
         try:
-            candidate = load_checked(path.read_bytes(), slug)
-        except ModelCorrupt as e:
-            _LOGGER.warning("Ignoring the downloaded model %s: %s", path.name, e)
-            continue
-        except (OSError, ModelMismatch) as e:  # e.g. made for an older feature schema
-            _LOGGER.debug("Ignoring the downloaded model %s: %s", path.name, e)
-            continue
-        if candidate.train_cutoff <= active[0].train_cutoff:
-            continue
-        try:
-            active = (candidate, backfill_path(path).read_bytes(), SOURCE_DOWNLOADED)
-        except OSError:
-            active = (candidate, backfill, SOURCE_DOWNLOADED)
-    return active
+            path.unlink(missing_ok=True)
+            backfill_path(path).unlink(missing_ok=True)
+        except OSError as err:
+            _LOGGER.warning("Cannot delete %s: %s", path.name, err)
+    except OSError as e:
+        _LOGGER.warning("Cannot read the downloaded model %s: %s", path.name, e)
+    except Exception:  # never let a downloaded file stop the setup
+        _LOGGER.exception("Ignoring the downloaded model %s", path.name)
+    return None
+
+
+def _read_backfill(path: Path) -> bytes | None:
+    """The backfill file's raw bytes if it is gzip JSON in the backfill format, else None."""
+    try:
+        data = path.read_bytes()
+        doc = json.loads(gzip.decompress(data))
+    except (OSError, EOFError, ValueError):  # missing, not gzip, not JSON
+        return None
+    if not isinstance(doc, dict) or doc.get("format") != BACKFILL_FORMAT:
+        return None
+    if not isinstance(doc.get("rows"), list):
+        return None
+    return data

@@ -17,6 +17,7 @@ from pathlib import Path
 from conftest import MODELS_BASE, T10, SetUp, Sources, advance
 from freezegun.api import FrozenDateTimeFactory
 from homeassistant.core import HomeAssistant
+from homeassistant.helpers import device_registry as dr
 import pytest
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
@@ -29,6 +30,7 @@ from custom_components.spot_forecast.const import (
     MODEL_DIR,
 )
 from custom_components.spot_forecast.core.features import FEATURE_SCHEMA
+from custom_components.spot_forecast.core.ledger import runs_from_backfill_file
 from custom_components.spot_forecast.core.model import ModelFile, dump_model
 from custom_components.spot_forecast.diagnostics import async_get_config_entry_diagnostics
 from custom_components.spot_forecast.model_loader import load_active, load_bundled
@@ -54,14 +56,23 @@ def _backfill(model: ModelFile) -> bytes:
 
 
 def _published(
-    model: ModelFile, *, feature_schema: int = FEATURE_SCHEMA, model_sha: str | None = None
+    model: ModelFile,
+    *,
+    feature_schema: int = FEATURE_SCHEMA,
+    model_sha: str | None = None,
+    data: bytes | None = None,
+    base: str = MODELS_BASE,
 ) -> dict[str, bytes]:
-    """The release files of a manifest publishing ``model`` for DE-LU (shape: training)."""
-    data, backfill = dump_model(model), _backfill(model)
+    """The release files of a manifest publishing ``model`` for DE-LU (shape: training).
+
+    ``data`` replaces the model file's bytes (the manifest then has their checksum), and
+    ``base`` is where the manifest says the assets are.
+    """
+    data, backfill = dump_model(model) if data is None else data, _backfill(model)
 
     def asset(name: str, body: bytes, sha: str | None = None) -> dict:
         digest = sha or hashlib.sha256(body).hexdigest()
-        return {"name": name, "url": MODELS_BASE + name, "sha256": digest, "size": len(body)}
+        return {"name": name, "url": base + name, "sha256": digest, "size": len(body)}
 
     entry = {
         "version": model.version,
@@ -123,6 +134,8 @@ async def test_update_switches_model_and_next_run_uses_it(
     assert diag["model"]["version"] == "de_lu-2026-11"
     assert diag["model"]["source"] == "downloaded"
     assert coordinator.peak_threshold == round(newer.peak_threshold / 10, 1)
+    device = dr.async_get(hass).async_get_device(identifiers={(DOMAIN, entry.entry_id)})
+    assert device.model == "de_lu-2026-11"
     assert entry.runtime_data.backfill == _backfill(newer)
     assert sorted(p.name for p in _model_dir(tmp_path).iterdir()) == [
         "de_lu-2026-11.backfill.json.gz",
@@ -168,6 +181,71 @@ async def test_sha_mismatch_keeps_current_model(
     assert len(warnings) == 1  # one per version and HA run
     assert "de_lu-2026-11" in warnings[0].getMessage()
     assert "SHA-256" in warnings[0].getMessage()
+
+
+@pytest.mark.parametrize(
+    ("data", "message"),
+    [
+        (b"not a model", "corrupt"),  # checksum right, but it does not load
+        (dump_model(_model(date(2026, 12, 1))), "holds de_lu-2026-12"),  # not what is listed
+    ],
+    ids=["unloadable", "other_version"],
+)
+async def test_model_failing_its_checks_keeps_current_model(
+    hass_with_recorder: HomeAssistant,
+    set_up: SetUp,
+    sources: Sources,
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+    data: bytes,
+    message: str,
+) -> None:
+    sources.release = _published(_model(date(2026, 11, 1)), data=data)
+    entry = await set_up({CONF_AUTO_UPDATE: True})
+
+    assert await entry.runtime_data.updater.async_check() == "failed"
+
+    assert entry.runtime_data.coordinator.model.version == BUNDLED.version
+    assert not _model_dir(tmp_path).exists()
+    warnings = _warnings(caplog)
+    assert len(warnings) == 1
+    assert message in warnings[0].getMessage()
+
+
+async def test_assets_outside_the_release_are_not_fetched(
+    hass_with_recorder: HomeAssistant,
+    set_up: SetUp,
+    sources: Sources,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    newer = _model(date(2026, 11, 1))
+    sources.release = _published(newer, base="https://example.org/releases/download/models/")
+    entry = await set_up({CONF_AUTO_UPDATE: True})
+
+    assert await entry.runtime_data.updater.async_check() == "failed"
+
+    assert sources.release_calls() == sources.release_calls(MANIFEST_URL) == 1
+    assert entry.runtime_data.coordinator.model.version == BUNDLED.version
+    warnings = _warnings(caplog)
+    assert len(warnings) == 1
+    assert "is not in the release" in warnings[0].getMessage()
+
+
+async def test_oversized_model_is_not_used(
+    hass_with_recorder: HomeAssistant,
+    set_up: SetUp,
+    sources: Sources,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    monkeypatch.setattr(model_update, "MAX_MODEL_BYTES", 1000)
+    sources.release = _published(_model(date(2026, 11, 1)))
+    entry = await set_up({CONF_AUTO_UPDATE: True})
+
+    assert await entry.runtime_data.updater.async_check() == "failed"
+
+    assert entry.runtime_data.coordinator.model.version == BUNDLED.version
+    assert "limit" in _warnings(caplog)[0].getMessage()
 
 
 async def test_schema_mismatch_is_ignored_quietly(
@@ -281,6 +359,7 @@ def test_load_active_prefers_newest_by_cutoff(tmp_path: Path) -> None:
     model, backfill, source = load_active("DE-LU", newer)
     assert (model.version, source) == ("de_lu-2026-11", "downloaded")
     assert backfill == _backfill(_model(date(2026, 11, 1)))
+    assert not (newer / "de_lu-2026-12.json.gz").exists()  # unusable: deleted
 
     _write(older, _model(date(2026, 9, 1)))
     _write(older, _model(date(2026, 10, 1)))  # a tie
@@ -288,17 +367,59 @@ def test_load_active_prefers_newest_by_cutoff(tmp_path: Path) -> None:
     assert (model.version, backfill, source) == (BUNDLED.version, BUNDLED_BACKFILL, "bundled")
 
 
-def test_load_active_without_downloaded_backfill_uses_bundled(tmp_path: Path) -> None:
+def test_load_active_stops_at_the_newest_usable_download(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    for month in (11, 12):
+        _write(tmp_path, _model(date(2026, month, 1)))
+    loaded, load_checked = [], model_loader.load_checked
+
+    def counting(data: bytes, slug: str) -> ModelFile:
+        loaded.append(model := load_checked(data, slug))
+        return model
+
+    monkeypatch.setattr(model_loader, "load_checked", counting)
+
+    model, _, source = load_active("DE-LU", tmp_path)
+
+    assert (model.version, source) == ("de_lu-2026-12", "downloaded")
+    assert [m.version for m in loaded] == ["de_lu-2026-12"]
+
+
+@pytest.mark.parametrize("backfill", [None, b"not gzip", gzip.compress(b'{"format": 2}')])
+def test_load_active_without_usable_downloaded_backfill_uses_bundled(
+    tmp_path: Path, backfill: bytes | None
+) -> None:
+    """The bundled rows keep the bundled model's version: it is in their file."""
     _write(tmp_path, _model(date(2026, 11, 1)), backfill=False)
+    if backfill is not None:
+        (tmp_path / "de_lu-2026-11.backfill.json.gz").write_bytes(backfill)
     model, backfill, source = load_active("DE-LU", tmp_path)
     assert (model.version, backfill, source) == ("de_lu-2026-11", BUNDLED_BACKFILL, "downloaded")
+    runs = runs_from_backfill_file(backfill, model.version, "Europe/Berlin")
+    assert {run.model_version for run in runs} == {BUNDLED.version}
 
 
-def test_load_active_skips_another_schema_or_zone(tmp_path: Path) -> None:
+def test_load_active_deletes_another_schema_or_zone(tmp_path: Path) -> None:
     _write(tmp_path, replace(_model(date(2026, 11, 1)), feature_schema=FEATURE_SCHEMA + 1))
     _write(tmp_path, replace(_model(date(2026, 12, 1)), zone="at"))
     model, _, source = load_active("DE-LU", tmp_path)
     assert (model.version, source) == (BUNDLED.version, "bundled")
+    assert list(tmp_path.iterdir()) == []
+
+
+def test_load_active_survives_any_error_of_a_download(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _write(tmp_path, _model(date(2026, 11, 1)))
+
+    def broken(data: bytes, slug: str) -> ModelFile:
+        raise RuntimeError("unexpected")
+
+    monkeypatch.setattr(model_loader, "load_checked", broken)
+    model, _, source = load_active("DE-LU", tmp_path)
+    assert (model.version, source) == (BUNDLED.version, "bundled")
+    assert (tmp_path / "de_lu-2026-11.json.gz").exists()  # not known to be bad: kept
 
 
 def test_check_time_is_stable_and_in_the_night() -> None:

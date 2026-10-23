@@ -20,6 +20,10 @@ DEFAULT_AUTO_UPDATE = True
 MANIFEST_URL = "https://github.com/cygnusb/ha-spot-forecast/releases/download/models/manifest.json"
 MODEL_DIR = "spot_forecast"  # downloaded models: <config>/.storage/spot_forecast/
 MAX_DOWNLOADED_MODELS = 3  # versions kept per zone
+# download limits (bytes); the published files are ~2 KB, ~1.6 MB and ~0.3 MB
+MAX_MANIFEST_BYTES = 256 * 1024
+MAX_MODEL_BYTES = 32 * 1024 * 1024
+MAX_BACKFILL_BYTES = 16 * 1024 * 1024
 
 STORE_VERSION = 1
 STORE_KEY = f"{DOMAIN}.{{entry_id}}"  # STORE_KEY.format(entry_id=entry.entry_id)
