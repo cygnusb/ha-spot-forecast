@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" width="256" height="256">
+  <defs>
+    <pattern id="risk" width="16" height="16" patternUnits="userSpaceOnUse" patternTransform="rotate(45)">
+      <rect width="7" height="16" fill="#d03b3b"/>
+    </pattern>
+  </defs>
+  <path d="M124 164 V128 H164 V32 H204 V92 H240 V150 H204 V112 H164 V164 Z" fill="url(#risk)"/>
+  <path d="M124 164 V128 H164 V32 H204 V92 H240"
+        fill="none" stroke="#d03b3b" stroke-width="12" stroke-linejoin="miter" stroke-linecap="butt"/>
+  <path d="M16 150 H52 V200 H88 V164 H164 V112 H204 V150 H240"
+        fill="none" stroke="#2a78d6" stroke-width="22" stroke-linejoin="miter" stroke-linecap="butt"/>
+</svg>

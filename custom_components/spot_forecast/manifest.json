@@ -4,7 +4,7 @@
   "codeowners": ["@cygnusb"],
   "config_flow": true,
   "dependencies": ["recorder"],
-  "documentation": "https://github.com/cygnusb/ha-spot-forecast",
+  "documentation": "https://cygnusb.github.io/ha-spot-forecast/docs/",
   "integration_type": "service",
   "iot_class": "cloud_polling",
   "issue_tracker": "https://github.com/cygnusb/ha-spot-forecast/issues",

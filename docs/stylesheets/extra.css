@@ -1,0 +1,149 @@
+/* The project page's look on top of Material for MkDocs: cool chart paper, navy
+   ink, the forecast's blue for links and accents, hairline rules, Archivo condensed
+   headlines over Atkinson Hyperlegible Next. The fonts come from
+   assets/fonts/fonts.css. */
+
+:root {
+  --spot-display: "Archivo", "Arial Narrow", system-ui, sans-serif;
+  /* Material puts its own system-font fallbacks after this one. */
+  --md-text-font: "Atkinson Hyperlegible Next";
+  --spot-risk: #d03b3b;
+}
+
+[data-md-color-scheme="default"] {
+  --spot-paper: #f0f4f8;
+  --spot-ink: #14233a;
+  --spot-rule: #d2dbe6;
+  --spot-blue: #1b5fb3;
+  --md-default-bg-color: #ffffff;
+  --md-default-fg-color: var(--spot-ink);
+  --md-default-fg-color--light: #44566e;
+  --md-default-fg-color--lighter: #5a6b82;
+  --md-default-fg-color--lightest: var(--spot-rule);
+  --md-typeset-color: var(--spot-ink);
+  --md-typeset-a-color: var(--spot-blue);
+  --md-code-bg-color: var(--spot-paper);
+  --md-code-fg-color: var(--spot-ink);
+}
+
+[data-md-color-scheme="slate"] {
+  --spot-paper: #0d1520;
+  --spot-ink: #e4ebf3;
+  --spot-rule: #283a50;
+  --spot-blue: #82b6f2;
+  --spot-risk: #e25c5c;
+  --md-hue: 215;
+  --md-default-bg-color: #142030;
+  --md-default-fg-color: var(--spot-ink);
+  --md-default-fg-color--light: #a3b2c4;
+  --md-default-fg-color--lighter: #8a9aae;
+  --md-default-fg-color--lightest: var(--spot-rule);
+  --md-typeset-color: var(--spot-ink);
+  --md-typeset-a-color: var(--spot-blue);
+  --md-code-bg-color: var(--spot-paper);
+  --md-code-fg-color: var(--spot-ink);
+  --md-footer-bg-color: var(--spot-paper);
+  --md-footer-bg-color--dark: #09101a;
+}
+
+[data-md-color-primary="custom"] {
+  --md-primary-fg-color: var(--spot-paper);
+  --md-primary-fg-color--light: var(--spot-paper);
+  --md-primary-fg-color--dark: var(--spot-paper);
+  --md-primary-bg-color: var(--spot-ink);
+  --md-primary-bg-color--light: var(--md-default-fg-color--light);
+}
+
+[data-md-color-accent="custom"] {
+  --md-accent-fg-color: var(--spot-blue);
+  --md-accent-fg-color--transparent: rgba(42, 120, 214, 0.1);
+  --md-accent-bg-color: #ffffff;
+}
+
+/* The header and footer sit on the page's paper, divided by a hairline. */
+.md-header {
+  border-bottom: 1px solid var(--spot-rule);
+  box-shadow: none;
+}
+
+.md-header__button.md-logo img {
+  height: 1.6rem;
+}
+
+.md-header__topic:first-child {
+  font-family: var(--spot-display);
+  font-weight: 700;
+}
+
+.md-search__form {
+  background-color: var(--md-default-bg-color);
+  border: 1px solid var(--spot-rule);
+}
+
+.md-footer {
+  background-color: var(--spot-paper);
+  color: var(--spot-ink);
+  border-top: 1px solid var(--spot-rule);
+}
+
+.md-footer-meta {
+  background-color: var(--spot-paper);
+}
+
+/* Headlines in the condensed display face of the wordmark. */
+.md-typeset h1,
+.md-typeset h2,
+.md-typeset h3 {
+  font-family: var(--spot-display);
+  font-stretch: 75%;
+  font-weight: 700;
+  letter-spacing: 0;
+  color: var(--md-typeset-color);
+}
+
+.md-typeset h1 {
+  font-size: 2.4em;
+  line-height: 1.05;
+  margin-bottom: 0.8em;
+}
+
+.md-typeset h2 {
+  font-size: 1.7em;
+  line-height: 1.1;
+  padding-top: 0.6em;
+  border-top: 1px solid var(--spot-rule);
+}
+
+.md-typeset h3 {
+  font-size: 1.3em;
+}
+
+/* Quoted notes are the caveats: a hatched rule in the peak-risk red, as on the
+   forecast card. */
+.md-typeset blockquote {
+  border-left: 0;
+  background:
+    repeating-linear-gradient(135deg, var(--spot-risk) 0 1.5px, transparent 1.5px 5px) left / 0.35rem 100% no-repeat,
+    var(--md-code-bg-color);
+  color: var(--md-typeset-color);
+  padding: 0.6em 1em 0.6em 1.3em;
+  border-radius: 0 0.3rem 0.3rem 0;
+}
+
+.md-typeset blockquote > :first-child {
+  margin-top: 0;
+}
+
+.md-typeset blockquote > :last-child {
+  margin-bottom: 0;
+}
+
+.md-typeset table:not([class]) {
+  border: 1px solid var(--spot-rule);
+  box-shadow: none;
+  font-variant-numeric: tabular-nums;
+}
+
+.md-typeset table:not([class]) th {
+  background-color: var(--md-code-bg-color);
+}

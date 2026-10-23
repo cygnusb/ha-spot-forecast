@@ -1,0 +1,7 @@
+# The project site (.github/workflows/pages.yml): tools/build_site.py renders the
+# project page with Jinja2, MkDocs builds the documentation pages from docs/. Pinned
+# like ruff: an unpinned theme release must not turn a docs build red, and MkDocs 2.0
+# is not compatible with Material for MkDocs.
+jinja2==3.1.6
+mkdocs==1.6.1
+mkdocs-material==9.7.7
