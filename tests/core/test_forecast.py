@@ -101,3 +101,12 @@ def test_incomplete_anchor_day_raises(golden, tiny_model_file):
     with pytest.raises(IncompleteAnchorDay) as e:
         run_forecast(tiny_model_file, case.anchor, prices, case.weather, DE_LU, case.capacity)
     assert isinstance(e.value, InsufficientHistory)
+
+
+def test_model_of_another_zone_raises(golden, tiny_model_file):
+    from core.model import ModelMismatch
+    from core.zones import NL
+
+    case = golden[date(2025, 6, 15)]
+    with pytest.raises(ModelMismatch, match="is for zone 'de_lu', not 'nl'"):
+        run_forecast(tiny_model_file, case.anchor, case.prices, case.weather, NL)

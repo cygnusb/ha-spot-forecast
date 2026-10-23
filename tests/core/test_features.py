@@ -1,5 +1,9 @@
 from dataclasses import replace
 from datetime import UTC, date, datetime, timedelta
+import os
+from pathlib import Path
+import sys
+from types import SimpleNamespace
 from zoneinfo import ZoneInfo
 
 import numpy as np
@@ -13,8 +17,9 @@ from core.features import (
     build_features,
     daily_stats,
     decode,
+    feature_names,
 )
-from core.zones import DE_LU
+from core.zones import DE_LU, NL
 
 GOLDEN_ANCHORS = [
     date(2025, 6, 15),
@@ -296,3 +301,126 @@ def test_decode_inverts_target(golden):
     fm = build(case)
     y = np.linspace(-1, 1, len(fm.times))
     np.testing.assert_allclose(decode(y, fm), y * case.scale + case.mean7)
+
+
+# ---------------------------------------------------------------- NL (generic layout)
+
+RESEARCH = Path(
+    os.environ.get("SPOT_RESEARCH_DIR", Path(__file__).resolve().parents[2] / "research")
+)
+AMSTERDAM = ZoneInfo("Europe/Amsterdam")
+
+
+def test_de_lu_keeps_its_feature_names():
+    assert feature_names(DE_LU) is FEATURE_NAMES
+
+
+def test_nl_feature_names():
+    """research/zones/genfeat.py ``feature_names(ZONES["NL"])``, written out."""
+    names = feature_names(NL)
+    assert names[:20] == (
+        "h", "hour", "dow", "doy", "holiday", "offday", "issue_dow", "p_lastday", "p_lastweek",
+        *(f"D_{n}" for n in ("mean", "min", "max", "std", "mean7", "std7", "mean30", "min7",
+                             "max7", "gq_evening14", "gq_q90_14")),
+    )  # fmt: skip
+    nb = ("wind_speed_100m", "shortwave_radiation", "temperature_2m", "precipitation")
+    s = ("wind_speed_100m", "temperature_2m", "cloud_cover")
+    de = ("wind_speed_100m", "shortwave_radiation", "temperature_2m", "cloud_cover")
+    raw = [
+        *(f"nb_nl__{v}" for v in nb),
+        *(f"nl_borssele__{v}" for v in s),
+        *(f"north_sea__{v}" for v in de),
+        *(f"nl_{p}__{v}" for p in ("flevoland", "groningen", "randstad", "brabant") for v in s),
+    ]
+    assert names[20:] == (
+        *raw,
+        "wind_mean", "wind_power_idx", "temp_mean", "solar_est_mean", "cloud_mean",
+        "nb_wind_power_idx", "nb_temp_mean", "nb_precip_hydro",
+        "wind_power_idx_day", "temp_mean_day", "solar_est_mean_day", "nb_wind_power_idx_day",
+        "nb_temp_mean_day", "nb_precip_hydro_day",
+    )  # fmt: skip
+    assert len(names) == 57 and not any(n.startswith("cap_") for n in names)
+
+
+def _nl_inputs(anchor: date) -> tuple[Hourly, dict]:
+    """45 days of NL prices to the end of the anchor day, constant weather for every key."""
+    start = datetime.combine(anchor - timedelta(days=44), datetime.min.time(), AMSTERDAM)
+    start = start.astimezone(UTC)
+    end = datetime.combine(anchor + timedelta(days=1), datetime.min.time(), AMSTERDAM)
+    n = (end.astimezone(UTC) - start) // timedelta(hours=1)
+    prices = Hourly(start, 60 + 20 * np.sin(np.arange(n) / 24 * 2 * np.pi))
+    keys = [f"{p}__{v}" for points, vs in NL.point_sets() for p in points for v in vs]
+    series = Hourly(start, np.full(n + 24 * 8, 10.0))
+    return prices, {h: dict.fromkeys(keys, series) for h in range(1, 7)}
+
+
+def test_nl_features_on_synthetic_inputs():
+    anchor = date(2025, 4, 24)  # D+2 is Koningsdag 2025 (Saturday 26 April)
+    prices, weather = _nl_inputs(anchor)
+    fm = build_features(anchor, prices, daily_stats(prices, NL), weather, {}, NL)
+    names = feature_names(NL)
+    c = {n: i for i, n in enumerate(names)}
+    assert fm.X.shape == (6 * 24, len(names))
+    hol = {int(h): fm.X[fm.h == h, c["holiday"]][0] for h in range(1, 7)}
+    assert hol == {1: 0.0, 2: 1.0, 3: 0.0, 4: 0.0, 5: 0.0, 6: 0.0}
+    # local Amsterdam hours, and the generic aggregates of constant inputs
+    assert list(fm.X[fm.h == 1, c["hour"]]) == list(range(24))
+    assert (fm.X[:, c["temp_mean"]] == 10.0).all() and (fm.X[:, c["nb_temp_mean"]] == 10.0).all()
+    assert (fm.X[:, c["nb_precip_hydro_day"]] == 240.0).all()
+    np.testing.assert_allclose(fm.X[:, c["wind_mean"]], 10.0 / 3.6)
+    # schema 2 relative levels on NL rows too
+    lag = [prices.at(t - timedelta(days=7)) for t in fm.times]
+    np.testing.assert_allclose(decode(fm.X[:, c["p_lastweek"]], fm), lag, rtol=1e-12)
+    assert (fm.X[:, c["D_mean7"]] == fm.mean7).all()
+
+
+@pytest.fixture(scope="module")
+def research_nl():
+    """research/zones genfeat and bt, the NL config and its real inputs."""
+    if not (RESEARCH / "data" / "zones" / "weather").exists():
+        pytest.skip("research zone data missing")
+    pytest.importorskip("holidays")
+    pytest.importorskip("sklearn")
+    saved = list(sys.path)
+    sys.path.insert(0, str(RESEARCH / "zones"))
+    try:
+        import bt
+        import genfeat
+    finally:
+        sys.path[:] = saved
+    cfg = genfeat.ZONES["NL"]
+    prices = genfeat.load_prices("NL")
+    return SimpleNamespace(
+        genfeat=genfeat, bt=bt, cfg=cfg, prices=prices, weather=genfeat.load_weather(cfg)
+    )
+
+
+def test_nl_feature_names_match_research(research_nl):
+    assert feature_names(NL) == research_nl.genfeat.feature_names(research_nl.cfg)
+
+
+# away from the DST switches the research UTC lags equal the wall-clock lags
+_FAR_FROM_DST = [date(2025, 4, 24), date(2025, 6, 15), date(2025, 12, 20), date(2026, 2, 1),
+                 date(2026, 8, 20)]  # fmt: skip
+_NEAR_DST = [date(2025, 10, 25), date(2026, 3, 27)]
+
+
+@pytest.mark.parametrize("anchor", _FAR_FROM_DST + _NEAR_DST, ids=str)
+def test_nl_feature_values_match_research(research_nl, anchor):
+    """genfeat ``build_features`` + bt ``relative`` on the real data, to the last bit; the lag
+    columns only on anchors whose lags do not cross a DST switch (research lags are UTC)."""
+    r = research_nl
+    names = r.genfeat.feature_names(r.cfg)
+    daily = r.genfeat.daily_stats(r.prices, SimpleNamespace(tz=r.cfg.tz, evening_hours=(18, 21)))
+    rows = r.genfeat.build_features(anchor, r.prices, daily, r.weather, r.cfg, names)
+    n = len(rows.X)
+    ds = {"X": rows.X, "names": names, "mean7": np.full(n, rows.mean7)}
+    expected = r.bt.relative({**ds, "scale": np.full(n, rows.scale)})["X"]
+    fm = build_features(anchor, r.prices, daily_stats(r.prices, NL), r.weather, {}, NL)
+    assert fm.times == rows.times
+    assert (fm.mean7 == rows.mean7).all() and (fm.scale == rows.scale).all()
+    cols = list(range(len(names)))
+    if anchor in _NEAR_DST:
+        cols = [i for i, name in enumerate(names) if name not in ("p_lastday", "p_lastweek")]
+    np.testing.assert_array_equal(fm.X[:, cols], expected[:, cols])
+    assert np.isfinite(fm.X[:, names.index("wind_mean")]).all()
