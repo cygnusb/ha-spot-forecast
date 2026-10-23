@@ -178,7 +178,16 @@ def load_model(data: bytes) -> ModelFile:
         return _model_from_json(json.loads(gzip.decompress(data)))
     except ModelMismatch:
         raise
-    except (OSError, EOFError, zlib.error, ValueError, KeyError, TypeError, AttributeError) as e:
+    except (
+        OSError,
+        EOFError,
+        zlib.error,
+        ValueError,
+        KeyError,
+        TypeError,
+        AttributeError,
+        OverflowError,  # JSON integers too large for numpy
+    ) as e:
         raise ModelCorrupt(f"model file is corrupt: {type(e).__name__}: {e}") from e
 
 

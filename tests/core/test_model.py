@@ -193,3 +193,17 @@ def test_rejects_non_finite_leaf_value(tiny_model_file):
 def test_rejects_missing_horizon_offset(tiny_model_file):
     with pytest.raises(ModelCorrupt, match="offset"):
         load_model(_mutated(tiny_model_file, lambda d: d["p90_offsets"].pop("6")))
+
+
+@pytest.mark.parametrize(
+    ("trees", "field", "value"),
+    [("median", "threshold", 10**400), ("p90", "roots", 2**70)],
+    ids=["float", "int"],
+)
+def test_load_model_overflow_is_corrupt(tiny_model_file, trees, field, value):
+    # JSON integers have no size limit; numpy cannot hold them and raises OverflowError
+    def change(d):
+        d[trees][field][0] = value
+
+    with pytest.raises(ModelCorrupt, match="OverflowError"):
+        load_model(_mutated(tiny_model_file, change))

@@ -2,6 +2,8 @@
 # core's ruleset that makes sense for a custom component.
 target-version = "py312"
 line-length = 100
+# research/ holds the exploratory scripts the model came from: neither linted nor formatted.
+extend-exclude = ["research"]
 
 [lint]
 select = [

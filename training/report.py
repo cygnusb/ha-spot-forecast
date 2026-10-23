@@ -67,19 +67,40 @@ def _mean(x: np.ndarray) -> float | None:
     return float(np.mean(x)) if len(x) else None
 
 
+def accuracy(p: Predictions) -> dict[str, float | int | None]:
+    """Rows, median MAE, naive MAE (same hour last week) and skill = 1 - MAE / naive MAE."""
+    mae, naive = _mean(np.abs(p.median - p.actual)), _mean(np.abs(p.p_lastweek - p.actual))
+    return {
+        "rows": len(p.actual),
+        "mae": mae,
+        "naive_mae": naive,
+        "skill": 1 - mae / naive if mae is not None and naive else None,
+    }
+
+
+def mean_over_horizons(horizons: dict[str, dict]) -> dict[str, float | int | None]:
+    """Per key: the mean over the horizons that have a value; ``rows`` is summed."""
+    keys = next(iter(horizons.values())).keys()
+    overall = {}
+    for key in keys:
+        vals = [v[key] for v in horizons.values() if v[key] is not None]
+        overall[key] = sum(vals) if key == "rows" else (sum(vals) / len(vals) if vals else None)
+    return overall
+
+
 def _horizon_metrics(
     p: Predictions, p90_cal: np.ndarray, p10_cal: np.ndarray, peak: float, trailing_from: date
 ) -> dict[str, float | int | None]:
     err = p.median - p.actual
-    mae, naive = _mean(np.abs(err)), _mean(np.abs(p.p_lastweek - p.actual))
+    acc = accuracy(p)
     is_peak, is_neg = p.actual > peak, p.actual < 0
     recent = _ordinals(p.target_date) >= trailing_from.toordinal()
     return {
-        "rows": len(err),
-        "mae": mae,
+        "rows": acc["rows"],
+        "mae": acc["mae"],
         "mae_3m": _mean(np.abs(err[recent])),
-        "naive_mae": naive,
-        "skill": 1 - mae / naive if mae is not None and naive else None,
+        "naive_mae": acc["naive_mae"],
+        "skill": acc["skill"],
         "peak_mae": _mean(np.abs(err[is_peak])),
         "peak_bias": _mean(err[is_peak]),
         "p90_exceedance": _mean(p.actual > p90_cal),
@@ -110,11 +131,6 @@ def evaluate(p: Predictions, since: date, cutoff: date, peak_threshold: float) -
         )
         for k in HORIZONS
     }
-    keys = next(iter(horizons.values())).keys()
-    overall = {}
-    for key in keys:
-        vals = [v[key] for v in horizons.values() if v[key] is not None]
-        overall[key] = sum(vals) if key == "rows" else (sum(vals) / len(vals) if vals else None)
     return {
         "unit": "EUR/MWh",
         "train_cutoff": cutoff.isoformat(),
@@ -122,7 +138,7 @@ def evaluate(p: Predictions, since: date, cutoff: date, peak_threshold: float) -
         "trailing_3m_from": trailing_from.isoformat(),
         "peak_threshold": peak_threshold,
         "horizons": horizons,
-        "all": overall,
+        "all": mean_over_horizons(horizons),
     }
 
 

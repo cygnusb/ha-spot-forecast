@@ -1,12 +1,13 @@
 """Training CLI: model file, out-of-sample backfill and accuracy report.
 
 python -m training.train --raw DIR --out DIR --cutoff YYYY-MM-DD
-    [--walk-forward-from YYYY-MM-DD] [--backfill-days 180]
+    [--walk-forward-from YYYY-MM-DD] [--backfill-days 180] [--capacity-month YYYY-MM]
 """
 
 from __future__ import annotations
 
 import argparse
+from dataclasses import dataclass
 from datetime import UTC, date, datetime, time, timedelta
 import gzip
 import json
@@ -31,8 +32,22 @@ PEAK_PERCENTILE = 97
 QUANTILES = {"median": None, "p90_raw": 0.9, "p10_raw": 0.1}
 
 
-def _subset(ds: Dataset, idx: np.ndarray) -> Dataset:
-    return Dataset(**{k: getattr(ds, k)[idx] for k in Dataset.__dataclass_fields__})
+class DataLag(ValueError):
+    """Input data for the cutoff is not published yet; rerunning later fixes it."""
+
+
+@dataclass(frozen=True, eq=False)
+class TrainResult:
+    """What one training run produced, for ``training.ci``."""
+
+    version: str
+    model_path: Path
+    backfill_path: Path
+    metrics_path: Path
+    report_path: Path
+    model: ModelFile
+    predictions: Predictions  # walk-forward, out of sample
+    dataset: Dataset  # all training rows (target days before the cutoff)
 
 
 def build_training_data(raw: RawData, cutoff: date) -> Dataset:
@@ -44,7 +59,7 @@ def build_training_data(raw: RawData, cutoff: date) -> Dataset:
     ds = build_dataset(raw, raw.prices.start.date(), cutoff - timedelta(days=1))
     keep = np.flatnonzero(ds.target_date < cutoff)
     order = np.lexsort((np.array([t.timestamp() for t in ds.times[keep]]), ds.h[keep]))
-    return _subset(ds, keep[order])
+    return ds.subset(keep[order])
 
 
 def fit(ds: Dataset, quantile: float | None, max_iter: int = 600) -> HistGradientBoostingRegressor:
@@ -78,8 +93,8 @@ def walk_forward(ds: Dataset, first_anchor: date, cutoff: date, max_iter: int = 
             (ds.anchor >= max(month, first_anchor)) & (ds.anchor < nxt) & (ds.target_date < cutoff)
         )
         if len(test_idx):
-            train = _subset(ds, np.flatnonzero(ds.target_date < month))
-            test = _subset(ds, test_idx)
+            train = ds.subset(np.flatnonzero(ds.target_date < month))
+            test = ds.subset(test_idx)
             preds = {k: _predict(fit(train, q, max_iter), test) for k, q in QUANTILES.items()}
             parts.append(
                 Predictions(
@@ -138,11 +153,15 @@ def check_data_reaches(raw: RawData, cutoff: date) -> None:
             )
 
 
-def capacity_at(raw: RawData, cutoff: date) -> dict[str, float]:
-    """Installed capacity of the last training anchor's month (the day before the cutoff)."""
-    month = f"{cutoff - timedelta(days=1):%Y-%m}"
+def capacity_at(raw: RawData, cutoff: date, month: str | None = None) -> dict[str, float]:
+    """Installed capacity of the last training anchor's month (the day before the cutoff),
+    or of ``month`` ("YYYY-MM") when given."""
+    month = month or f"{cutoff - timedelta(days=1):%Y-%m}"
     if month not in raw.capacity:
-        raise ValueError(f"no installed capacity for {month}")
+        raise DataLag(
+            f"installed_power has no value for {month}; Energy-Charts publishes monthly with a "
+            "lag — rerun after it appears or pass --capacity-month"
+        )
     return dict(raw.capacity[month])
 
 
@@ -156,6 +175,14 @@ def backfill(p: Predictions, version: str, first: date, cutoff: date) -> dict:
         for i in order
     ]
     return {"format": BACKFILL_FORMAT, "model_version": version, "rows": rows}
+
+
+def _month(value: str) -> str:
+    """argparse type for "YYYY-MM"."""
+    try:
+        return f"{datetime.strptime(value, '%Y-%m'):%Y-%m}"
+    except ValueError:
+        raise argparse.ArgumentTypeError(f"not a YYYY-MM month: {value!r}") from None
 
 
 def _parse(argv: list[str]) -> argparse.Namespace:
@@ -175,11 +202,20 @@ def _parse(argv: list[str]) -> argparse.Namespace:
         help="first issue day of the report (default: cutoff - backfill days)",
     )
     ap.add_argument("--backfill-days", type=int, default=180)
+    ap.add_argument(
+        "--capacity-month",
+        type=_month,
+        default=None,
+        help="take the installed capacity of this month (default: the month before the cutoff)",
+    )
     return ap.parse_args([str(a) for a in argv])
 
 
-def run(argv: list[str], max_iter: int = 600) -> None:
-    """Train, write model file, backfill, report. ``max_iter`` is for fast tests only."""
+def run(argv: list[str], max_iter: int = 600) -> TrainResult:
+    """Train, write model file, backfill, report. ``max_iter`` is for fast tests only.
+
+    Raises ``DataLag`` before any training when the installed capacity is not published yet.
+    """
     args = _parse(argv)
     cutoff = args.cutoff
     backfill_from = cutoff - timedelta(days=args.backfill_days)
@@ -188,6 +224,7 @@ def run(argv: list[str], max_iter: int = 600) -> None:
 
     raw = load_raw(args.raw)
     check_data_reaches(raw, cutoff)
+    capacity = capacity_at(raw, cutoff, args.capacity_month)
     ds = build_training_data(raw, cutoff)
     print(f"rows: {len(ds.y_price)}  target days {min(ds.target_date)}..{max(ds.target_date)}")
     # earliest issue day whose D+6 target is in the backfill window
@@ -211,21 +248,30 @@ def run(argv: list[str], max_iter: int = 600) -> None:
         p90_offsets=window_offsets(wf.target_date, wf.h, wf.actual - wf.p90_raw, cutoff, 0.9),
         p10_offsets=window_offsets(wf.target_date, wf.h, wf.actual - wf.p10_raw, cutoff, 0.1),
         peak_threshold=threshold,
-        capacity=capacity_at(raw, cutoff),
+        capacity=capacity,
         metrics=metrics,
     )
 
     out: Path = args.out
     out.mkdir(parents=True, exist_ok=True)
-    (out / f"{version}.json.gz").write_bytes(dump_model(model))
-    bf = backfill(wf, version, backfill_from, cutoff)
-    (out / f"{version}.backfill.json.gz").write_bytes(
-        gzip.compress(json.dumps(bf).encode(), mtime=0)
+    result = TrainResult(
+        version=version,
+        model_path=out / f"{version}.json.gz",
+        backfill_path=out / f"{version}.backfill.json.gz",
+        metrics_path=out / f"{version}.metrics.json",
+        report_path=out / f"{version}.report.md",
+        model=model,
+        predictions=wf,
+        dataset=ds,
     )
-    (out / f"{version}.metrics.json").write_text(json.dumps(metrics, indent=2) + "\n")
+    result.model_path.write_bytes(dump_model(model))
+    bf = backfill(wf, version, backfill_from, cutoff)
+    result.backfill_path.write_bytes(gzip.compress(json.dumps(bf).encode(), mtime=0))
+    result.metrics_path.write_text(json.dumps(metrics, indent=2) + "\n")
     report = render_markdown(version, metrics)
-    (out / f"{version}.report.md").write_text(report)
+    result.report_path.write_text(report)
     print(report)
+    return result
 
 
 def main() -> None:

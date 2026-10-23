@@ -51,6 +51,9 @@ class Dataset:
     scale: np.ndarray
     p_lastweek: np.ndarray  # naive baseline
 
+    def subset(self, mask: np.ndarray) -> Dataset:
+        return Dataset(**{k: getattr(self, k)[mask] for k in self.__dataclass_fields__})
+
 
 def _merge_files(parts: list[Hourly]) -> Hourly:
     """Merge series of files in name order; as in research, the earlier file wins on overlap."""
