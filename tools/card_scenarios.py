@@ -3,8 +3,14 @@
 Each scenario is a fixed past moment on research data. The forecast comes from
 ``core.forecast.run_forecast`` with the bundled model, the ``prices`` attribute from
 ``core.output.prices_attribute`` and the long-term statistics from ``Ledger.finalize``
-over the bundled backfill file, as the integration builds them. Nothing is hand-written:
-a hand-made price curve would drift away from what the integration shows.
+over the backfill, as the integration builds them: the bundled backfill file for target
+days before the model's training cutoff, forecasts recomputed from archived weather for
+the days after it. Nothing is hand-written: a hand-made price curve would drift away from
+what the integration shows.
+
+The screenshot moments lie after the bundled model's training cutoff, so every forecast
+on them is out of sample, as on a real install: a forecast for days the model was
+trained on would look better than the integration can be.
 
 Weather for a past anchor comes from the Open-Meteo previous-runs archive, as in training:
 horizon ``h`` reads the run made ``h + 1`` days before the target day.
@@ -33,10 +39,10 @@ sys.path[:0] = [str(REPO / "custom_components" / "spot_forecast"), str(REPO)]
 
 from const import DEFAULT_BACKFILL_DAYS, MAX_BACKFILL_DAYS, PRICE_HISTORY_DAYS  # noqa: E402
 
-from core.features import HORIZONS, Hourly  # noqa: E402
+from core.features import HORIZONS, Hourly, InsufficientHistory  # noqa: E402
 from core.forecast import run_forecast  # noqa: E402
 from core.ingest import MarketSlot, hourly_prices, parse_energy_charts  # noqa: E402
-from core.ledger import Ledger, Run, runs_from_backfill_file  # noqa: E402
+from core.ledger import ISSUE_HOUR, Ledger, Run, runs_from_backfill_file  # noqa: E402
 from core.model import ModelFile, load_model  # noqa: E402
 from core.output import current_price, flag_window, prices_attribute  # noqa: E402
 from core.schedule import choose_anchor  # noqa: E402
@@ -65,18 +71,21 @@ def _local(*args: int) -> datetime:
 
 
 SCENARIOS: dict[str, Spec] = {
-    # After the day-ahead publication: market through tomorrow, forecast for six days,
-    # and the look-back of an install with the longest backfill window.
-    "default": Spec(_local(2026, 9, 16, 14, 30), backfill_days=MAX_BACKFILL_DAYS),
+    # After the day-ahead publication: market through tomorrow (10-15), forecast for six
+    # days (10-16 … 10-21), and the look-back of an install with the longest backfill
+    # window. Two weeks after the bundled model's cutoff (2026-10-01), so the forecast is
+    # out of sample; anchor 10-15 is the latest the research weather archive covers for
+    # all six days (it lacks the run for D+6 of anchor 10-16).
+    "default": Spec(_local(2026, 10, 14, 14, 30), backfill_days=MAX_BACKFILL_DAYS),
     # 2026-10-25 (fall-back) is past the research data; the 2025 fall-back day is the
     # nearest one with prices and archived weather. It is "today", in 15-minute slots.
     "dst": Spec(_local(2025, 10, 26, 14, 30), backfill_days=0),
     # The same fall-back day as the first forecast day, in hourly forecast slots.
     "dst_forecast": Spec(_local(2025, 10, 24, 14, 30), backfill_days=0),
     # The weather source failed for two days: the forecast is dropped, prices remain.
-    "stale": Spec(_local(2026, 9, 16, 14, 30), backfill_days=MAX_BACKFILL_DAYS, expired=True),
+    "stale": Spec(_local(2026, 10, 14, 14, 30), backfill_days=MAX_BACKFILL_DAYS, expired=True),
     # Installed today with the default backfill window.
-    "fresh_install": Spec(_local(2026, 9, 16, 14, 30), backfill_days=DEFAULT_BACKFILL_DAYS),
+    "fresh_install": Spec(_local(2026, 10, 14, 14, 30), backfill_days=DEFAULT_BACKFILL_DAYS),
 }
 
 
@@ -191,6 +200,41 @@ def _backfill_runs(zone: Zone, model: ModelFile, first: date, today: date) -> li
     return runs
 
 
+def _recomputed_runs(
+    zone: Zone, model: ModelFile, hourly: Hourly, weather, first: date, today: date
+) -> list[Run]:
+    """Runs for the target days in [max(cutoff, first), today), forecast from archived weather.
+
+    What the integration's backfill does on the device for the days after the training
+    cutoff (``backfill._recompute``): each anchor sees the prices published by its end and
+    the previous-runs weather of training.
+    """
+    start = max(model.train_cutoff, first)
+    runs = []
+    for i in range((today - start).days + max(HORIZONS)):
+        anchor = start + (i - max(HORIZONS)) * _DAY
+        end = _midnight(anchor + _DAY, zone)
+        known = Hourly(hourly.start, hourly.values[: max((end - hourly.start) // _HOUR, 0)])
+        try:
+            slots = run_forecast(model, anchor, known, {h: weather[h + 1] for h in HORIZONS}, zone)
+        except InsufficientHistory:
+            continue
+        kept = tuple(s for s in slots if start <= anchor + timedelta(days=s.h) < today)
+        if kept:
+            issued = datetime.combine(anchor, time(ISSUE_HOUR), ZoneInfo(zone.tz)).astimezone(UTC)
+            runs.append(Run(anchor, issued, model.version, kept, True))
+    return runs
+
+
+def _merge(runs: list[Run]) -> list[Run]:
+    """One run per anchor: an anchor before the cutoff has bundled and recomputed slots."""
+    merged: dict[date, Run] = {}
+    for run in runs:
+        old = merged.get(run.anchor)
+        merged[run.anchor] = run if old is None else replace(old, slots=old.slots + run.slots)
+    return [merged[a] for a in sorted(merged)]
+
+
 def build(spec: Spec, zone: Zone = DE_LU) -> dict:
     model = _model()
     now = spec.now.astimezone(UTC)
@@ -209,12 +253,13 @@ def build(spec: Spec, zone: Zone = DE_LU) -> dict:
     first = today - timedelta(days=max(spec.backfill_days, PRICE_HISTORY_DAYS))
     i = max((_midnight(first, zone) - hourly.start) // _HOUR, 0)
     ledger.record_actual(Hourly(hourly.start + i * _HOUR, hourly.values[i:]))
+    weather = _weather()
     if spec.backfill_days:
         first = today - timedelta(days=spec.backfill_days)
-        for run in _backfill_runs(zone, model, first, today):
+        bundled = _backfill_runs(zone, model, first, min(today, model.train_cutoff))
+        for run in _merge(bundled + _recomputed_runs(zone, model, hourly, weather, first, today)):
             ledger.add_run(run)
 
-    weather = _weather()
     slots = run_forecast(model, anchor, hourly, {h: weather[h + 1] for h in HORIZONS}, zone)
     issued_at = now - (_EXPIRED if spec.expired else timedelta(minutes=10))
     ledger.add_run(Run(anchor, issued_at, model.version, tuple(slots), False))

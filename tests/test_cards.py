@@ -7,9 +7,11 @@ make sure the scenarios still come out of the real core code.
 
 from __future__ import annotations
 
+from datetime import date, datetime, time
 import os
 from pathlib import Path
 import re
+from zoneinfo import ZoneInfo
 
 import pytest
 import yaml
@@ -87,7 +89,7 @@ def test_cards_use_theme_variables_for_ink(name):
 
 @pytest.mark.skipif(not (RESEARCH / "data" / "raw").exists(), reason="research raw data missing")
 def test_scenarios_build_from_core():
-    from tools.card_scenarios import scenario
+    from tools.card_scenarios import _model, scenario
 
     s = scenario("default")
     prices = s["states"][PRICE_SENSOR]["attributes"]["prices"]
@@ -105,6 +107,13 @@ def test_scenarios_build_from_core():
         assert {"start", "mean", "state"} <= rows[0].keys()
     # the ledger finalized yesterday's prices, which the forecast card shows from statistics
     assert s["statistics"][PRICE_STAT][-1]["start"] >= s["now_ms"] - 24 * 3600 * 1000
+    # out of sample: the screenshot moment lies after the bundled model's training cutoff,
+    # and the look-back runs on past it with forecasts recomputed as the device does
+    cutoff = _model().train_cutoff
+    assert date.fromisoformat(s["states"][PRICE_SENSOR]["attributes"]["anchor_day"]) > cutoff
+    cutoff_ms = datetime.combine(cutoff, time(), ZoneInfo("Europe/Berlin")).timestamp() * 1000
+    for statistic_id in FORECAST_STATS:
+        assert s["statistics"][statistic_id][-1]["start"] > cutoff_ms + 7 * 24 * 3600 * 1000
 
     stale = scenario("stale")
     entries = stale["states"][PRICE_SENSOR]["attributes"]["prices"]
