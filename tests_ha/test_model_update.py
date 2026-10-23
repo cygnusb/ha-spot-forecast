@@ -18,6 +18,7 @@ from conftest import MODELS_BASE, T10, SetUp, Sources, advance
 from freezegun.api import FrozenDateTimeFactory
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import device_registry as dr
+from homeassistant.helpers import issue_registry as ir
 import pytest
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
@@ -318,6 +319,28 @@ async def test_schema_mismatch_is_ignored_quietly(
 
     assert entry.runtime_data.coordinator.model.version == BUNDLED.version
     assert sources.release_calls() == sources.release_calls(MANIFEST_URL) == 1
+    assert _warnings(caplog) == []
+
+
+async def test_download_of_an_older_schema_gives_way_to_the_bundled_model(
+    hass_with_recorder: HomeAssistant,
+    set_up: SetUp,
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """After an update that bumps the feature schema, the model downloaded before cannot load:
+    it is deleted at setup and the bundled model is used, without a warning or repair issue."""
+    hass = hass_with_recorder
+    directory = _model_dir(tmp_path)
+    _write(directory, replace(_newer(), feature_schema=FEATURE_SCHEMA - 1))
+    entry = await set_up()
+
+    coordinator = entry.runtime_data.coordinator
+    assert (coordinator.model.version, coordinator.model_source) == (BUNDLED.version, "bundled")
+    state = hass.states.get(MODEL_VERSION)
+    assert (state.state, state.attributes["source"]) == (BUNDLED.version, "bundled")
+    assert list(directory.iterdir()) == []
+    assert [i for i in ir.async_get(hass).issues.values() if i.domain == DOMAIN] == []
     assert _warnings(caplog) == []
 
 

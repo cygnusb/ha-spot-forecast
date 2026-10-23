@@ -155,15 +155,17 @@ def test_fetch_published_model_fails_on_missing_asset(monkeypatch, models_dir):
     ("schema", "cutoff"),
     [
         (FEATURE_SCHEMA + 1, "2026-11-01"),
+        (FEATURE_SCHEMA - 1, "2026-11-01"),  # published before this commit's schema bump
         (FEATURE_SCHEMA, "2026-10-01"),
         (FEATURE_SCHEMA, "2026-09-01"),
     ],
-    ids=["other-feature-schema", "same-cutoff", "older-cutoff"],
+    ids=["newer-feature-schema", "older-feature-schema", "same-cutoff", "older-cutoff"],
 )
 def test_fetch_published_model_keeps_bundled_when_not_usable(
     monkeypatch, models_dir, schema, cutoff
 ):
-    model, backfill = _model(cutoff=cutoff), _backfill(f"de_lu-{cutoff[:7]}")
+    model = _model(cutoff=cutoff, feature_schema=schema)
+    backfill = _backfill(f"de_lu-{cutoff[:7]}")
     web = FakeWeb(_published(_entry(model, backfill, schema, cutoff), model, backfill))
     before = _snapshot(models_dir)
     assert _run(monkeypatch, web, models_dir) == 0
