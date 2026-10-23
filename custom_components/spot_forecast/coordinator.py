@@ -496,7 +496,7 @@ class SpotForecastCoordinator(DataUpdateCoordinator[SpotData]):
             self._unsub_run()
         run = self._latest_run()
         anchor_is_tomorrow = run is not None and run.anchor > self._today(now)
-        when = next_run(now, anchor_is_tomorrow, self.zone.tz)
+        when = next_run(now, anchor_is_tomorrow, self.zone.tz, retry=self._last_attempt_failed)
         self._unsub_run = async_track_point_in_utc_time(
             self.hass,
             HassJob(self._on_run_due, f"{self.name} run", cancel_on_shutdown=True),

@@ -18,6 +18,7 @@ ROLLOVER = time(0, 5)  # local
 # more than the longest regular gap between runs (6 h between weather refreshes)
 STALE_AFTER = timedelta(hours=7)
 DROP_AFTER = timedelta(hours=36)  # the forecast is no longer shown
+RETRY_AFTER = timedelta(minutes=20)  # a failed run is tried again this soon at the latest
 
 
 def _local_midnight(day: date, zone: ZoneInfo) -> datetime:
@@ -42,12 +43,15 @@ def choose_anchor(now: datetime, market: Sequence[MarketSlot], tz: str) -> date:
     return today
 
 
-def next_run(now: datetime, anchor_is_tomorrow: bool, tz: str) -> datetime:
-    """Earliest of day-ahead poll, weather refresh and midnight rollover after ``now`` (UTC)."""
+def next_run(now: datetime, anchor_is_tomorrow: bool, tz: str, retry: bool = False) -> datetime:
+    """Earliest of day-ahead poll, weather refresh and midnight rollover after ``now`` (UTC).
+
+    With ``retry`` (the run at ``now`` failed) no later than ``RETRY_AFTER`` from ``now``.
+    """
     zone = ZoneInfo(tz)
     now = now.astimezone(UTC)
     local = now.astimezone(zone)
-    candidates: list[datetime] = []
+    candidates: list[datetime] = [now + RETRY_AFTER] if retry else []
 
     if not anchor_is_tomorrow:
         if local.time() < POLL_START:

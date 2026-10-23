@@ -373,6 +373,38 @@ async def test_successful_run_clears_stale(
     assert datetime.fromisoformat(attrs["issued_at"]) == datetime(2026, 10, 22, 13, tzinfo=BERLIN)
 
 
+async def test_failed_run_is_retried_20_min_later(
+    hass_with_recorder: HomeAssistant,
+    set_up: SetUp,
+    sources: Sources,
+    freezer: FrozenDateTimeFactory,
+    aioclient_mock: AiohttpClientMocker,
+) -> None:
+    """A source outage at a scheduled run: tried again 20 min later, not at 13:00."""
+    hass = hass_with_recorder
+    await set_up()
+    sources.serve(weather_status=500)
+    await advance(hass, freezer, T10 + timedelta(minutes=15))  # weather run 08:15 UTC
+    assert hass.states.get(PRICE).attributes["stale"] is True
+
+    sources.serve()  # clears the call log
+    await advance(hass, freezer, T10 + timedelta(minutes=34))
+    assert aioclient_mock.call_count == 0
+    await advance(hass, freezer, T10 + timedelta(minutes=35))
+    assert aioclient_mock.call_count > 0
+    attrs = hass.states.get(PRICE).attributes
+    assert attrs["stale"] is False
+    assert datetime.fromisoformat(attrs["issued_at"]) == T10 + timedelta(minutes=35)
+
+    # after the success the regular slot again: the first poll at 13:00
+    sources.serve()
+    await advance(hass, freezer, T10 + timedelta(minutes=55))
+    await advance(hass, freezer, datetime(2026, 10, 22, 12, 59, tzinfo=BERLIN))
+    assert aioclient_mock.call_count == 0
+    await advance(hass, freezer, datetime(2026, 10, 22, 13, tzinfo=BERLIN))
+    assert aioclient_mock.call_count > 0
+
+
 async def test_stale_after_7h_without_success(
     hass_with_recorder: HomeAssistant,
     set_up: SetUp,
@@ -381,7 +413,9 @@ async def test_stale_after_7h_without_success(
 ) -> None:
     """No run due (moved away): the quarter-hour tick alone turns the old forecast stale."""
     hass = hass_with_recorder
-    monkeypatch.setattr(coordinator_module, "next_run", lambda now, *_: now + timedelta(days=3))
+    monkeypatch.setattr(
+        coordinator_module, "next_run", lambda now, *_, **__: now + timedelta(days=3)
+    )
     await set_up()
     await advance(hass, freezer, T10 + timedelta(hours=7))
     assert hass.states.get(PRICE).attributes["stale"] is False
@@ -454,7 +488,9 @@ async def test_state_advances_each_quarter_hour_without_fetching(
 ) -> None:
     """10:15 is also a weather run (08:15 UTC); the run is moved away so the tick is alone."""
     hass = hass_with_recorder
-    monkeypatch.setattr(coordinator_module, "next_run", lambda now, *_: now + timedelta(days=1))
+    monkeypatch.setattr(
+        coordinator_module, "next_run", lambda now, *_, **__: now + timedelta(days=1)
+    )
     await set_up()
     assert float(hass.states.get(PRICE).state) == _market_price(recorded, T10)
     calls = aioclient_mock.call_count
