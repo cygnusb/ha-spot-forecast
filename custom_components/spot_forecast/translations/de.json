@@ -97,6 +97,10 @@
     "model_outdated": {
       "title": "Spot-Forecast-Modell ist veraltet",
       "description": "Das Prognosemodell {version} wurde mit Daten bis {cutoff} trainiert, also vor mehr als {max_age} Tagen. Je weiter sich der Markt verändert, desto ungenauer werden die Prognosen. Schalte in den Optionen die automatische Modellaktualisierung ein oder aktualisiere die Integration Spot Forecast, um ein neueres Modell zu erhalten."
+    },
+    "model_future": {
+      "title": "Spot-Forecast-Modell ist in die Zukunft datiert",
+      "description": "Das Prognosemodell {version} gibt an, mit Daten bis {cutoff} trainiert worden zu sein, also mehr als {max_ahead} Tage nach heute. Prüfe Datum und Uhrzeit des Home-Assistant-Hosts. Stimmen sie, ist die Modelldatei fehlerhaft: Aktualisiere die Integration Spot Forecast."
     }
   }
 }

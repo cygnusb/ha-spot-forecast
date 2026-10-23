@@ -97,6 +97,10 @@
     "model_outdated": {
       "title": "Spot Forecast model is outdated",
       "description": "The forecast model {version} was trained on data up to {cutoff}, more than {max_age} days ago. Forecasts get less accurate as the market changes. Turn on automatic model updates in the options, or update the Spot Forecast integration, to get a newer model."
+    },
+    "model_future": {
+      "title": "Spot Forecast model is dated in the future",
+      "description": "The forecast model {version} says it was trained on data up to {cutoff}, more than {max_ahead} days after today. Check the date and time of the Home Assistant host. If they are right, the model file is wrong: update the Spot Forecast integration."
     }
   }
 }

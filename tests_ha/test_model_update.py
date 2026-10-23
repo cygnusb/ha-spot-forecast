@@ -40,14 +40,23 @@ MODEL_VERSION = "sensor.spot_forecast_de_lu_model_version"
 BUNDLED, BUNDLED_BACKFILL = load_bundled("DE-LU")
 
 
-def _model(cutoff: date) -> ModelFile:
-    """The bundled model, as if trained up to ``cutoff``."""
+def _model(cutoff: date, version: str | None = None) -> ModelFile:
+    """The bundled model, as if trained up to ``cutoff`` (version: that month, if not given)."""
     return replace(
         BUNDLED,
-        version=f"de_lu-{cutoff:%Y-%m}",
+        version=version or f"de_lu-{cutoff:%Y-%m}",
         train_cutoff=cutoff,
         peak_threshold=BUNDLED.peak_threshold + 100,
     )
+
+
+def _newer(month: int = 11) -> ModelFile:
+    """A model newer than the bundled one (cutoff 2026-10-01), as version de_lu-2026-{month}.
+
+    Its cutoff lies between the bundled one and the clock (2026-10-22): a cutoff more than
+    a week after today is refused, and nothing ties the version's month to the cutoff.
+    """
+    return _model(date(2026, 10, 3 + month), f"de_lu-2026-{month:02d}")
 
 
 def _backfill(model: ModelFile) -> bytes:
@@ -63,11 +72,13 @@ def _published(
     data: bytes | None = None,
     backfill: bytes | None = None,
     base: str = MODELS_BASE,
+    revoked: object = None,
 ) -> dict[str, bytes]:
     """The release files of a manifest publishing ``model`` for DE-LU (shape: training).
 
     ``data`` and ``backfill`` replace the files' bytes (the manifest then has their
-    checksums), and ``base`` is where the manifest says the assets are.
+    checksums), ``base`` is where the manifest says the assets are, and ``revoked`` (if
+    not None) is the manifest's ``revoked`` value.
     """
     data = dump_model(model) if data is None else data
     backfill = _backfill(model) if backfill is None else backfill
@@ -86,6 +97,8 @@ def _published(
         "metrics": {"mae_h1": 17.0, "mae": 19.0, "skill": 0.4, "p90_exceedance": 0.1},
     }
     manifest = {"format": 1, "updated": "2026-11-03T02:10:00+00:00", "zones": {"de_lu": entry}}
+    if revoked is not None:
+        manifest["revoked"] = revoked
     return {
         MANIFEST_URL: json.dumps(manifest).encode(),
         MODELS_BASE + f"{model.version}.json.gz": data,
@@ -118,7 +131,7 @@ async def test_update_switches_model_and_next_run_uses_it(
     tmp_path: Path,
 ) -> None:
     hass = hass_with_recorder
-    newer = _model(date(2026, 11, 1))
+    newer = _newer()
     sources.release = _published(newer)
     entry = await set_up({CONF_AUTO_UPDATE: True})
     coordinator = entry.runtime_data.coordinator
@@ -131,7 +144,7 @@ async def test_update_switches_model_and_next_run_uses_it(
     state = hass.states.get(MODEL_VERSION)
     assert state.state == "de_lu-2026-11"
     assert state.attributes["source"] == "downloaded"
-    assert state.attributes["train_cutoff"] == "2026-11-01"
+    assert state.attributes["train_cutoff"] == "2026-10-14"
     diag = await async_get_config_entry_diagnostics(hass, entry)
     assert diag["model"]["version"] == "de_lu-2026-11"
     assert diag["model"]["source"] == "downloaded"
@@ -168,7 +181,7 @@ async def test_sha_mismatch_keeps_current_model(
     tmp_path: Path,
     caplog: pytest.LogCaptureFixture,
 ) -> None:
-    newer = _model(date(2026, 11, 1))
+    newer = _newer()
     sources.release = _published(newer, model_sha="0" * 64)
     entry = await set_up({CONF_AUTO_UPDATE: True})
     updater = entry.runtime_data.updater
@@ -190,7 +203,7 @@ async def test_sha_mismatch_keeps_current_model(
     ("data", "message"),
     [
         (b"not a model", "corrupt"),  # checksum right, but it does not load
-        (dump_model(_model(date(2026, 12, 1))), "holds de_lu-2026-12"),  # not what is listed
+        (dump_model(_newer(12)), "holds de_lu-2026-12"),  # not what is listed
     ],
     ids=["unloadable", "other_version"],
 )
@@ -203,7 +216,7 @@ async def test_model_failing_its_checks_keeps_current_model(
     data: bytes,
     message: str,
 ) -> None:
-    sources.release = _published(_model(date(2026, 11, 1)), data=data)
+    sources.release = _published(_newer(), data=data)
     entry = await set_up({CONF_AUTO_UPDATE: True})
 
     assert await entry.runtime_data.updater.async_check() == "failed"
@@ -233,7 +246,7 @@ async def test_unusable_backfill_keeps_current_model(
     backfill: bytes,
 ) -> None:
     """The checksum is right, but the file would break every backfill pass of the model."""
-    sources.release = _published(_model(date(2026, 11, 1)), backfill=backfill)
+    sources.release = _published(_newer(), backfill=backfill)
     entry = await set_up({CONF_AUTO_UPDATE: True})
 
     assert await entry.runtime_data.updater.async_check() == "failed"
@@ -261,7 +274,7 @@ async def test_assets_outside_the_release_are_not_fetched(
     caplog: pytest.LogCaptureFixture,
     base: str,
 ) -> None:
-    newer = _model(date(2026, 11, 1))
+    newer = _newer()
     sources.release = _published(newer, base=base)
     entry = await set_up({CONF_AUTO_UPDATE: True})
 
@@ -282,7 +295,7 @@ async def test_oversized_model_is_not_used(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
     monkeypatch.setattr(model_update, "MAX_MODEL_BYTES", 1000)
-    sources.release = _published(_model(date(2026, 11, 1)))
+    sources.release = _published(_newer())
     entry = await set_up({CONF_AUTO_UPDATE: True})
 
     assert await entry.runtime_data.updater.async_check() == "failed"
@@ -297,7 +310,7 @@ async def test_schema_mismatch_is_ignored_quietly(
     sources: Sources,
     caplog: pytest.LogCaptureFixture,
 ) -> None:
-    newer = _model(date(2026, 11, 1))
+    newer = _newer()
     sources.release = _published(newer, feature_schema=FEATURE_SCHEMA + 1)
     entry = await set_up({CONF_AUTO_UPDATE: True})
 
@@ -337,7 +350,7 @@ async def test_auto_update_off_never_fetches(
     freezer: FrozenDateTimeFactory,
 ) -> None:
     hass = hass_with_recorder
-    sources.release = _published(_model(date(2026, 11, 1)))
+    sources.release = _published(_newer())
     entry = await set_up({CONF_AUTO_UPDATE: False})
 
     await advance(hass, freezer, T10 + timedelta(minutes=5))
@@ -353,7 +366,7 @@ async def test_keeps_three_downloaded_versions(
     directory = _model_dir(tmp_path)
     for month in (7, 8, 9):
         _write(directory, _model(date(2026, month, 1)))
-    sources.release = _published(_model(date(2026, 11, 1)))
+    sources.release = _published(_newer())
     entry = await set_up({CONF_AUTO_UPDATE: True})
     assert entry.runtime_data.coordinator.model_source == "bundled"  # all older than it
 
@@ -371,8 +384,8 @@ async def test_removing_the_entry_deletes_its_zone_models(
 ) -> None:
     hass = hass_with_recorder
     directory = _model_dir(tmp_path)
-    _write(directory, _model(date(2026, 11, 1)))
-    _write(directory, replace(_model(date(2026, 11, 1)), zone="at", version="at-2026-11"))
+    _write(directory, _newer())
+    _write(directory, replace(_newer(), zone="at", version="at-2026-11"))
     entry = await set_up(entry_id="first")
     other = MockConfigEntry(domain=DOMAIN, entry_id="second", data={CONF_ZONE: "DE-LU"})
     other.add_to_hass(hass)
@@ -396,12 +409,12 @@ def test_load_active_prefers_newest_by_cutoff(tmp_path: Path) -> None:
     assert (model.version, backfill, source) == (BUNDLED.version, BUNDLED_BACKFILL, "bundled")
 
     newer, older = tmp_path / "newer", tmp_path / "older"
-    _write(newer, _model(date(2026, 11, 1)))
+    _write(newer, _newer())
     _write(newer, _model(date(2026, 9, 1)))
     (newer / "de_lu-2026-12.json.gz").write_bytes(b"not a model")
     model, backfill, source = load_active("DE-LU", newer)
     assert (model.version, source) == ("de_lu-2026-11", "downloaded")
-    assert backfill == _backfill(_model(date(2026, 11, 1)))
+    assert backfill == _backfill(_newer())
     assert not (newer / "de_lu-2026-12.json.gz").exists()  # unusable: deleted
 
     _write(older, _model(date(2026, 9, 1)))
@@ -414,11 +427,11 @@ def test_load_active_stops_at_the_newest_usable_download(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     for month in (11, 12):
-        _write(tmp_path, _model(date(2026, month, 1)))
+        _write(tmp_path, _newer(month))
     loaded, load_checked = [], model_loader.load_checked
 
-    def counting(data: bytes, slug: str) -> ModelFile:
-        loaded.append(model := load_checked(data, slug))
+    def counting(data: bytes, slug: str, **kwargs) -> ModelFile:
+        loaded.append(model := load_checked(data, slug, **kwargs))
         return model
 
     monkeypatch.setattr(model_loader, "load_checked", counting)
@@ -450,7 +463,7 @@ def test_load_active_without_usable_downloaded_backfill_uses_bundled(
     tmp_path: Path, backfill: bytes | None
 ) -> None:
     """The bundled rows keep the bundled model's version: it is in their file."""
-    _write(tmp_path, _model(date(2026, 11, 1)), backfill=False)
+    _write(tmp_path, _newer(), backfill=False)
     if backfill is not None:
         (tmp_path / "de_lu-2026-11.backfill.json.gz").write_bytes(backfill)
     model, backfill, source = load_active("DE-LU", tmp_path)
@@ -460,8 +473,8 @@ def test_load_active_without_usable_downloaded_backfill_uses_bundled(
 
 
 def test_load_active_deletes_another_schema_or_zone(tmp_path: Path) -> None:
-    _write(tmp_path, replace(_model(date(2026, 11, 1)), feature_schema=FEATURE_SCHEMA + 1))
-    _write(tmp_path, replace(_model(date(2026, 12, 1)), zone="at"))
+    _write(tmp_path, replace(_newer(), feature_schema=FEATURE_SCHEMA + 1))
+    _write(tmp_path, replace(_newer(12), zone="at"))
     model, _, source = load_active("DE-LU", tmp_path)
     assert (model.version, source) == (BUNDLED.version, "bundled")
     assert list(tmp_path.iterdir()) == []
@@ -470,7 +483,7 @@ def test_load_active_deletes_another_schema_or_zone(tmp_path: Path) -> None:
 def test_load_active_survives_any_error_of_a_download(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    _write(tmp_path, _model(date(2026, 11, 1)))
+    _write(tmp_path, _newer())
 
     def broken(data: bytes, slug: str) -> ModelFile:
         raise RuntimeError("unexpected")
@@ -479,6 +492,151 @@ def test_load_active_survives_any_error_of_a_download(
     model, _, source = load_active("DE-LU", tmp_path)
     assert (model.version, source) == (BUNDLED.version, "bundled")
     assert (tmp_path / "de_lu-2026-11.json.gz").exists()  # not known to be bad: kept
+
+
+async def test_published_cutoff_far_ahead_is_not_fetched(
+    hass_with_recorder: HomeAssistant,
+    set_up: SetUp,
+    sources: Sources,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Today is 2026-10-22: a cutoff of 2026-11-01 is more than a week ahead."""
+    sources.release = _published(_model(date(2026, 11, 1)))
+    entry = await set_up({CONF_AUTO_UPDATE: True})
+
+    assert await entry.runtime_data.updater.async_check() == "failed"
+
+    assert sources.release_calls() == sources.release_calls(MANIFEST_URL) == 1
+    assert entry.runtime_data.coordinator.model.version == BUNDLED.version
+    warnings = _warnings(caplog)
+    assert len(warnings) == 1
+    assert "cutoff 2026-11-01" in warnings[0].getMessage()
+
+
+async def test_model_file_with_a_cutoff_far_ahead_is_not_installed(
+    hass_with_recorder: HomeAssistant,
+    set_up: SetUp,
+    sources: Sources,
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """The manifest lists a plausible cutoff, the file holds another one."""
+    listed = _newer()
+    data = dump_model(replace(listed, train_cutoff=date(2026, 11, 1)))
+    sources.release = _published(listed, data=data)
+    entry = await set_up({CONF_AUTO_UPDATE: True})
+
+    assert await entry.runtime_data.updater.async_check() == "failed"
+
+    assert entry.runtime_data.coordinator.model.version == BUNDLED.version
+    assert not _model_dir(tmp_path).exists()
+    assert "more than 7 days after today" in _warnings(caplog)[0].getMessage()
+
+
+async def test_revoked_version_is_not_fetched(
+    hass_with_recorder: HomeAssistant, set_up: SetUp, sources: Sources
+) -> None:
+    sources.release = _published(_newer(), revoked=["de_lu-2026-11"])
+    entry = await set_up({CONF_AUTO_UPDATE: True})
+
+    assert await entry.runtime_data.updater.async_check() == "current"
+
+    assert sources.release_calls() == sources.release_calls(MANIFEST_URL) == 1
+    assert entry.runtime_data.coordinator.model.version == BUNDLED.version
+
+
+@pytest.mark.parametrize(
+    ("revoked", "version", "source"),
+    [
+        (["de_lu-2026-12"], "de_lu-2026-11", "downloaded"),
+        (["de_lu-2026-12", "de_lu-2026-11", "at-2026-12"], BUNDLED.version, "bundled"),
+    ],
+    ids=["next_download", "bundled"],
+)
+async def test_revoked_active_model_is_deleted_and_replaced(
+    hass_with_recorder: HomeAssistant,
+    set_up: SetUp,
+    sources: Sources,
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+    revoked: list[str],
+    version: str,
+    source: str,
+) -> None:
+    hass = hass_with_recorder
+    directory = _model_dir(tmp_path)
+    for month in (11, 12):
+        _write(directory, _newer(month))
+    sources.release = _published(_newer(12), revoked=revoked)
+    entry = await set_up({CONF_AUTO_UPDATE: True})
+    coordinator = entry.runtime_data.coordinator
+    assert (coordinator.model.version, coordinator.model_source) == ("de_lu-2026-12", "downloaded")
+
+    assert await entry.runtime_data.updater.async_check() == "revoked"
+
+    assert (coordinator.model.version, coordinator.model_source) == (version, source)
+    state = hass.states.get(MODEL_VERSION)
+    assert (state.state, state.attributes["source"]) == (version, source)
+    left = {
+        p.name.removesuffix(".backfill.json.gz").removesuffix(".json.gz")
+        for p in directory.iterdir()
+    }
+    assert left == {"de_lu-2026-11"} - set(revoked)
+    assert sources.release_calls() == sources.release_calls(MANIFEST_URL) == 1
+    assert any("revoked" in r.getMessage() for r in _warnings(caplog))
+
+    # nothing left to do on the next check
+    assert await entry.runtime_data.updater.async_check() == "current"
+
+
+async def test_revoked_active_model_gives_way_to_a_newer_one(
+    hass_with_recorder: HomeAssistant, set_up: SetUp, sources: Sources, tmp_path: Path
+) -> None:
+    directory = _model_dir(tmp_path)
+    _write(directory, _newer(11))
+    sources.release = _published(_newer(12), revoked=["de_lu-2026-11"])
+    entry = await set_up({CONF_AUTO_UPDATE: True})
+
+    assert await entry.runtime_data.updater.async_check() == "updated"
+
+    assert entry.runtime_data.coordinator.model.version == "de_lu-2026-12"
+    assert sorted(p.name for p in directory.iterdir()) == [
+        "de_lu-2026-12.backfill.json.gz",
+        "de_lu-2026-12.json.gz",
+    ]
+
+
+async def test_malformed_revoked_list_makes_the_manifest_unusable(
+    hass_with_recorder: HomeAssistant, set_up: SetUp, sources: Sources
+) -> None:
+    sources.release = _published(_newer(), revoked="de_lu-2026-10")
+    entry = await set_up({CONF_AUTO_UPDATE: True})
+
+    assert await entry.runtime_data.updater.async_check() == "unavailable"
+    assert sources.release_calls() == 1
+
+
+def test_load_active_skips_revoked_and_far_ahead_downloads(tmp_path: Path) -> None:
+    """Both are kept on disk: a revoked file is deleted by the update check, and a cutoff
+    far ahead may be a wrong clock (a Pi without a real-time clock, before NTP)."""
+    _write(tmp_path, _newer(11))
+    _write(tmp_path, _model(date(2026, 11, 1), "de_lu-2026-12"))
+    today = date(2026, 10, 22)
+
+    model, _, _ = load_active("DE-LU", tmp_path, today=today)
+    assert model.version == "de_lu-2026-11"
+    model, _, _ = load_active("DE-LU", tmp_path, today=today, revoked=frozenset({"de_lu-2026-11"}))
+    assert model.version == BUNDLED.version
+    assert len(list(tmp_path.iterdir())) == 4
+    model, _, _ = load_active("DE-LU", tmp_path, today=date(2026, 10, 25))
+    assert model.version == "de_lu-2026-12"
+
+
+def test_load_checked_rejects_a_cutoff_far_ahead() -> None:
+    data = dump_model(_model(date(2026, 11, 1)))
+    with pytest.raises(model_loader.CutoffAhead, match="more than 7 days"):
+        model_loader.load_checked(data, "de_lu", today=date(2026, 10, 24))
+    assert model_loader.load_checked(data, "de_lu", today=date(2026, 10, 25)).version
 
 
 def test_check_time_is_stable_and_in_the_night() -> None:

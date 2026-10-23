@@ -5,20 +5,27 @@ newer data than the active model, both files match their SHA-256 in the manifest
 model loads and passes the sample check. It is then kept in ``<config>/.storage/spot_forecast``
 (never in ``custom_components``) and the coordinator switches to it. A failed check keeps
 the current model; the next daily check tries the same version again.
+
+A version in the manifest's ``revoked`` list is never downloaded; its files are deleted, and
+if it is the active model the coordinator switches to the next usable one (the newest other
+download, or the bundled model).
 """
 
 from __future__ import annotations
 
 import asyncio
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
+from functools import partial
 import hashlib
 import logging
 from pathlib import Path
 
+from aiohttp import ClientSession
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HassJob, HomeAssistant, callback
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers.event import async_call_later, async_track_time_change
+from homeassistant.util import dt as dt_util
 from homeassistant.util.hass_dict import HassKey
 
 from .const import (
@@ -34,7 +41,13 @@ from .const import (
 )
 from .coordinator import SpotForecastCoordinator
 from .core.features import FEATURE_SCHEMA
-from .core.manifest import ManifestEntry, parse_manifest, wants_download
+from .core.manifest import (
+    MAX_CUTOFF_AHEAD,
+    ManifestEntry,
+    cutoff_ahead,
+    parse_manifest,
+    wants_download,
+)
 from .core.model import ModelFile, ModelMismatch
 from .model_loader import (
     MODEL_SUFFIX,
@@ -42,6 +55,7 @@ from .model_loader import (
     backfill_path,
     check_backfill,
     downloaded_models,
+    load_active,
     load_checked,
 )
 from .sources.http import SourceError, SourceNotFound, decode_json, get_body
@@ -53,6 +67,7 @@ CURRENT = "current"
 SKIPPED_SCHEMA = "skipped_schema"
 FAILED = "failed"
 UNAVAILABLE = "unavailable"
+REVOKED = "revoked"
 
 FIRST_CHECK_DELAY = timedelta(minutes=5)  # after setup: a fresh install need not wait a day
 # versions whose failed check was logged as a warning in this HA run (later: debug only)
@@ -128,8 +143,9 @@ class ModelUpdater:
         """Check the manifest and switch to a newer model; returns the outcome.
 
         One of ``UPDATED``, ``CURRENT``, ``SKIPPED_SCHEMA`` (the published model needs
-        another version of this code), ``FAILED`` (it failed a check, see the log) and
-        ``UNAVAILABLE`` (no manifest, or nothing published for the zone).
+        another version of this code), ``FAILED`` (it failed a check, see the log),
+        ``UNAVAILABLE`` (no manifest, or nothing published for the zone) and ``REVOKED``
+        (the active model was revoked and replaced, and nothing newer was installed).
         """
         async with self._lock:
             try:
@@ -151,7 +167,40 @@ class ModelUpdater:
         except (SourceError, ValueError) as e:
             _LOGGER.debug("Model manifest not usable: %s", e)
             return UNAVAILABLE
-        entry = manifest.get(self._slug)
+        replaced = await self._async_drop_revoked(manifest.revoked)
+        entry = manifest.entries.get(self._slug)
+        outcome = await self._async_check_entry(session, entry, manifest.revoked)
+        return REVOKED if replaced and outcome != UPDATED else outcome
+
+    async def _async_drop_revoked(self, revoked: frozenset[str]) -> bool:
+        """Delete revoked downloads; True if the active model was one and was replaced."""
+        if not revoked:
+            return False
+        directory = model_dir(self._hass)
+        removed = await self._hass.async_add_executor_job(
+            remove_revoked, self._slug, directory, revoked
+        )
+        for version in removed:
+            _LOGGER.warning("Deleted the downloaded model %s: it was revoked", version)
+        active = self._coordinator.model
+        if active.version not in revoked or self._coordinator.model_source != SOURCE_DOWNLOADED:
+            return False
+        model, backfill, source = await self._hass.async_add_executor_job(
+            partial(load_active, self._coordinator.zone.code, directory, revoked=revoked)
+        )
+        await self._coordinator.set_model(model, source, backfill)
+        _LOGGER.warning(
+            "The active model %s was revoked; using the %s model %s",
+            active.version,
+            source,
+            model.version,
+        )
+        return True
+
+    async def _async_check_entry(
+        self, session: ClientSession, entry: ManifestEntry | None, revoked: frozenset[str]
+    ) -> str:
+        """Download and switch to ``entry`` (the zone's published model) if it is wanted."""
         if entry is None:
             _LOGGER.debug("No model published for %s", self._slug)
             return UNAVAILABLE
@@ -163,7 +212,24 @@ class ModelUpdater:
                 FEATURE_SCHEMA,
             )
             return SKIPPED_SCHEMA
-        if not wants_download(entry, self._coordinator.model.train_cutoff, FEATURE_SCHEMA):
+        if entry.version in revoked:
+            _LOGGER.debug("Published model %s is revoked: not used", entry.version)
+            return CURRENT
+        today = dt_util.utcnow().date()
+        if cutoff_ahead(entry.train_cutoff, today):
+            error = Rejected(
+                f"its training cutoff {entry.train_cutoff} is more than "
+                f"{MAX_CUTOFF_AHEAD.days} days after today ({today})"
+            )
+            self._warn_once(entry.version, error)
+            return FAILED
+        if not wants_download(
+            entry,
+            self._coordinator.model.train_cutoff,
+            FEATURE_SCHEMA,
+            today=today,
+            revoked=revoked,
+        ):
             return CURRENT
         for asset_url in (entry.model_url, entry.backfill_url):
             name = asset_url[len(self._release_base) :]
@@ -179,7 +245,7 @@ class ModelUpdater:
             model_bytes = await get_body(session, entry.model_url, {}, MAX_MODEL_BYTES)
             backfill = await get_body(session, entry.backfill_url, {}, MAX_BACKFILL_BYTES)
             model = await self._hass.async_add_executor_job(
-                install, entry, self._slug, model_bytes, backfill, model_dir(self._hass)
+                install, entry, self._slug, model_bytes, backfill, model_dir(self._hass), today
             )
         except (SourceError, Rejected, ModelMismatch, OSError) as e:
             self._warn_once(entry.version, e)
@@ -195,13 +261,18 @@ class ModelUpdater:
 
 
 def install(
-    entry: ManifestEntry, slug: str, model_bytes: bytes, backfill: bytes, directory: Path
+    entry: ManifestEntry,
+    slug: str,
+    model_bytes: bytes,
+    backfill: bytes,
+    directory: Path,
+    today: date,
 ) -> ModelFile:
     """Verify the downloaded pair, store it and drop old versions; returns the model.
 
     Raises ``Rejected`` on a checksum or manifest mismatch or an unusable backfill file,
-    and ``ModelMismatch`` if the model does not load or fails the sample check; nothing is
-    written then. Blocking.
+    and ``ModelMismatch`` if the model does not load, fails the sample check or has a
+    training cutoff too far after ``today``; nothing is written then. Blocking.
     """
     for name, data, digest in (
         ("model", model_bytes, entry.model_sha256),
@@ -209,7 +280,7 @@ def install(
     ):
         if hashlib.sha256(data).hexdigest() != digest:
             raise Rejected(f"SHA-256 of the {name} file does not match the manifest")
-    model = load_checked(model_bytes, slug)
+    model = load_checked(model_bytes, slug, today=today)
     if (model.version, model.train_cutoff) != (entry.version, entry.train_cutoff):
         raise Rejected(f"the file holds {model.version} (cutoff {model.train_cutoff})")
     try:
@@ -236,6 +307,21 @@ def remove_models(slug: str, directory: Path) -> None:
             path.unlink(missing_ok=True)
     if not any(directory.iterdir()):
         directory.rmdir()
+
+
+def remove_revoked(slug: str, directory: Path, revoked: frozenset[str]) -> list[str]:
+    """Delete the downloads of zone ``slug`` whose version is in ``revoked`` (blocking).
+
+    Returns the versions deleted. Only files found on disk are touched: no path is built
+    from the manifest's strings.
+    """
+    removed = []
+    for path in downloaded_models(slug, directory):
+        version = path.name.removesuffix(MODEL_SUFFIX)
+        if version in revoked:
+            _remove_pair(path)
+            removed.append(version)
+    return removed
 
 
 def _remove_pair(model_path: Path) -> None:
