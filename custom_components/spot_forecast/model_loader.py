@@ -2,12 +2,10 @@
 
 from __future__ import annotations
 
-import gzip
-import json
 import logging
 from pathlib import Path
 
-from .core.ledger import BACKFILL_FORMAT
+from .core.ledger import runs_from_backfill_file
 from .core.model import ModelCorrupt, ModelFile, ModelMismatch, load_model, sample_check
 from .core.zones import ZONES
 
@@ -111,15 +109,22 @@ def _load_download(path: Path, slug: str) -> ModelFile | None:
     return None
 
 
+def check_backfill(data: bytes) -> None:
+    """Raise ``ValueError`` unless ``data`` parses as a backfill file, rows included.
+
+    The parser the backfill pass uses, so a file that passes cannot break it later.
+    """
+    try:
+        runs_from_backfill_file(data, "", "UTC")
+    except Exception as e:  # not gzip, not JSON, nested too deep, another format or shape
+        raise ValueError(f"backfill file is unusable: {type(e).__name__}: {e}") from e
+
+
 def _read_backfill(path: Path) -> bytes | None:
-    """The backfill file's raw bytes if it is gzip JSON in the backfill format, else None."""
+    """The backfill file's raw bytes if ``check_backfill`` passes, else None."""
     try:
         data = path.read_bytes()
-        doc = json.loads(gzip.decompress(data))
-    except (OSError, EOFError, ValueError):  # missing, not gzip, not JSON
-        return None
-    if not isinstance(doc, dict) or doc.get("format") != BACKFILL_FORMAT:
-        return None
-    if not isinstance(doc.get("rows"), list):
+        check_backfill(data)
+    except (OSError, ValueError):  # missing, unreadable, or any error of the parser
         return None
     return data

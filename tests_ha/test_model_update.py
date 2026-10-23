@@ -61,14 +61,16 @@ def _published(
     feature_schema: int = FEATURE_SCHEMA,
     model_sha: str | None = None,
     data: bytes | None = None,
+    backfill: bytes | None = None,
     base: str = MODELS_BASE,
 ) -> dict[str, bytes]:
     """The release files of a manifest publishing ``model`` for DE-LU (shape: training).
 
-    ``data`` replaces the model file's bytes (the manifest then has their checksum), and
-    ``base`` is where the manifest says the assets are.
+    ``data`` and ``backfill`` replace the files' bytes (the manifest then has their
+    checksums), and ``base`` is where the manifest says the assets are.
     """
-    data, backfill = dump_model(model) if data is None else data, _backfill(model)
+    data = dump_model(model) if data is None else data
+    backfill = _backfill(model) if backfill is None else backfill
 
     def asset(name: str, body: bytes, sha: str | None = None) -> dict:
         digest = sha or hashlib.sha256(body).hexdigest()
@@ -211,6 +213,36 @@ async def test_model_failing_its_checks_keeps_current_model(
     warnings = _warnings(caplog)
     assert len(warnings) == 1
     assert message in warnings[0].getMessage()
+
+
+@pytest.mark.parametrize(
+    "backfill",
+    [
+        b"not gzip",
+        gzip.compress(b'{"format": 2}'),
+        gzip.compress(b"[" * 100_000 + b"]" * 100_000),
+    ],
+    ids=["not_gzip", "other_format", "deep_nesting"],
+)
+async def test_unusable_backfill_keeps_current_model(
+    hass_with_recorder: HomeAssistant,
+    set_up: SetUp,
+    sources: Sources,
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+    backfill: bytes,
+) -> None:
+    """The checksum is right, but the file would break every backfill pass of the model."""
+    sources.release = _published(_model(date(2026, 11, 1)), backfill=backfill)
+    entry = await set_up({CONF_AUTO_UPDATE: True})
+
+    assert await entry.runtime_data.updater.async_check() == "failed"
+
+    assert entry.runtime_data.coordinator.model.version == BUNDLED.version
+    assert not _model_dir(tmp_path).exists()
+    warnings = _warnings(caplog)
+    assert len(warnings) == 1
+    assert "backfill" in warnings[0].getMessage()
 
 
 @pytest.mark.parametrize(
@@ -397,7 +429,23 @@ def test_load_active_stops_at_the_newest_usable_download(
     assert [m.version for m in loaded] == ["de_lu-2026-12"]
 
 
-@pytest.mark.parametrize("backfill", [None, b"not gzip", gzip.compress(b'{"format": 2}')])
+def _flipped(data: bytes, offset: int = 20) -> bytes:
+    """``data`` with one byte of the deflate stream (after the 10-byte header) inverted."""
+    return data[:offset] + bytes([data[offset] ^ 0xFF]) + data[offset + 1 :]
+
+
+@pytest.mark.parametrize(
+    "backfill",
+    [
+        None,
+        b"not gzip",
+        gzip.compress(b'{"format": 2}'),
+        gzip.compress(b'{"format": 1, "rows": [[1, 2]]}'),  # rows of the wrong shape
+        _flipped(BUNDLED_BACKFILL),  # zlib.error
+        gzip.compress(b"[" * 100_000 + b"]" * 100_000),  # RecursionError
+    ],
+    ids=["missing", "not_gzip", "other_format", "bad_rows", "flipped_byte", "deep_nesting"],
+)
 def test_load_active_without_usable_downloaded_backfill_uses_bundled(
     tmp_path: Path, backfill: bytes | None
 ) -> None:

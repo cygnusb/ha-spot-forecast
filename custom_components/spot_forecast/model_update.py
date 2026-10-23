@@ -40,6 +40,7 @@ from .model_loader import (
     MODEL_SUFFIX,
     SOURCE_DOWNLOADED,
     backfill_path,
+    check_backfill,
     downloaded_models,
     load_checked,
 )
@@ -198,8 +199,9 @@ def install(
 ) -> ModelFile:
     """Verify the downloaded pair, store it and drop old versions; returns the model.
 
-    Raises ``Rejected`` on a checksum or manifest mismatch and ``ModelMismatch`` if the
-    model does not load or fails the sample check; nothing is written then. Blocking.
+    Raises ``Rejected`` on a checksum or manifest mismatch or an unusable backfill file,
+    and ``ModelMismatch`` if the model does not load or fails the sample check; nothing is
+    written then. Blocking.
     """
     for name, data, digest in (
         ("model", model_bytes, entry.model_sha256),
@@ -210,6 +212,10 @@ def install(
     model = load_checked(model_bytes, slug)
     if (model.version, model.train_cutoff) != (entry.version, entry.train_cutoff):
         raise Rejected(f"the file holds {model.version} (cutoff {model.train_cutoff})")
+    try:
+        check_backfill(backfill)
+    except ValueError as e:
+        raise Rejected(str(e)) from e
     directory.mkdir(parents=True, exist_ok=True)
     path = directory / f"{entry.version}{MODEL_SUFFIX}"
     _write_atomic(backfill_path(path), backfill)  # first: a model never lacks its backfill
