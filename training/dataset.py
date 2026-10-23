@@ -18,6 +18,7 @@ from core.features import (
     InsufficientHistory,
     build_features,
     daily_stats,
+    decode,
 )
 from core.ingest import (
     hourly_prices,
@@ -49,7 +50,7 @@ class Dataset:
     target_date: np.ndarray  # local date (object array)
     mean7: np.ndarray
     scale: np.ndarray
-    p_lastweek: np.ndarray  # naive baseline
+    p_lastweek: np.ndarray  # naive baseline, EUR/MWh (the feature column in X is relative)
 
     def subset(self, mask: np.ndarray) -> Dataset:
         return Dataset(**{k: getattr(self, k)[mask] for k in self.__dataclass_fields__})
@@ -129,7 +130,7 @@ def build_dataset(raw: RawData, first_anchor: date, last_anchor: date) -> Datase
         except InsufficientHistory:
             continue
         price = np.array([raw.prices.at(t) for t in fm.times])
-        p_lastweek = fm.X[:, _COL["p_lastweek"]]
+        p_lastweek = decode(fm.X[:, _COL["p_lastweek"]], fm)  # back to EUR/MWh
         keep = ~(np.isnan(price) | np.isnan(fm.X[:, _COL["wind_mean"]]) | np.isnan(p_lastweek))
         n = len(fm.times)
         rows = {

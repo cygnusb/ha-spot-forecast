@@ -1,5 +1,10 @@
 """Model features: a numpy port of ``build_samples`` in research/backtest.py.
 
+Feature schema 2 changes two things against research ``build_samples``, both ported from
+the later research scripts: the price lags read the same local wall-clock hour across a DST
+switch (research/holidays_dst/build.py ``dst_lags``), and the price levels are relative to
+the 7-day mean in units of the target scale (research/zones/bt.py ``relative``).
+
 Any change here that alters a feature value breaks parity with the research backtest
 and with every shipped model; ``tests/core/test_features.py`` pins the golden values.
 """
@@ -16,7 +21,7 @@ import numpy as np
 from .calendar import de_holidays
 from .zones import DE_LU, Zone
 
-FEATURE_SCHEMA = 1
+FEATURE_SCHEMA = 2
 HORIZONS = range(1, 7)
 
 _HOUR = timedelta(hours=1)
@@ -26,6 +31,10 @@ _DAILY_NAMES = ("mean", "min", "max", "std", "mean7", "std7", "mean30", "min7", 
 _DAY_MEANS = ("wind_power_idx", "solar_mean", "solar_est_mean", "temp_mean", "nb_wind_power_idx",
               "nb_temp_fr", "nb_temp_nordic")  # fmt: skip
 CAPACITY_NAMES = ("cap_solar", "cap_wind_on", "cap_wind_off")
+# Schema 2: price levels as (x - D_mean7) / scale, spreads as x / scale; D_mean7 stays absolute.
+RELATIVE_NAMES = ("p_lastday", "p_lastweek", "D_mean", "D_min", "D_max", "D_mean30", "D_min7",
+                  "D_max7", "D_gq_evening14", "D_gq_q90_14")  # fmt: skip
+SPREAD_NAMES = ("D_std", "D_std7")
 
 FEATURE_NAMES: tuple[str, ...] = (
     "h", "hour", "dow", "doy", "holiday", "offday", "issue_dow", "p_lastday", "p_lastweek",
@@ -36,6 +45,10 @@ FEATURE_NAMES: tuple[str, ...] = (
     *(f"{n}_day" for n in _DAY_MEANS), "nb_precip_hydro_day",
     *CAPACITY_NAMES,
 )  # fmt: skip
+
+
+_RELATIVE = [FEATURE_NAMES.index(n) for n in RELATIVE_NAMES]
+_SPREAD = [FEATURE_NAMES.index(n) for n in SPREAD_NAMES]
 
 
 class InsufficientHistory(ValueError):
@@ -96,7 +109,11 @@ class DailyStats:
 
 @dataclass(frozen=True, eq=False)
 class FeatureMatrix:
-    """Feature rows for target days anchor+1 … anchor+6, h-major then time."""
+    """Feature rows for target days anchor+1 … anchor+6, h-major then time.
+
+    The price-level columns (``RELATIVE_NAMES``, ``SPREAD_NAMES``) are in units of
+    ``scale``; ``decode`` turns a relative level back into EUR/MWh.
+    """
 
     X: np.ndarray
     times: list[datetime]
@@ -231,6 +248,22 @@ def _weather_features(w: Callable[[str], np.ndarray], times: list[datetime], zon
     return f
 
 
+def _wall_clock_index(lag_day: date, hours: np.ndarray, tz: ZoneInfo) -> tuple[datetime, int, list]:
+    """Where each local ``hours`` value falls on ``lag_day``: the day's first hour (UTC), its
+    length in hours and, per value, the index of that wall-clock hour in the day.
+
+    As research ``dst_lags``: an hour the day has twice (clocks going back) is its first
+    occurrence (fold=0), an hour it does not have (clocks going forward) the hour before.
+    """
+    first = datetime.combine(lag_day, time(), tz).astimezone(UTC)
+    n = (datetime.combine(lag_day + _DAY, time(), tz).astimezone(UTC) - first) // _HOUR
+    position: dict[int, int] = {}
+    for i in range(n):
+        position.setdefault((first + i * _HOUR).astimezone(tz).hour, i)
+    index = [position[hr] if hr in position else position[hr - 1] for hr in hours.astype(int)]
+    return first, n, index
+
+
 def build_features(
     anchor: date,
     prices: Hourly,
@@ -242,9 +275,10 @@ def build_features(
     """Feature rows for every hour of the local days anchor+1 … anchor+6.
 
     ``prices`` must reach the end of the anchor day; prices after it are ignored, since they
-    are not published at issue time (the price lags read NaN there instead). ``weather[h]``
-    holds the ``"{point}__{var}"`` series for target day anchor+h. Missing inputs give NaN
-    features.
+    are not published at issue time (the price lags read NaN there instead). The lags take
+    the same local wall-clock hour on the anchor day (``p_lastday``) and a week before the
+    target day (``p_lastweek``). ``weather[h]`` holds the ``"{point}__{var}"`` series for
+    target day anchor+h. Missing inputs give NaN features.
     """
     a = daily.index(anchor)
     if a is None or np.isnan(daily.mean30[a]) or np.isnan(daily.gq_evening14[a]):
@@ -254,11 +288,12 @@ def build_features(
     tz = ZoneInfo(zone.tz)
     known_until = datetime.combine(anchor + _DAY, time(), tz).astimezone(UTC)
 
-    def lag(first: datetime, n: int) -> np.ndarray:
-        """Prices of ``n`` hours from ``first``; hours after the anchor day read NaN."""
+    def lag(day: date, hours: np.ndarray) -> np.ndarray:
+        """Prices at the local ``hours`` of ``day``; hours after the anchor day read NaN."""
+        first, n, index = _wall_clock_index(day, hours, tz)
         out = prices.window(first, n)
         out[max((known_until - first) // _HOUR, 0) :] = np.nan
-        return out
+        return out[index]
 
     blocks, times, hs = [], [], []
     for h in HORIZONS:
@@ -274,16 +309,17 @@ def build_features(
 
         holiday = target in de_holidays(target.year)
         dow = target.weekday()
+        hour = np.array([t.astimezone(tz).hour for t in day_times], dtype=float)
         cols = {
             "h": h,
-            "hour": np.array([t.astimezone(tz).hour for t in day_times], dtype=float),
+            "hour": hour,
             "dow": dow,
             "doy": target.timetuple().tm_yday,
             "holiday": float(holiday),
             "offday": float(holiday or dow >= 5),
             "issue_dow": anchor.weekday(),
-            "p_lastday": lag(first - h * _DAY, n),
-            "p_lastweek": lag(first - 7 * _DAY, n),
+            "p_lastday": lag(target - h * _DAY, hour),
+            "p_lastweek": lag(target - 7 * _DAY, hour),
             **d_features,
             **_weather_features(w, day_times, zone),
             **{c: capacity.get(c, np.nan) for c in CAPACITY_NAMES},
@@ -297,6 +333,9 @@ def build_features(
         hs.append(np.full(n, h))
 
     X = np.vstack(blocks)
+    # in the order of research ``relative``: subtract, then divide
+    X[:, _RELATIVE] = (X[:, _RELATIVE] - d_features["D_mean7"]) / scale
+    X[:, _SPREAD] = X[:, _SPREAD] / scale
     return FeatureMatrix(
         X=X,
         times=times,
@@ -307,5 +346,6 @@ def build_features(
 
 
 def decode(y: np.ndarray, fm: FeatureMatrix) -> np.ndarray:
-    """Model output (scaled deviation from the 7-day mean) back to EUR/MWh."""
+    """Model output or a relative price level (scaled deviation from the 7-day mean) back to
+    EUR/MWh."""
     return y * fm.scale + fm.mean7
