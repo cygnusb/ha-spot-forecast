@@ -189,7 +189,10 @@ async def test_total_price_sensor_only_with_a_surcharge(
 
 
 async def test_display_options_apply_without_a_reload(
-    hass_with_recorder: HomeAssistant, set_up: SetUp, aioclient_mock: AiohttpClientMocker
+    hass_with_recorder: HomeAssistant,
+    set_up: SetUp,
+    aioclient_mock: AiohttpClientMocker,
+    recorded,
 ) -> None:
     """Surcharge, VAT and peak threshold: the same coordinator, no fetch, entities updated."""
     hass = hass_with_recorder
@@ -210,7 +213,10 @@ async def test_display_options_apply_without_a_reload(
     assert aioclient_mock.call_count == calls
     assert coordinator.vat == 7.0
     assert hass.states.get(PRICE).attributes["surcharge"] == 0.2
-    assert hass.states.get(TOTAL).attributes["surcharge"] == 0.2
+    total = hass.states.get(TOTAL)
+    assert total.attributes["surcharge"] == 0.2
+    assert total.attributes["vat"] == 7.0
+    assert float(total.state) == round(_market_price(recorded, T10) * 1.07 + 0.2, 5)
     peak = hass.states.get(PEAK)
     assert peak.state == STATE_ON
     assert peak.attributes["threshold"] == 0.0

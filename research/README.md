@@ -156,6 +156,17 @@ and the Christmas week (`hol_` features) changed nothing (MAE 2.14 → 2.15, nat
 bias +0.93 → +0.73, 1 May unchanged), so they stay off (`--drop` default includes `hol_`).
 With ~25 holidays in the data, holiday × strong sun is too rare to learn.
 
+Re-checked on 2026-10-23 with the training pipeline (walk-forward, monthly refit, forecasts
+2025-10-01 … 2026-10-21, median model): a fuller definition (state-weighted `hol_share`
+with Assumption Day in Bavaria at 0.7, bridge days next to holidays covering at least half
+the population, Dec 24/31, Luxembourg holidays) gave MAE 23.62 against 23.49 EUR/MWh, and
++1.7 EUR/MWh on exactly the 17 regional, bridge and eve days it targets: each regional
+holiday has at most two earlier occurrences, so the trees fit them instead of learning.
+Same-local-hour price lags across the DST switches (the UTC `t - h·24 h` lag points one
+hour off there) gave 23.47, −0.16 on the 3.6 % of rows they change; a different random seed
+alone moves the overall MAE by 0.07 and those rows by 0.46. Neither is worth a feature-schema
+bump on its own; the lag fix should ride along with the next bump that happens anyway.
+
 ### Low-price chance (P10)
 
 A P10 quantile model (`--quantile 0.1 --target gq`) with the mirrored rolling conformal
