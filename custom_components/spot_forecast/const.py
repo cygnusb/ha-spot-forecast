@@ -8,10 +8,13 @@ CONF_ZONE = "zone"  # zone code, e.g. "DE-LU"
 CONF_PEAK_THRESHOLD = "peak_threshold"  # ct/kWh
 CONF_BACKFILL_DAYS = "backfill_days"
 CONF_AUTO_UPDATE = "auto_update"
+CONF_SURCHARGE = "surcharge"  # EUR/kWh of grid fees and taxes, for the total price
 
 DEFAULT_BACKFILL_DAYS = 60
 MAX_BACKFILL_DAYS = 180
 DEFAULT_PEAK_THRESHOLD = 15.0  # ct/kWh, used only while no model is loaded
+DEFAULT_SURCHARGE = 0.0  # no total-price sensor
+MAX_SURCHARGE = 1.0  # EUR/kWh
 
 MODEL_MAX_AGE_DAYS = 60
 

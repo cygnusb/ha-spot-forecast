@@ -135,6 +135,7 @@ options (*Configure* on the integration):
 
 | Option | Default | What it does |
 |---|---|---|
+| Grid fees and taxes | 0 | Per-kWh surcharge (EUR/kWh) for a total-price sensor and the forecast card's "mit Abgaben" view; 0 = none. |
 | Peak price threshold | from the model, 21.2 ct/kWh | Wholesale price above which an hour counts as a peak, for the peak-risk sensor. |
 | Backfill window (days) | 60 | Past days of forecasts reconstructed on first start, so the look-back and the calibration have history (0–180, 0 = off). |
 | Update models automatically | on | Check for a newer model after setup and once a day, and download it if it passes its checks. Off stops further downloads; a model downloaded before stays in use. |
@@ -144,11 +145,13 @@ Details: [docs/configuration.md](docs/configuration.md).
 ## Entities
 
 All prices are the bare exchange price in EUR/kWh, without grid fees, taxes or
-supplier margin. Entity ids are the same on every instance language.
+supplier margin, except the total price. Entity ids are the same on every
+instance language.
 
 | Entity | Description |
 |---|---|
 | `sensor.spot_forecast_de_lu_price` | Current price. Attribute `prices`: every slot from today 00:00 to the end of the forecast |
+| `sensor.spot_forecast_de_lu_total_price` | Current price plus the grid fees and taxes option, `prices` likewise (only while the option is set) |
 | `binary_sensor.spot_forecast_de_lu_peak_risk` | On if a price above the threshold is known or likely (P90) in the next 48 h |
 | `binary_sensor.spot_forecast_de_lu_negative_price` | On if a negative price is known or likely (P10) in the next 48 h |
 | `sensor.spot_forecast_de_lu_day_0` … `_day_6` | Mean price per day, with min, max, P90 max and P10 min (disabled by default) |

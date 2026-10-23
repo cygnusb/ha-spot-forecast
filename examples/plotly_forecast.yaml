@@ -14,6 +14,13 @@
 # sensor (the option "peak threshold" of the integration). Narrow cards get a
 # shorter header ("Mo 26." / "27 ct" / "⚠ 25", below 480 px only the weekday).
 #
+# With the integration's option "grid fees and taxes" set (attribute `surcharge` of the
+# price sensor), two buttons top right switch between the market price ("Börse") and
+# the price with that surcharge added ("mit Abgaben"); the peak-risk warning keeps
+# comparing the market price with its threshold. As in the look-back card, the choice is
+# kept in `window.spotForecastPrices`, as the card redraws itself from this YAML after a
+# click: it holds until the page is reloaded and is shared by all forecast cards on it.
+#
 # Times are handed to Plotly as wall-clock strings in the card's time zone (Home
 # Assistant's profile setting, as the card resolves it). The repeated hour of the
 # autumn clock change is drawn once, as the mean of both hours, so the step line never
@@ -43,7 +50,6 @@ entities:
   # Known prices. Bound to the price sensor so the card redraws whenever the sensor
   # updates; its own recorded history is replaced by the data built here.
   - entity: sensor.spot_forecast_de_lu_price
-    name: Börsenpreis
     legendrank: 1
     filters:
       - fn: |-
@@ -89,18 +95,23 @@ entities:
             const today = wall(now).slice(0, 10);
             const yesterday = addDays(today, -1);
             const entries = hass.states[PRICE]?.attributes?.prices ?? [];
-            const threshold = ct(hass.states[PEAK]?.attributes?.threshold);
+            // Grid fees and taxes from the integration's option, added while the button asks.
+            const surcharge = ct(hass.states[PRICE]?.attributes?.surcharge) ?? 0;
+            const withFees = surcharge > 0 && window.spotForecastPrices?.fees === true;
+            const cp = (v) => (ct(v) == null ? null : ct(v) + (withFees ? surcharge : 0));
+            const raw = ct(hass.states[PEAK]?.attributes?.threshold);
+            const threshold = raw == null ? null : raw + (withFees ? surcharge : 0);
 
             const y = vars.yesterday ?? { xs: [], ys: [] };
             const known = series([
-              ...y.xs.map((x, i) => ({ w: wall(x), v: ct(y.ys[i]) }))
+              ...y.xs.map((x, i) => ({ w: wall(x), v: cp(y.ys[i]) }))
                 .filter((p) => p.w.slice(0, 10) === yesterday && p.v != null),
               ...entries.filter((e) => e.source === "market")
-                .map((e) => ({ w: wall(e.time), v: ct(e.price) })),
+                .map((e) => ({ w: wall(e.time), v: cp(e.price) })),
             ]);
             const forecast = series(
               entries.filter((e) => e.source === "forecast")
-                .map((e) => ({ w: wall(e.time), v: ct(e.price), p90: ct(e.p90), p10: ct(e.p10) })),
+                .map((e) => ({ w: wall(e.time), v: cp(e.price), p90: cp(e.p90), p10: cp(e.p10) })),
             );
 
             // Step lines hold each value to the next point: close the last slot.
@@ -156,6 +167,7 @@ entities:
               // Under ~62 px per day the full day header ("Mo 26.10." / "max 27 ct") runs together.
               dense: (width - 60) / Math.max(shown.length, 1) < 62,
               threshold, fcStart, hasForecast: forecast.length > 0,
+              fees: { available: surcharge > 0, on: withFees, ct: surcharge },
               range: [first + " 00:00", addDays(last, 1) + " 00:00"],
               fc: {
                 x: fcLine.map((p) => p.w), y: fcLine.map((p) => p.v),
@@ -167,11 +179,13 @@ entities:
             };
             return { xs: knownLine.map((p) => p.w), ys: knownLine.map((p) => p.v) };
           }
+    # after the filters: they set vars.sf
+    name: '$ex vars.sf.fees.on ? "Preis mit Abgaben" : "Börsenpreis"'
     line:
       color: $ex css_vars['primary-text-color']
       width: 2.4
       shape: hv
-    hovertemplate: "Börse %{y:.1f} ct<extra></extra>"
+    hovertemplate: '$ex (vars.sf.fees.on ? "Preis" : "Börse") + " %{y:.1f} ct<extra></extra>"'
   # Low-price chance: hatched in the cheap colour from P10 up to the median.
   - entity: ""
     name: P10
@@ -280,7 +294,17 @@ layout:
   hovermode: x unified
   dragmode: false
   title:
-    text: $ex `<b>Strompreis DE-LU</b><br><span style="font-size:12px;color:${css_vars['secondary-text-color']}">Börsenpreis und Prognose, ct/kWh ohne Abgaben</span>`
+    text: |
+      $fn ({ vars, css_vars }) => {
+        const fees = vars.sf.fees;
+        const f1 = (v) => v.toLocaleString("de-DE", { minimumFractionDigits: 1, maximumFractionDigits: 1 });
+        const unit = fees.on ? `ct/kWh mit ${f1(fees.ct)} ct Abgaben` : "ct/kWh ohne Abgaben";
+        // under ~560 px the full line would run under the buttons
+        const sub = fees.available && vars.sf.width < 560
+          ? unit
+          : `${fees.on ? "Preis" : "Börsenpreis"} und Prognose, ${unit}`;
+        return `<b>Strompreis DE-LU</b><br><span style="font-size:12px;color:${css_vars["secondary-text-color"]}">${sub}</span>`;
+      }
     x: 0
     xref: paper
     xanchor: left
@@ -330,6 +354,28 @@ layout:
     zerolinecolor: rgba(127, 127, 127, 0.45)
     gridcolor: rgba(127, 127, 127, 0.16)
     fixedrange: true
+  # "Börse" / "mit Abgaben", only with a surcharge set; see the header comment.
+  updatemenus: |
+    $fn ({ vars, css_vars }) => {
+      const sf = vars.sf;
+      if (!sf.fees.available) return [];
+      const plot = 470 - 102 - 40; // layout height minus top and bottom margin, px
+      const label = (text, on) => (sf.fees.on === on
+        ? `<b>${text}</b>`
+        : `<span style="color:${css_vars["secondary-text-color"]}">${text}</span>`);
+      const button = (text, on) => ({
+        label: label(text, on), method: "restyle", args: [{}], // the restyle makes the card redraw
+        on_click: () => { window.spotForecastPrices = { fees: on }; },
+      });
+      return [{
+        type: "buttons", direction: "right", showactive: false,
+        x: 1, xanchor: "right", y: 1 + 90 / plot, yanchor: "top",
+        pad: { l: 0, r: 0, t: 0, b: 0 },
+        bgcolor: css_vars["card-background-color"], bordercolor: "rgba(127, 127, 127, 0.4)", borderwidth: 1,
+        font: { size: sf.narrow ? 11 : 12, color: css_vars["primary-text-color"] },
+        buttons: [button("Börse", false), button(sf.narrow ? "+ Abgaben" : "mit Abgaben", true)],
+      }];
+    }
   annotations: |
     $fn ({ vars, css_vars }) => {
       const sf = vars.sf;

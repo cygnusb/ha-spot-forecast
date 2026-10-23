@@ -27,6 +27,9 @@ every instance language.
   are there for templates and for future use.
 * Prices are the bare exchange price in EUR/kWh. Smart Battery Pilot adds its
   own `price_offset` for grid fees and taxes, as with any other price source.
+  If you set the integration's [grid fees and taxes](configuration.md#options)
+  and point Smart Battery Pilot at `sensor.spot_forecast_de_lu_total_price`
+  instead, set its `price_offset` to 0, or the fees count twice.
 
 The adapter does not tell forecast slots from known ones. In the morning,
 before tomorrow's prices are published, Smart Battery Pilot therefore sees

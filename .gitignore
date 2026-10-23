@@ -10,3 +10,6 @@ tools/.cache/
 # documentation and project site builds
 .venv-docs
 _site/
+
+# local `uv run` creates it; the project pins its tools in requirements files
+uv.lock

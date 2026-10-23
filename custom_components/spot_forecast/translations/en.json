@@ -21,11 +21,13 @@
       "init": {
         "title": "Spot Forecast options",
         "data": {
+          "surcharge": "Grid fees and taxes",
           "peak_threshold": "Peak price threshold",
           "backfill_days": "Backfill window (days)",
           "auto_update": "Update models automatically"
         },
         "data_description": {
+          "surcharge": "Added per kWh to the market price for the total-price sensor and the forecast card's \"mit Abgaben\" view, in EUR/kWh (grid fees, levies, taxes; enter the gross amount you pay). 0 removes the total-price sensor. The price sensor, the statistics and the peak and negative-price sensors stay on the market price.",
           "peak_threshold": "Wholesale price above which an hour counts as a price peak, in ct/kWh without taxes or grid fees. The default comes from the model's training data.",
           "backfill_days": "How many past days of forecasts are reconstructed on first start so accuracy statistics have history. 0 turns backfill off.",
           "auto_update": "Once a day, download a newer forecast model for this zone when one is published. It is used only if it fits this version of the integration and passes its checks."
@@ -37,6 +39,9 @@
     "sensor": {
       "price": {
         "name": "Price"
+      },
+      "total_price": {
+        "name": "Total price"
       },
       "last_run": {
         "name": "Last run"

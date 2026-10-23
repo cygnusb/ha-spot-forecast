@@ -5,7 +5,13 @@ from sbp_adapter_copy import detect_adapter, epex_matches, nordpool_matches, pri
 
 from core.forecast import Slot
 from core.ingest import MarketSlot
-from core.output import current_price, day_summaries, flag_window, prices_attribute
+from core.output import (
+    current_price,
+    day_summaries,
+    flag_window,
+    prices_attribute,
+    with_surcharge,
+)
 
 TZ = "Europe/Berlin"
 BERLIN = ZoneInfo(TZ)
@@ -124,6 +130,24 @@ def test_prices_attribute_is_parsed_by_sbp_entsoe_adapter():
     assert slots[7].hours == 0.25
     assert slots[8].hours == 1.0
     assert [s.price for s in slots] == [e["price"] for e in out]
+
+
+def test_with_surcharge_shifts_prices_and_bands_only():
+    m0 = datetime(2026, 3, 9, 23, tzinfo=UTC)
+    out = prices_attribute(_market(m0, 4), _forecast(m0 + timedelta(hours=1), 2), P90, P10, TZ, m0)
+    total = with_surcharge(out, 0.187)
+    assert total is not out and out[0]["price"] == 0.05  # the input is left alone
+    assert [e["price"] for e in total] == [round(e["price"] + 0.187, 5) for e in out]
+    assert total[0] == {**out[0], "price": 0.237}
+    fc = total[-1]
+    assert fc["p90"] == round(out[-1]["p90"] + 0.187, 5)
+    assert fc["p10"] == round(out[-1]["p10"] + 0.187, 5)
+    assert {k: fc[k] for k in ("time", "source", "h")} == {
+        k: out[-1][k] for k in ("time", "source", "h")
+    }
+    # still the ENTSO-E format SBP reads
+    attrs = {"prices": total, "unit": "EUR/kWh"}
+    assert detect_adapter(attrs).name == "entsoe"
 
 
 def test_current_price():

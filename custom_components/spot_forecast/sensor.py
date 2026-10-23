@@ -1,4 +1,4 @@
-"""Price sensor, diagnostic sensors and the per-day sensors."""
+"""Price sensor, total-price sensor, diagnostic sensors and the per-day sensors."""
 
 from __future__ import annotations
 
@@ -9,12 +9,14 @@ from zoneinfo import ZoneInfo
 from homeassistant.components.sensor import SensorDeviceClass, SensorEntity, SensorStateClass
 from homeassistant.const import EntityCategory
 from homeassistant.core import HomeAssistant
+from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.util import dt as dt_util
 
 from . import SpotForecastConfigEntry
+from .const import DOMAIN
 from .coordinator import BACKFILL_STATES, SpotForecastCoordinator
-from .core.output import current_price, day_summaries
+from .core.output import current_price, day_summaries, with_surcharge
 from .entity import SpotEntity
 
 UNIT = "EUR/kWh"
@@ -26,9 +28,19 @@ async def async_setup_entry(
     hass: HomeAssistant, entry: SpotForecastConfigEntry, async_add_entities: AddEntitiesCallback
 ) -> None:
     coordinator = entry.runtime_data.coordinator
+    total: list[SensorEntity] = []
+    if coordinator.surcharge:
+        total.append(TotalPriceSensor(coordinator))
+    else:
+        # The surcharge was cleared: drop the sensor rather than leave it unavailable.
+        registry = er.async_get(hass)
+        unique_id = f"{entry.entry_id}_{TotalPriceSensor.KEY}"
+        if entity_id := registry.async_get_entity_id("sensor", DOMAIN, unique_id):
+            registry.async_remove(entity_id)
     async_add_entities(
         [
             PriceSensor(coordinator),
+            *total,
             LastRunSensor(coordinator),
             ModelVersionSensor(coordinator),
             ForecastErrorSensor(coordinator),
@@ -67,6 +79,44 @@ class PriceSensor(_SpotSensor):
         return {
             "prices": data.entries,
             "unit": UNIT,
+            "issued_at": None if data.issued_at is None else data.issued_at.isoformat(),
+            "anchor_day": data.anchor.isoformat(),
+            "model_version": data.model.version,
+            "stale": data.stale,
+            "surcharge": self.coordinator.surcharge,  # for the cards' total-price view
+        }
+
+
+class TotalPriceSensor(_SpotSensor):
+    """Market price plus the surcharge option; ``prices`` likewise, for SBP or automations.
+
+    Only while a surcharge is set. Statistics, error figures and the risk sensors stay
+    on the market price.
+    """
+
+    KEY = "total_price"
+    _attr_native_unit_of_measurement = UNIT
+    _attr_state_class = SensorStateClass.MEASUREMENT
+    _unrecorded_attributes = frozenset({"prices"})
+
+    def __init__(self, coordinator: SpotForecastCoordinator) -> None:
+        super().__init__(coordinator, self.KEY)
+        self._attr_attribution = (
+            f"Prices: {coordinator.zone.price_attribution}; weather: {WEATHER_ATTRIBUTION}"
+        )
+
+    @property
+    def native_value(self) -> float | None:
+        price = current_price(self.coordinator.data.market, dt_util.utcnow())
+        return None if price is None else round(price + self.coordinator.surcharge, 5)
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        data = self.coordinator.data
+        return {
+            "prices": with_surcharge(data.entries, self.coordinator.surcharge),
+            "unit": UNIT,
+            "surcharge": self.coordinator.surcharge,
             "issued_at": None if data.issued_at is None else data.issued_at.isoformat(),
             "anchor_day": data.anchor.isoformat(),
             "model_version": data.model.version,

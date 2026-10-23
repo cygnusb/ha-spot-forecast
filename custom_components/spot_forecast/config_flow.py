@@ -1,4 +1,4 @@
-"""Config flow (choose the zone) and options flow (peak threshold, backfill, model updates)."""
+"""Config flow (choose the zone) and options flow (surcharge, peak threshold, backfill, updates)."""
 
 from __future__ import annotations
 
@@ -26,12 +26,15 @@ from .const import (
     CONF_AUTO_UPDATE,
     CONF_BACKFILL_DAYS,
     CONF_PEAK_THRESHOLD,
+    CONF_SURCHARGE,
     CONF_ZONE,
     DEFAULT_AUTO_UPDATE,
     DEFAULT_BACKFILL_DAYS,
     DEFAULT_PEAK_THRESHOLD,
+    DEFAULT_SURCHARGE,
     DOMAIN,
     MAX_BACKFILL_DAYS,
+    MAX_SURCHARGE,
 )
 from .core.zones import ZONES
 
@@ -68,7 +71,7 @@ class SpotForecastConfigFlow(ConfigFlow, domain=DOMAIN):
 
 
 class SpotForecastOptionsFlow(OptionsFlow):
-    """Peak threshold, backfill window and automatic model updates."""
+    """Surcharge, peak threshold, backfill window and automatic model updates."""
 
     def __init__(self, entry: ConfigEntry) -> None:
         # Own reference: OptionsFlow.config_entry is read-only from HA 2024.12 on.
@@ -81,6 +84,9 @@ class SpotForecastOptionsFlow(OptionsFlow):
                 CONF_BACKFILL_DAYS: int(user_input[CONF_BACKFILL_DAYS]),
                 CONF_AUTO_UPDATE: bool(user_input[CONF_AUTO_UPDATE]),
             }
+            surcharge = round(float(user_input[CONF_SURCHARGE]), 3)
+            if surcharge:  # 0: no total-price sensor
+                options[CONF_SURCHARGE] = surcharge
             threshold = round(float(user_input[CONF_PEAK_THRESHOLD]), 1)
             # the model's own value is not stored: it then follows a newer (downloaded) model
             if threshold != self._model_peak_threshold():
@@ -92,6 +98,18 @@ class SpotForecastOptionsFlow(OptionsFlow):
             step_id="init",
             data_schema=vol.Schema(
                 {
+                    vol.Required(
+                        CONF_SURCHARGE,
+                        default=options.get(CONF_SURCHARGE, DEFAULT_SURCHARGE),
+                    ): NumberSelector(
+                        NumberSelectorConfig(
+                            min=0,
+                            max=MAX_SURCHARGE,
+                            step=0.001,
+                            unit_of_measurement="EUR/kWh",
+                            mode=NumberSelectorMode.BOX,
+                        )
+                    ),
                     vol.Required(
                         CONF_PEAK_THRESHOLD,
                         default=options.get(CONF_PEAK_THRESHOLD, self._model_peak_threshold()),

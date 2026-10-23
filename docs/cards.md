@@ -33,7 +33,12 @@ One time axis from yesterday to the end of the forecast:
   shortens step by step to "Mo 26." / "27 ct" / "⚠ 25" and then to the weekday
   alone;
 * nights shaded from `sun.sun`, and a dotted "jetzt" line where the forecast
-  begins.
+  begins;
+* with the option [grid fees and taxes](configuration.md#options) set, two
+  buttons top right: "Börse" (the default) and "mit Abgaben", which adds the
+  surcharge to every price, band and day maximum. The "⚠" warning still
+  compares the exchange price with the threshold. The choice holds until the
+  page is reloaded.
 
 Prices are shown in ct/kWh (EUR/kWh × 100) with German number formatting.
 

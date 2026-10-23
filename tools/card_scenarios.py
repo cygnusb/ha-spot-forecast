@@ -64,6 +64,7 @@ class Spec:
     now: datetime  # local wall clock of the screenshot
     backfill_days: int  # target days of the backfill window (option backfill_days)
     expired: bool = False  # the last successful run is too old: market prices only
+    surcharge: float = 0.0  # option "grid fees and taxes", EUR/kWh
 
 
 def _local(*args: int) -> datetime:
@@ -86,6 +87,8 @@ SCENARIOS: dict[str, Spec] = {
     "stale": Spec(_local(2026, 10, 14, 14, 30), backfill_days=MAX_BACKFILL_DAYS, expired=True),
     # Installed today with the default backfill window.
     "fresh_install": Spec(_local(2026, 10, 14, 14, 30), backfill_days=DEFAULT_BACKFILL_DAYS),
+    # The default day with grid fees and taxes set: the forecast card's "mit Abgaben" view.
+    "fees": Spec(_local(2026, 10, 14, 14, 30), backfill_days=0, surcharge=0.187),
 }
 
 
@@ -293,6 +296,7 @@ def build(spec: Spec, zone: Zone = DE_LU) -> dict:
                 "anchor_day": anchor.isoformat(),
                 "model_version": model.version,
                 "stale": spec.expired,
+                "surcharge": spec.surcharge,
                 "state_class": "measurement",
                 "unit_of_measurement": "EUR/kWh",
                 "attribution": f"Prices: {zone.price_attribution}; weather: Open-Meteo (CC BY 4.0)",

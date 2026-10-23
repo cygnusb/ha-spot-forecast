@@ -18,6 +18,7 @@ from custom_components.spot_forecast.const import (
     CONF_AUTO_UPDATE,
     CONF_BACKFILL_DAYS,
     CONF_PEAK_THRESHOLD,
+    CONF_SURCHARGE,
     CONF_ZONE,
     DOMAIN,
 )
@@ -98,10 +99,16 @@ async def test_options_flow_saves_threshold_and_backfill(
     )
     assert _default(result["data_schema"], CONF_BACKFILL_DAYS) == 60
     assert _default(result["data_schema"], CONF_AUTO_UPDATE) is True
+    assert _default(result["data_schema"], CONF_SURCHARGE) == 0.0
 
     result = await hass.config_entries.options.async_configure(
         result["flow_id"],
-        {CONF_PEAK_THRESHOLD: 22.5, CONF_BACKFILL_DAYS: 90.0, CONF_AUTO_UPDATE: False},
+        {
+            CONF_SURCHARGE: 0,
+            CONF_PEAK_THRESHOLD: 22.5,
+            CONF_BACKFILL_DAYS: 90.0,
+            CONF_AUTO_UPDATE: False,
+        },
     )
     await hass.async_block_till_done()
 
@@ -114,6 +121,29 @@ async def test_options_flow_saves_threshold_and_backfill(
     assert isinstance(entry.options[CONF_BACKFILL_DAYS], int)
     # the update listener reloaded the entry
     assert entry.state is ConfigEntryState.LOADED
+
+
+async def test_options_flow_saves_the_surcharge(
+    hass_with_recorder: HomeAssistant, recorded_sources: None
+) -> None:
+    hass = hass_with_recorder
+    entry = _entry()
+    entry.add_to_hass(hass)
+    assert await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_block_till_done()
+
+    result = await hass.config_entries.options.async_init(entry.entry_id)
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"],
+        {CONF_SURCHARGE: 0.1872, CONF_BACKFILL_DAYS: 60, CONF_AUTO_UPDATE: True},
+    )
+    await hass.async_block_till_done()
+
+    assert entry.options[CONF_SURCHARGE] == 0.187  # 0.1 ct
+    assert entry.runtime_data.coordinator.surcharge == 0.187
+    result = await hass.config_entries.options.async_init(entry.entry_id)
+    assert _default(result["data_schema"], CONF_SURCHARGE) == 0.187
+    assert await hass.config_entries.async_unload(entry.entry_id)
 
 
 async def test_options_flow_threshold_at_the_model_default_follows_the_model(

@@ -23,8 +23,10 @@ from .backfill import BackfillResult, run_backfill
 from .const import (
     CONF_BACKFILL_DAYS,
     CONF_PEAK_THRESHOLD,
+    CONF_SURCHARGE,
     CONF_ZONE,
     DEFAULT_BACKFILL_DAYS,
+    DEFAULT_SURCHARGE,
     DOMAIN,
     PRICE_HISTORY_DAYS,
 )
@@ -148,6 +150,11 @@ class SpotForecastCoordinator(DataUpdateCoordinator[SpotData]):
         """Peak threshold in ct/kWh: the option, else the model's (EUR/MWh) rounded to 0.1."""
         option = self.config_entry.options.get(CONF_PEAK_THRESHOLD)
         return float(option) if option is not None else round(self.model.peak_threshold / 10, 1)
+
+    @property
+    def surcharge(self) -> float:
+        """Grid fees and taxes in EUR/kWh added for the total price; 0 means none."""
+        return float(self.config_entry.options.get(CONF_SURCHARGE, DEFAULT_SURCHARGE))
 
     async def set_model(self, model: ModelFile, source: str, backfill: bytes) -> None:
         """Use ``model`` (with its backfill file) from the next run on.

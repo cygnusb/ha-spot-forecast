@@ -1,7 +1,8 @@
 """Output model: what the entities show.
 
 Builds the SBP-compatible ``prices`` attribute (market, then forecast), the
-current price, 48 h risk windows for the binary sensors and per-day summaries.
+current price, the same with a fixed surcharge (the total price), 48 h risk
+windows for the binary sensors and per-day summaries.
 Prices leave this module in EUR/kWh; the core works in EUR/MWh.
 """
 
@@ -62,6 +63,17 @@ def prices_attribute(
             "h": s.h,
         }
     return [by_instant[k] for k in sorted(by_instant)]
+
+
+def with_surcharge(entries: list[dict], surcharge: float) -> list[dict]:
+    """``prices`` entries with ``surcharge`` (EUR/kWh) added to ``price``, ``p90`` and ``p10``."""
+    return [
+        {
+            **e,
+            **{k: round(e[k] + surcharge, _DECIMALS) for k in ("price", "p90", "p10") if k in e},
+        }
+        for e in entries
+    ]
 
 
 def current_price(market: Sequence[MarketSlot], now: datetime) -> float | None:

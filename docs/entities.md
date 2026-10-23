@@ -1,7 +1,7 @@
 # Entities
 
 Every price is the bare day-ahead exchange price in **EUR/kWh**, without grid
-fees, taxes or supplier margin. The entities belong to one device per zone,
+fees, taxes or supplier margin, except the [total price](#total-price). The entities belong to one device per zone,
 *Spot Forecast DE-LU*.
 
 Entity ids are fixed and English on every instance language, so the cards and
@@ -21,6 +21,8 @@ other integrations can rely on them: a German instance also gets
   forecast covers the six days after it.
 * `model_version`: the model that made it, e.g. `de_lu-2026-10`.
 * `stale`: `true` when the last run failed or is more than 7 hours old.
+* `surcharge`: the option [grid fees and taxes](configuration.md#options) in
+  EUR/kWh, 0 when unset; the forecast card reads it for its "mit Abgaben" view.
 * `attribution`: the data sources and their licences.
 
 An entry of `prices`:
@@ -51,6 +53,20 @@ example:
 {% set ahead = prices | selectattr('source', 'eq', 'forecast') | map(attribute='price') | list %}
 {{ ahead | min if ahead else none }}
 ```
+
+## Total price
+
+`sensor.spot_forecast_de_lu_total_price`
+
+Only while the option [grid fees and taxes](configuration.md#options) is set;
+setting it back to 0 removes the sensor.
+
+* **State:** the current exchange price plus the surcharge.
+* **`prices`:** the same entries as on the [price sensor](#price), with the
+  surcharge added to `price`, `p90` and `p10`. Smart Battery Pilot reads it like
+  the price sensor.
+* `surcharge`, `unit`, `issued_at`, `anchor_day`, `model_version`, `stale`: as on
+  the price sensor.
 
 ## Peak risk
 

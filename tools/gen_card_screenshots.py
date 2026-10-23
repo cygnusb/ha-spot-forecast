@@ -22,7 +22,8 @@ Usage:
 
 The default scenario writes the README images assets/screenshots/{card}_{theme}.png.
 Other scenarios, --sizes (360/600/1000 px) and --switch-test (look-back horizon
-buttons across a card refresh) write into tools/.cache/shots/ for checking by eye.
+buttons, and the forecast card's fees buttons in scenario "fees", across a card
+refresh) write into tools/.cache/shots/ for checking by eye.
 The run fails on a card error message, a page error or an unknown websocket call.
 """
 
@@ -460,7 +461,7 @@ def render(jobs: list[dict]) -> bool:
 # Main
 # ---------------------------------------------------------------------------
 
-SCENARIOS = ["default", "dst", "dst_forecast", "stale", "fresh_install"]
+SCENARIOS = ["default", "dst", "dst_forecast", "stale", "fresh_install", "fees"]
 # scenarios whose look-back is worth a look (the 2025 ones have no stored forecasts)
 LOOKBACK_SCENARIOS = {"default", "fresh_install"}
 
@@ -487,7 +488,7 @@ def main() -> int:
     parser.add_argument(
         "--switch-test",
         action="store_true",
-        help="click a look-back horizon button, refresh the card, and shoot before and after",
+        help="click the look-back horizon and forecast fees buttons, refresh, shoot before and after",
     )
     parser.add_argument("--rebuild", action="store_true", help="rebuild the cached scenarios")
     args = parser.parse_args()
@@ -505,9 +506,19 @@ def main() -> int:
             if card == "lookback" and name not in LOOKBACK_SCENARIOS:
                 continue
             for theme in themes:
-                if args.switch_test:
-                    if card != "lookback":
+                if args.switch_test and card == "forecast":
+                    if name != "fees":
                         continue
+                    # the fees buttons: switch, refresh, switch back
+                    stem = WORK / f"switch_{card}_{name}_{theme}"
+                    steps = [
+                        {"click": "mit Abgaben", "shot": f"{stem}_1_clicked.png"},
+                        {"refresh": True, "shot": f"{stem}_2_refreshed.png"},
+                        {"click": "Börse"},
+                    ]
+                    png = Path(f"{stem}_3_back.png")
+                    jobs.append(_job(card, name, data, theme, CARD_WIDTH, png, steps=steps))
+                elif args.switch_test:
                     stem = WORK / f"switch_{name}_{theme}"
                     steps = [
                         {"click": "D\\+4", "shot": f"{stem}_1_clicked.png"},
