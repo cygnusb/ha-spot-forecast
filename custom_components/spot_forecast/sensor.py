@@ -14,7 +14,7 @@ from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.util import dt as dt_util
 
 from . import SpotForecastConfigEntry
-from .const import CONF_VAT, DEFAULT_VAT, DOMAIN
+from .const import DOMAIN
 from .coordinator import BACKFILL_STATES, SpotForecastCoordinator
 from .core.output import current_price, day_summaries, total_price, with_surcharge
 from .entity import SpotEntity
@@ -23,11 +23,6 @@ UNIT = "EUR/kWh"
 PRECISION = 4  # EUR/kWh to 0.01 ct, as the surcharge option is kept
 WEATHER_ATTRIBUTION = "Open-Meteo (CC BY 4.0)"
 DAYS = 7
-
-
-def _vat(coordinator: SpotForecastCoordinator) -> float:
-    """VAT in percent on the exchange part of the total price (entries without it: Germany)."""
-    return float(coordinator.config_entry.options.get(CONF_VAT, DEFAULT_VAT))
 
 
 async def async_setup_entry(
@@ -91,7 +86,7 @@ class PriceSensor(_SpotSensor):
             "model_version": data.model.version,
             "stale": data.stale,
             "surcharge": self.coordinator.surcharge,  # for the cards' total-price view
-            "vat": _vat(self.coordinator),
+            "vat": self.coordinator.vat,
         }
 
 
@@ -120,18 +115,18 @@ class TotalPriceSensor(_SpotSensor):
         price = current_price(self.coordinator.data.market, dt_util.utcnow())
         if price is None:
             return None
-        return total_price(price, self.coordinator.surcharge, _vat(self.coordinator))
+        return total_price(price, self.coordinator.surcharge, self.coordinator.vat)
 
     @property
     def extra_state_attributes(self) -> dict[str, Any]:
         data = self.coordinator.data
         return {
             "prices": with_surcharge(
-                data.entries, self.coordinator.surcharge, _vat(self.coordinator)
+                data.entries, self.coordinator.surcharge, self.coordinator.vat
             ),
             "unit": UNIT,
             "surcharge": self.coordinator.surcharge,
-            "vat": _vat(self.coordinator),
+            "vat": self.coordinator.vat,
             "issued_at": None if data.issued_at is None else data.issued_at.isoformat(),
             "anchor_day": data.anchor.isoformat(),
             "model_version": data.model.version,
