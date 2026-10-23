@@ -167,6 +167,18 @@ jobs:
               handle.write(summary + "\n")
           PY
 
+  model-age:
+    # The daily liveness check of the model channel: red once a published model is more than
+    # 45 days old, whatever stopped the monthly training (its schedule switched off, data-lag
+    # or gate-failure issues left unanswered). Quiet until the first model is published.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - run: python tools/check_model_age.py
+
   lint:
     runs-on: ubuntu-latest
     steps:
@@ -179,3 +191,18 @@ jobs:
       - run: pip install ruff==0.16.5
       - run: ruff check .
       - run: ruff format --check .
+
+  keepalive:
+    # GitHub switches scheduled workflows off after 60 days without repository activity.
+    # Re-enabling this workflow at the end of every run keeps the daily schedule alive. Not on
+    # pull requests, whose token cannot write.
+    needs: [hassfest, hacs, tests, tests-training, tests-homeassistant, model-age, lint]
+    if: always() && github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    permissions:
+      actions: write
+    steps:
+      - name: Keep the schedule enabled
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh api -X PUT "repos/$GITHUB_REPOSITORY/actions/workflows/validate.yml/enable"

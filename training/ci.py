@@ -5,10 +5,15 @@ python -m training.ci --raw DIR --out DIR --cutoff YYYY-MM-DD
 
 Besides the training outputs (see ``training.train``) it writes to ``--out``:
 
-- ``gate.json``: the gate result, plus the candidate ``version`` and the gate ``month``;
+- ``gate.json``: the gate result, plus the candidate ``version``, the gate ``month`` and
+  ``already_published``;
 - ``release-notes.md``: the accuracy report and the gate table;
 - ``manifest.json``: the previous manifest with this zone's new entry, only if the gate passed;
 - ``issue.md``: the issue body, only if the gate failed.
+
+A published version is never replaced: if the previous manifest already lists this zone's
+version (a rerun in the same month), ``gate.json`` says ``already_published`` and none of the
+other three files is written.
 
 The gate month is the last full month before the cutoff. The previous files are optional
 (the first run has none). Exit 0 whether or not the gate passed, 2 on a data lag.
@@ -74,6 +79,13 @@ def _previous_manifest(path: Path | None) -> dict | None:
     return json.loads(path.read_text())
 
 
+def _published_version(manifest: dict | None, zone: str) -> str | None:
+    """The version the manifest lists for ``zone``, if any."""
+    if manifest is None:
+        return None
+    return manifest.get("zones", {}).get(zone, {}).get("version")
+
+
 def _parse(argv: list[str]) -> argparse.Namespace:
     ap = argparse.ArgumentParser(prog="python -m training.ci", description=__doc__)
     ap.add_argument("--raw", required=True, help="raw-data directory (fetch output)")
@@ -107,11 +119,32 @@ def run(argv: list[str], max_iter: int = 600) -> int:
 
     out: Path = args.out
     out.mkdir(parents=True, exist_ok=True)
-    gate_doc = {"version": result.version, "month": f"{month:%Y-%m}", **asdict(verdict)}
+    old_manifest = _previous_manifest(args.previous_manifest)
+    published = _published_version(old_manifest, result.model.zone)
+    already_published = published == result.version
+    gate_doc = {
+        "version": result.version,
+        "month": f"{month:%Y-%m}",
+        "already_published": already_published,
+        **asdict(verdict),
+    }
     (out / "gate.json").write_text(json.dumps(gate_doc, indent=2) + "\n")
+    notes_path, manifest_path, issue_path = (
+        out / "release-notes.md",
+        out / "manifest.json",
+        out / "issue.md",
+    )
+    if already_published:
+        for path in (notes_path, manifest_path, issue_path):
+            path.unlink(missing_ok=True)
+        print(
+            f"{result.version} is already published: a published version is never replaced, "
+            f"nothing to upload (gate {'passed' if verdict.passed else 'FAILED'}: "
+            f"{verdict.reason})"
+        )
+        return 0
     notes = result.report_path.read_text() + "\n" + gate.render_markdown(verdict, month)
-    (out / "release-notes.md").write_text(notes)
-    manifest_path, issue_path = out / "manifest.json", out / "issue.md"
+    notes_path.write_text(notes)
     if verdict.passed:
         entry = manifest_entry(
             result.model_path.read_bytes(),
@@ -119,9 +152,7 @@ def run(argv: list[str], max_iter: int = 600) -> int:
             result.model,
             MODELS_BASE_URL,
         )
-        manifest = merge_manifest(
-            _previous_manifest(args.previous_manifest), result.model.zone, entry
-        )
+        manifest = merge_manifest(old_manifest, result.model.zone, entry)
         manifest_path.write_text(json.dumps(manifest, indent=2) + "\n")
         issue_path.unlink(missing_ok=True)
     else:

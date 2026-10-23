@@ -73,6 +73,8 @@ jobs:
           if ! gh release view training-data >/dev/null 2>&1; then
             gh release create training-data --title "Training data" --latest=false --prerelease --notes "Raw inputs of the monthly model training, refreshed by the Train workflow: day-ahead prices and installed capacity from Energy-Charts (price data: Bundesnetzagentur | SMARD.de, CC BY 4.0) and weather forecasts from Open-Meteo (CC BY 4.0)."
           fi
+          # Also a release created by hand (the bootstrap): HACS must never offer it.
+          gh release edit training-data --prerelease --latest=false
           gh release upload training-data raw.tar.gz --clobber
 
       - name: Download the published manifest and model
@@ -91,6 +93,8 @@ jobs:
             404) echo "::notice::No models release yet: first run"; exit 0 ;;
             *) echo "::error::GitHub answered HTTP $code for the models release"; exit 1 ;;
           esac
+          # Also a release created by hand (the bootstrap): HACS must never offer it.
+          gh release edit models --prerelease --latest=false
           if ! jq -e '.assets | any(.name == "manifest.json")' "$RUNNER_TEMP/models.json" >/dev/null; then
             echo "::notice::The models release has no manifest.json: first run"
             exit 0
@@ -129,23 +133,34 @@ jobs:
       - name: Read the gate result
         id: gate
         if: steps.ci.outputs.rc == '0'
+        # already_published: a rerun in a month whose version the manifest already lists.
+        # A published version is never replaced, so nothing is uploaded or reported then.
         run: |
           passed=$(jq -r '.passed == true' out/gate.json)
+          already=$(jq -r '.already_published == true' out/gate.json)
           version=$(jq -r '.version' out/gate.json)
           if [ -f out/manifest.json ]; then manifest=true; else manifest=false; fi
-          if [ "$passed" = true ] && [ "$manifest" = false ]; then
+          if [ "$already" = true ]; then
+            echo "::notice::$version is already published and is never replaced: nothing uploaded"
+          elif [ "$passed" = true ] && [ "$manifest" = false ]; then
             echo "::error::The gate passed but training.ci wrote no manifest"
             exit 1
           fi
           {
             echo "passed=$passed"
+            echo "already_published=$already"
             echo "version=$version"
             echo "manifest=$manifest"
           } >> "$GITHUB_OUTPUT"
 
       - name: Publish the model
-        if: steps.gate.outputs.passed == 'true' && steps.gate.outputs.manifest == 'true'
-        # The manifest goes up last, so it never names an asset that is not there yet.
+        if: >-
+          steps.gate.outputs.passed == 'true'
+          && steps.gate.outputs.already_published != 'true'
+          && steps.gate.outputs.manifest == 'true'
+        # The versioned assets are immutable: uploaded without --clobber, so an existing name
+        # fails the step. The manifest goes up last, so it never names an asset that is not
+        # there yet. The release notes get the new report on top of the earlier ones.
         env:
           VERSION: ${{ steps.gate.outputs.version }}
           GH_TOKEN: ${{ github.token }}
@@ -153,16 +168,33 @@ jobs:
           if ! gh release view models >/dev/null 2>&1; then
             gh release create models --title "Models" --latest=false --prerelease --notes "Rolling release of the published models. manifest.json lists the current model of every zone."
           fi
-          gh release upload models "out/$VERSION.json.gz" "out/$VERSION.backfill.json.gz" "out/$VERSION.report.md" --clobber
+          gh release upload models "out/$VERSION.json.gz" "out/$VERSION.backfill.json.gz" "out/$VERSION.report.md"
           gh release upload models out/manifest.json --clobber
-          gh release edit models --notes-file out/release-notes.md
+          gh release view models --json body -q .body > "$RUNNER_TEMP/earlier-notes.md"
+          {
+            cat out/release-notes.md
+            printf '\n---\n\n'
+            cat "$RUNNER_TEMP/earlier-notes.md"
+          } > "$RUNNER_TEMP/notes.md"
+          gh release edit models --notes-file "$RUNNER_TEMP/notes.md"
 
       - name: Open an issue for the failed gate
-        if: steps.ci.outputs.rc == '0' && steps.gate.outputs.passed != 'true'
+        if: >-
+          steps.ci.outputs.rc == '0'
+          && steps.gate.outputs.passed != 'true'
+          && steps.gate.outputs.already_published != 'true'
         env:
           VERSION: ${{ steps.gate.outputs.version }}
           GH_TOKEN: ${{ github.token }}
-        run: gh issue create --title "Model training gate failed for $VERSION" --body-file out/issue.md
+        run: |
+          title="Model training gate failed for $VERSION"
+          open=$(gh issue list --state open --search "in:title \"$title\"" --json number,title \
+            | jq -r --arg t "$title" '[.[] | select(.title == $t) | .number] | first // empty')
+          if [ -n "$open" ]; then
+            echo "::notice::Issue #$open is still open for this: not opening another"
+            exit 0
+          fi
+          gh issue create --title "$title" --body-file out/issue.md
 
       - name: Open an issue for the data lag
         if: steps.ci.outputs.rc == '2'
@@ -180,4 +212,26 @@ jobs:
             echo
             echo "Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
           } > "$RUNNER_TEMP/data-lag.md"
-          gh issue create --title "Model training waiting for data" --body-file "$RUNNER_TEMP/data-lag.md"
+          title="Model training waiting for data"
+          open=$(gh issue list --state open --search "in:title \"$title\"" --json number,title \
+            | jq -r --arg t "$title" '[.[] | select(.title == $t) | .number] | first // empty')
+          if [ -n "$open" ]; then
+            echo "::notice::Issue #$open is still open for this: not opening another"
+            exit 0
+          fi
+          gh issue create --title "$title" --body-file "$RUNNER_TEMP/data-lag.md"
+
+  keepalive:
+    # GitHub switches scheduled workflows off after 60 days without repository activity.
+    # Re-enabling this workflow at the end of every run keeps the monthly schedule alive; the
+    # daily model-age check in validate.yml turns red if it stops anyway.
+    needs: train
+    if: always()
+    runs-on: ubuntu-latest
+    permissions:
+      actions: write
+    steps:
+      - name: Keep the schedule enabled
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh api -X PUT "repos/$GITHUB_REPOSITORY/actions/workflows/train.yml/enable"

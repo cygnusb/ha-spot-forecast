@@ -135,6 +135,7 @@ def test_ci_writes_manifest_only_on_pass(run_ci, trained, monkeypatch, tmp_path,
     gate = json.loads((out / "gate.json").read_text())
     assert gate["passed"] is passed
     assert (gate["version"], gate["month"]) == ("de_lu-2025-10", "2025-09")
+    assert gate["already_published"] is False
     # both models scored on the same September rows
     assert gate["candidate"]["rows"] == gate["previous"]["rows"] > 0
     assert gate["candidate"]["mae"] > 0 and gate["previous"]["mae"] > 0
@@ -154,6 +155,37 @@ def test_ci_writes_manifest_only_on_pass(run_ci, trained, monkeypatch, tmp_path,
         assert not (out / "manifest.json").exists()
         issue = (out / "issue.md").read_text()
         assert "forced by the test" in issue and "de_lu-2025-10" in issue
+
+
+@needs_raw
+@pytest.mark.parametrize("passed", [False, True])
+def test_ci_never_republishes_a_published_version(run_ci, monkeypatch, tmp_path, capsys, passed):
+    # A rerun in the same month: the manifest already lists this version.
+    previous_manifest = tmp_path / "manifest.json"
+    zones = {"de_lu": {"version": "de_lu-2025-10"}, "at": {"version": "at-2025-10"}}
+    previous_manifest.write_text(json.dumps({"format": 1, "updated": "x", "zones": zones}))
+    monkeypatch.setattr(
+        ci,
+        "evaluate_gate",
+        lambda candidate, previous, tolerance=1.0: GateResult(
+            passed, candidate, previous, "forced by the test"
+        ),
+    )
+    out = tmp_path / "out"
+    out.mkdir()
+    for stale in ("manifest.json", "release-notes.md", "issue.md"):
+        (out / stale).write_text("from an earlier run")
+
+    out, code = run_ci("--previous-manifest", str(previous_manifest))
+
+    assert code == 0
+    gate = json.loads((out / "gate.json").read_text())
+    assert gate["already_published"] is True
+    assert gate["passed"] is passed
+    assert gate["version"] == "de_lu-2025-10"
+    for name in ("manifest.json", "release-notes.md", "issue.md"):
+        assert not (out / name).exists(), name
+    assert "de_lu-2025-10 is already published" in capsys.readouterr().out
 
 
 @needs_raw

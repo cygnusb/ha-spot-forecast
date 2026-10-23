@@ -41,7 +41,7 @@ def _index(steps: list[dict], needle: str) -> int:
 def _commands(run: str, program: str) -> list[list[str]]:
     """Every command line in ``run`` that starts with ``program``, split into words."""
     out = []
-    for line in run.splitlines():
+    for line in run.replace("\\\n", " ").splitlines():
         words = shlex.split(line.strip(), comments=True)
         if words and words[0] == program:
             out.append(words)
@@ -56,6 +56,54 @@ def test_train_workflow_triggers_and_permissions():
     assert wf["permissions"] == {"contents": "write", "issues": "write"}
     assert wf["concurrency"]["group"] == "train"
     assert wf["env"]["FORCE_JAVASCRIPT_ACTIONS_TO_NODE24"] is True
+    assert "permissions" not in wf["jobs"]["train"]  # no actions: write for the training
+
+
+@pytest.mark.parametrize(
+    ("workflow", "needs"),
+    [
+        ("train.yml", "train"),
+        (
+            "validate.yml",
+            [
+                "hassfest",
+                "hacs",
+                "tests",
+                "tests-training",
+                "tests-homeassistant",
+                "model-age",
+                "lint",
+            ],
+        ),
+    ],
+)
+def test_workflows_keep_their_schedule_enabled(workflow, needs):
+    wf = _load(workflow)
+    keepalive = wf["jobs"]["keepalive"]
+    assert keepalive["permissions"] == {"actions": "write"}
+    assert keepalive["needs"] == needs
+    assert keepalive["if"].startswith("always()")
+    (step,) = keepalive["steps"]
+    assert step["run"] == (
+        f'gh api -X PUT "repos/$GITHUB_REPOSITORY/actions/workflows/{workflow}/enable"'
+    )
+    # every other job of the workflow runs before it
+    assert set(wf["jobs"]) - {"keepalive"} == set([needs] if isinstance(needs, str) else needs)
+
+
+def test_train_workflow_keeps_data_releases_out_of_hacs():
+    steps = _steps(_load("train.yml"), "train")
+    for tag in ("models", "training-data"):
+        create = [
+            c
+            for s in steps
+            for c in _commands(s.get("run", ""), "gh")
+            if c[:4] == ["gh", "release", "create", tag]
+        ]
+        assert len(create) == 1 and {"--prerelease", "--latest=false"} <= set(create[0])
+        # every run, also for a release created by hand
+        edit = _step(steps, f"gh release edit {tag} --prerelease --latest=false")
+        assert "if" not in edit
 
 
 def test_train_workflow_publishes_only_on_pass():
@@ -69,16 +117,46 @@ def test_train_workflow_publishes_only_on_pass():
     assert "steps.ci.outputs.rc == '0'" in gate["if"]
     assert "steps.gate.outputs.passed == 'true'" in publish["if"]
     assert "steps.gate.outputs.manifest == 'true'" in publish["if"]
+    assert "steps.gate.outputs.already_published != 'true'" in publish["if"]
     assert "steps.gate.outputs.passed != 'true'" in issue["if"]
+    assert "steps.gate.outputs.already_published != 'true'" in issue["if"]
     assert "steps.ci.outputs.rc == '0'" in issue["if"]
     assert "--body-file out/issue.md" in issue["run"]
-    assert "gh release edit models --notes-file out/release-notes.md" in publish["run"]
-    # The manifest goes up last: it must never name assets that are not there yet.
-    uploads = [c for c in _commands(publish["run"], "gh") if c[:3] == ["gh", "release", "upload"]]
-    assert len(uploads) == 2
-    assert "manifest.json" not in " ".join(uploads[0])
-    assert uploads[1] == ["gh", "release", "upload", "models", "out/manifest.json", "--clobber"]
+    assert "already_published" in gate["run"]
     assert _index(steps, "python -m training.ci") < _index(steps, "gh release upload models")
+
+
+def test_train_workflow_never_replaces_a_published_version():
+    publish = _step(_steps(_load("train.yml"), "train"), "gh release upload models")
+    commands = _commands(publish["run"], "gh")
+    uploads = [c for c in commands if c[:3] == ["gh", "release", "upload"]]
+    assert len(uploads) == 2
+    # the versioned assets: an existing name fails the step instead of being replaced
+    assert uploads[0][:4] == ["gh", "release", "upload", "models"]
+    assert [u.removeprefix("out/$VERSION") for u in uploads[0][4:]] == [
+        ".json.gz",
+        ".backfill.json.gz",
+        ".report.md",
+    ]
+    # the manifest goes up last: it must never name assets that are not there yet
+    assert uploads[1] == ["gh", "release", "upload", "models", "out/manifest.json", "--clobber"]
+    assert commands.index(uploads[1]) == len(commands) - 3  # then only the notes
+
+
+def test_train_workflow_prepends_the_report_to_the_release_notes():
+    publish = _step(_steps(_load("train.yml"), "train"), "gh release upload models")
+    run = publish["run"]
+    earlier = run.index("gh release view models --json body -q .body")
+    assert run.index("gh release upload models out/manifest.json") < earlier
+    assert earlier < run.index("cat out/release-notes.md") < run.index('cat "$RUNNER_TEMP/earlier')
+    assert run.rstrip().endswith('gh release edit models --notes-file "$RUNNER_TEMP/notes.md"')
+
+
+@pytest.mark.parametrize("title", ["Model training gate failed", "Model training waiting for data"])
+def test_train_workflow_opens_an_issue_only_once(title):
+    run = _step(_steps(_load("train.yml"), "train"), title)["run"]
+    assert run.index("gh issue list --state open --search") < run.index("gh issue create")
+    assert "select(.title == $t)" in run
 
 
 def test_train_workflow_opens_data_lag_issue():
@@ -127,6 +205,7 @@ def test_validate_workflow_has_matrix_floor_and_latest():
     assert _step(ha_steps, "pypi.org/pypi/homeassistant")["if"] == "matrix.check_latest"
     _step(jobs["tests"]["steps"], "pip install -r tests/requirements.txt")
     _step(jobs["lint"]["steps"], "pip install ruff==0.16.5")
+    _step(jobs["model-age"]["steps"], "python tools/check_model_age.py")
 
 
 def test_release_workflow_zips_after_model_fetch():
