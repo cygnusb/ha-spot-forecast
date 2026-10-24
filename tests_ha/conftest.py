@@ -46,7 +46,7 @@ from custom_components.spot_forecast.const import (
     DOMAIN,
     MANIFEST_URL,
 )
-from custom_components.spot_forecast.core.zones import DE_LU
+from custom_components.spot_forecast.core.zones import DE_LU, NL
 from custom_components.spot_forecast.sources import http
 
 pytest_plugins = "pytest_homeassistant_custom_component"
@@ -134,6 +134,15 @@ def _extended(doc: dict, through: date) -> dict:
     return {"unix_seconds": stamps, "price": prices}
 
 
+# NL's recordings (see fixtures/README.md), per point set in the order of ``NL.point_sets()``
+NL_PRICES = "energy_charts_price_nl.json"
+NL_WEATHER = (
+    ("open_meteo_nl_nb.json", "open_meteo_prev_nl_nb.json"),
+    ("open_meteo_nl_nl.json", "open_meteo_prev_nl_nl.json"),
+    ("open_meteo_nl_de.json", "open_meteo_prev_nl_de.json"),
+)
+
+
 class Sources:
     """Serves the recorded payloads, or errors, for Energy-Charts and Open-Meteo.
 
@@ -157,6 +166,7 @@ class Sources:
         self,
         prices: str = "energy_charts_price.json",
         *,
+        nl_prices: str = NL_PRICES,
         prices_status: int = 200,
         weather_status: int = 200,
         previous_runs_status: int = 200,
@@ -165,22 +175,26 @@ class Sources:
     ) -> None:
         """Replace all registered responses (and the call log).
 
-        ``price_overrides`` sets the price (EUR/MWh) of the quarter hours starting at the
-        given instants. ``through`` extends the prices past the recording to the end of
-        that local day (see ``_extended``). Prices are cut to the requested
-        ``start``/``end`` market days.
+        ``prices`` are DE-LU's, ``nl_prices`` NL's (by the request's ``bzn``); the NL
+        weather is served for its own point sets. ``price_overrides`` sets the price
+        (EUR/MWh) of the quarter hours starting at the given instants. ``through`` extends
+        the prices past the recording to the end of that local day (see ``_extended``).
+        Prices are cut to the requested ``start``/``end`` market days.
         """
         self._mock.clear_requests()
         if prices_status != 200:
             self._mock.get(EC_URL, status=prices_status)
         else:
-            doc = _with_history(self._recorded(prices))
-            if through is not None:
-                doc = _extended(doc, through)
-            for at, price in (price_overrides or {}).items():
-                doc["price"][doc["unix_seconds"].index(int(at.timestamp()))] = price
+            docs = {}
+            for zone, name in (("DE-LU", prices), ("NL", nl_prices)):
+                doc = docs[zone] = _with_history(self._recorded(name))
+                if through is not None:
+                    docs[zone] = doc = _extended(doc, through)
+                for at, price in (price_overrides or {}).items():
+                    doc["price"][doc["unix_seconds"].index(int(at.timestamp()))] = price
 
             async def respond(method, url, data):
+                doc = docs[url.query["bzn"]]
                 first, last = (date.fromisoformat(url.query[k]) for k in ("start", "end"))
                 lo = datetime.combine(first, time(), BERLIN).timestamp()
                 hi = datetime.combine(last + timedelta(days=1), time(), BERLIN).timestamp()
@@ -204,6 +218,11 @@ class Sources:
                 self._mock.get(
                     FORECAST_URL, params={"latitude": latitudes}, json=self._recorded(name)
                 )
+            for (points, _), (name, _) in zip(NL.point_sets(), NL_WEATHER, strict=True):
+                latitudes = ",".join(str(lat) for lat, _ in points.values())
+                self._mock.get(
+                    FORECAST_URL, params={"latitude": latitudes}, json=self._recorded(name)
+                )
         if previous_runs_status != 200:
             self._mock.get(PREVIOUS_RUNS_URL, status=previous_runs_status)
         else:
@@ -211,6 +230,11 @@ class Sources:
                 (DE_LU.points, "open_meteo_prev_de.json"),
                 (DE_LU.neighbor_points, "open_meteo_prev_nb.json"),
             ):
+                latitudes = ",".join(str(lat) for lat, _ in points.values())
+                self._mock.get(
+                    PREVIOUS_RUNS_URL, params={"latitude": latitudes}, json=self._recorded(name)
+                )
+            for (points, _), (_, name) in zip(NL.point_sets(), NL_WEATHER, strict=True):
                 latitudes = ",".join(str(lat) for lat, _ in points.values())
                 self._mock.get(
                     PREVIOUS_RUNS_URL, params={"latitude": latitudes}, json=self._recorded(name)
@@ -254,7 +278,8 @@ async def set_up(
     freezer: FrozenDateTimeFactory,
     tmp_path: Path,
 ) -> AsyncIterator[SetUp]:
-    """Set up a DE-LU entry at 2026-10-22 10:00; unloaded again after the test.
+    """Set up a DE-LU entry (or one of ``zone``) at 2026-10-22 10:00; unloaded again after
+    the test.
 
     Backfill and model updates are off unless ``options`` set ``CONF_BACKFILL_DAYS`` or
     ``CONF_AUTO_UPDATE``. With ``wait=False`` a started backfill is not waited for. The
@@ -266,14 +291,17 @@ async def set_up(
     entries: list[MockConfigEntry] = []
 
     async def _set_up(
-        options: dict[str, Any] | None = None, entry_id: str | None = None, wait: bool = True
+        options: dict[str, Any] | None = None,
+        entry_id: str | None = None,
+        wait: bool = True,
+        zone: str = "DE-LU",
     ) -> MockConfigEntry:
         entry = MockConfigEntry(
             domain=DOMAIN,
             entry_id=entry_id,
-            title="Spot Forecast DE-LU",
-            unique_id="DE-LU",
-            data={CONF_ZONE: "DE-LU"},
+            title=f"Spot Forecast {zone}",
+            unique_id=zone,
+            data={CONF_ZONE: zone},
             options={CONF_BACKFILL_DAYS: 0, CONF_AUTO_UPDATE: False, **(options or {})},
         )
         entry.add_to_hass(hass)

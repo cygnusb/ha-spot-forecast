@@ -22,11 +22,6 @@ FORECAST_DAYS = 8
 REQUEST_PAUSE = 3.0  # seconds between previous-runs requests
 
 
-def _point_sets(zone: Zone) -> list[tuple[dict[str, Point], tuple[str, ...]]]:
-    """The zone's own points with ``weather_vars``, then its neighbours with ``neighbor_vars``."""
-    return [(zone.points, zone.weather_vars), (zone.neighbor_points, zone.neighbor_vars)]
-
-
 def _locations(points: Mapping[str, Point]) -> dict[str, str]:
     """Multi-location query: the API answers with one document per point, in this order."""
     return {
@@ -59,11 +54,12 @@ async def fetch_forecast(
 ) -> dict[str, Hourly]:
     """``"{point}__{var}"`` hourly forecast series from today 00:00 GMT for ``FORECAST_DAYS``.
 
-    Two requests: the zone's points and its neighbour points, each with its variable set.
-    Bodies are decoded and parsed via ``run_blocking``.
+    One request per point set of the zone (``Zone.point_sets``: points of one variable
+    set; for DE-LU its own points, then its neighbours). Bodies are decoded and parsed via
+    ``run_blocking``.
     """
     out: dict[str, Hourly] = {}
-    for points, variables in _point_sets(zone):
+    for points, variables in zone.point_sets():
         body = await get_body(
             session,
             FORECAST_URL,
@@ -100,7 +96,7 @@ async def fetch_previous_runs(
     out: dict[int, dict[str, Hourly]] = {h: {} for h in HORIZONS}
     first = True
     for chunk_start, chunk_end in _month_chunks(start, end):
-        for points, variables in _point_sets(zone):
+        for points, variables in zone.point_sets():
             if not first:
                 await http.pause(REQUEST_PAUSE)
             first = False

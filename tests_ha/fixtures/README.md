@@ -66,6 +66,29 @@ hourly={wind_speed_100m,shortwave_radiation,temperature_2m,precipitation}_previo
 models=ecmwf_ifs025  start_date=2026-10-01  end_date=2026-10-22  timezone=GMT
 ```
 
+## NL
+
+Recorded with one live call each on 2026-10-23 at about 22:50 CEST (20:50 UTC), a day
+after the DE-LU recordings, for the NL tests (`test_zones.py`), which freeze to the same
+2026-10-22 10:00. NL has three Open-Meteo point sets (`core.zones.NL.point_sets()`):
+`nb` (neighbour variables: `nb_nl`, `nb_be`, `nb_fr_north`, `nb_dk_west`, `nb_no_south`),
+`nl` (`wind_speed_100m,temperature_2m,cloud_cover`: the five `nl_*` points) and `de`
+(DE-LU variables: `north_sea`, `ostfriesland`, `nrw`, `schleswig`).
+
+| File | Request | Content |
+|---|---|---|
+| `energy_charts_price_nl_tomorrow.json` | `GET https://api.energy-charts.info/price?bzn=NL&start=2026-10-19&end=2026-10-23` | unchanged response: 480 quarter-hour slots, 2026-10-19 00:00 to 2026-10-23 23:45 Europe/Amsterdam |
+| `energy_charts_price_nl.json` | same | the response above without the 96 slots of 2026-10-23 (local): 384 slots, the state before tomorrow's auction |
+| `open_meteo_nl_{nb,nl,de}.json` | `GET https://api.open-meteo.com/v1/forecast` with the point set's points and variables, `start_date=2026-10-22`, `end_date=2026-10-29` | unchanged responses: 5, 5 and 4 location documents, 2026-10-22T00:00 to 2026-10-29T23:00 GMT |
+| `open_meteo_prev_nl_{nb,nl,de}.json` | `GET https://previous-runs-api.open-meteo.com/v1/forecast` with the point set, `start_date=2026-10-01`, `end_date=2026-10-22` | unchanged responses, 2026-10-01T00:00 to 2026-10-22T23:00 GMT, all `{var}_previous_day{2..7}` columns |
+
+**Not as of 2026-10-22:** the forecasts were recorded a day later with an explicit
+`start_date=2026-10-22` instead of `forecast_days=8`, so they cover the same hours as the
+DE-LU ones; their 2026-10-22 values are what Open-Meteo had for that past day on the 23rd,
+not the forecast of the 22nd. Nothing was shifted or synthesized; the only edit is the
+removal of 2026-10-23 from `energy_charts_price_nl.json`. `conftest.Sources` serves the NL
+prices by the request's `bzn`, with the same tiled history as DE-LU's.
+
 ## Model
 
 `model/de_lu.json.gz` and `model/de_lu.backfill.json.gz` are copies of the bundled model
@@ -74,3 +97,10 @@ days 2026-04-04 … 2026-09-30), trained on 2026-10-23 with `python -m training.
 research/data/raw --out dist --cutoff 2026-10-01 --walk-forward-from 2025-04-01`. `conftest` points `model_loader.MODELS_DIR` at them for every
 test, so a refreshed model in `custom_components/spot_forecast/models/` does not move the
 dates the tests depend on.
+
+`model/nl.json.gz` and `model/nl.backfill.json.gz` are copies of the bundled model
+`nl-2026-10` (training cutoff 2026-10-01, feature schema 2, the `generic` layout) and its
+backfill file (target days 2026-04-04 … 2026-09-30, Europe/Amsterdam), trained on 2026-10-23
+with `python -m training.train --zone NL --raw <raw> --out dist --cutoff 2026-10-01
+--walk-forward-from 2025-04-01`, where `<raw>` held the NL prices and the 14 NL weather
+points of `research/data/zones/` in the training layout.

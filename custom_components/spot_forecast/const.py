@@ -16,7 +16,6 @@ MAX_BACKFILL_DAYS = 180
 DEFAULT_PEAK_THRESHOLD = 15.0  # ct/kWh, used only while no model is loaded
 DEFAULT_SURCHARGE = 0.0  # no total-price sensor
 MAX_SURCHARGE = 1.0  # EUR/kWh
-DEFAULT_VAT = 19.0  # percent, Germany
 MAX_VAT = 30.0  # percent
 
 MODEL_MAX_AGE_DAYS = 60
