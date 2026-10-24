@@ -1,6 +1,6 @@
 import pytest
 
-from core.zones import DE_LU, DK1, DK2, NL, POINTS, ZONES, point_vars, zone_by_slug
+from core.zones import DE_LU, DK1, DK2, NL, NO2, POINTS, ZONES, point_vars, zone_by_slug
 
 DE_VARS = ("wind_speed_100m", "shortwave_radiation", "temperature_2m", "cloud_cover")
 NB_VARS = ("wind_speed_100m", "shortwave_radiation", "temperature_2m", "precipitation")
@@ -80,11 +80,12 @@ def test_nl_matches_research():
 
 
 def test_zone_registry_and_slug():
-    assert ZONES == {"DE-LU": DE_LU, "NL": NL, "DK1": DK1, "DK2": DK2}
+    assert ZONES == {"DE-LU": DE_LU, "NL": NL, "DK1": DK1, "DK2": DK2, "NO2": NO2}
     assert next(iter(ZONES)) == "DE-LU"  # the config flow's default
     assert (DE_LU.slug, NL.slug, DK1.slug, DK2.slug) == ("de_lu", "nl", "dk1", "dk2")
     assert zone_by_slug("nl") is NL and zone_by_slug("de_lu") is DE_LU
     assert zone_by_slug("dk1") is DK1 and zone_by_slug("dk2") is DK2
+    assert NO2.slug == "no2" and zone_by_slug("no2") is NO2
     with pytest.raises(KeyError):
         zone_by_slug("at")
 
@@ -96,6 +97,7 @@ def test_names_and_vat_defaults():
     assert (NL.name, NL.default_vat) == ("Netherlands", 21.0)
     assert (DK1.name, DK1.default_vat, DK1.country) == ("Denmark West", 25.0, "DK")
     assert (DK2.name, DK2.default_vat, DK2.country) == ("Denmark East", 25.0, "DK")
+    assert (NO2.name, NO2.default_vat, NO2.country) == ("Southern Norway", 25.0, "NO")
 
 
 def test_dk1_matches_research():
@@ -193,3 +195,54 @@ def test_dk_point_sets_hold_every_parent_point(zone):
 @pytest.mark.parametrize("zone", list(ZONES.values()), ids=lambda z: z.code)
 def test_price_attribution_names_the_publisher(zone):
     assert "SMARD" in zone.price_attribution and "CC BY 4.0" in zone.price_attribution
+
+
+def test_no2_matches_research():
+    """research/zones/zonecfg.py ZONES["NO2"] verbatim, and bt.py variant "hydrel"."""
+    assert NO2.own == ("nb_no_south", "no2_kristiansand", "no2_stavanger", "no2_sirdal")
+    assert NO2.wind == ("no2_kristiansand", "no2_stavanger")
+    assert NO2.solar == ()
+    assert NO2.hydro == ("nb_no_south", "no2_sirdal", "no2_stavanger")
+    assert NO2.nb == ("nb_dk_west", "north_sea", "schleswig", "nb_nl", "no5_bergen", "no5_sogn",
+                      "no1_oslo", "no1_hallingdal")  # fmt: skip
+    assert NO2.nb_wind == ("nb_dk_west", "north_sea", "schleswig", "nb_nl")
+    assert NO2.nb_hydro == ("no5_sogn", "no1_hallingdal", "no5_bergen")
+    assert (NO2.tz, NO2.layout) == ("Europe/Oslo", "generic")
+    assert (NO2.hydro_extra, NO2.doy) == (True, False)
+    assert (NO2.raw_extra, NO2.de_extra, NO2.price_inputs, NO2.parent) == ((), False, (), None)
+
+
+def test_hydro_points_are_the_hydro_then_the_neighbour_hydro_points():
+    """genfeat ``_hydro_extra``: ``dict.fromkeys(cfg.hydro + cfg.nb_hydro)``."""
+    assert NO2.hydro_points == ("nb_no_south", "no2_sirdal", "no2_stavanger", "no5_sogn",
+                                "no1_hallingdal", "no5_bergen")  # fmt: skip
+    assert DK1.hydro_points == ("nb_no_south", "no2_sirdal")
+
+
+@pytest.mark.parametrize("zone", [DE_LU, NL, DK1, DK2], ids=lambda z: z.code)
+def test_other_zones_keep_doy_and_no_hydro_features(zone):
+    assert (zone.hydro_extra, zone.doy) == (False, True)
+
+
+def test_new_no2_points_match_research():
+    """research/zones/zonecfg.py NEW_POINTS: coordinates and variable sets."""
+    expected = {
+        "no2_kristiansand": ((58.20, 8.00), N_VARS),
+        "no2_stavanger": ((58.90, 5.80), N_VARS),
+        "no2_sirdal": ((58.90, 6.90), N_VARS),
+        "no5_sogn": ((61.20, 7.00), N_VARS),
+        "no1_hallingdal": ((60.60, 9.00), N_VARS),
+        "no5_bergen": ((60.40, 5.30), N_VARS),
+        "no1_oslo": ((59.90, 10.80), N_VARS),
+    }
+    assert {p: POINTS[p] for p in expected} == expected
+
+
+def test_no2_point_sets_group_by_variable_set():
+    """Own and neighbour points only: NO2 has no parent and no raw extra points."""
+    assert _groups(NO2) == [
+        (["nb_no_south", "nb_dk_west", "nb_nl"], NB_VARS),
+        (["no2_kristiansand", "no2_stavanger", "no2_sirdal", "no5_bergen", "no5_sogn",
+          "no1_oslo", "no1_hallingdal"], N_VARS),
+        (["north_sea", "schleswig"], DE_VARS),
+    ]  # fmt: skip

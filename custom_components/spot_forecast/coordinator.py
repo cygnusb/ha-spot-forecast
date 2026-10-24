@@ -44,7 +44,7 @@ from .core.zones import ZONES, Zone
 from .issues import async_check_model_age, async_delete_model_issue
 from .sources.energy_charts import fetch_price_inputs, fetch_prices
 from .sources.http import SourceError
-from .sources.open_meteo import fetch_forecast
+from .sources.open_meteo import check_hydro_history, fetch_forecast, fetch_hydro_history
 from .store import ForecastStore, StoredState
 
 UNLOAD_WAIT = 10  # seconds a run in flight may take to finish during unload
@@ -438,6 +438,8 @@ class SpotForecastCoordinator(DataUpdateCoordinator[SpotData]):
 
         Raises on missing data; fresh prices are kept in ``ledger`` even when the prices of
         a price input (DE-LU for DK1 and DK2), the weather or the forecast fail afterwards.
+        A zone with ``hydro_extra`` (NO2) also fetches the hydro history, and a hole in it
+        is a ``SourceError``, never a forecast from lowered sums.
         An unexpected error in the forecast itself is logged and returns False. True when a
         run was recorded.
         """
@@ -460,6 +462,10 @@ class SpotForecastCoordinator(DataUpdateCoordinator[SpotData]):
             run_blocking=run_blocking,
         )
         weather = await fetch_forecast(session, self.zone, run_blocking=run_blocking)
+        hydro = None
+        if self.zone.hydro_extra:
+            hydro = await fetch_hydro_history(session, self.zone, run_blocking=run_blocking)
+            check_hydro_history(hydro, anchor, self.zone)
         try:
             slots = await run_blocking(
                 run_forecast,
@@ -470,6 +476,7 @@ class SpotForecastCoordinator(DataUpdateCoordinator[SpotData]):
                 self.zone,
                 None,
                 extra_prices,
+                hydro,
             )
         except InsufficientHistory:
             raise

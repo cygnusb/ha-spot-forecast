@@ -56,6 +56,14 @@ POINTS: dict[str, tuple[Point, tuple[str, ...]]] = {
     "no2_sirdal": ((58.90, 6.90), N_VARS),  # hydro
     "se3_gothenburg": ((57.70, 12.00), N_VARS),
     "se4_malmo": ((55.60, 13.10), S_VARS),
+    # NO2
+    "no2_kristiansand": ((58.20, 8.00), N_VARS),
+    "no2_stavanger": ((58.90, 5.80), N_VARS),
+    # neighbours of NO2 (NO5 and NO1 hydro)
+    "no5_sogn": ((61.20, 7.00), N_VARS),
+    "no1_hallingdal": ((60.60, 9.00), N_VARS),
+    "no5_bergen": ((60.40, 5.30), N_VARS),
+    "no1_oslo": ((59.90, 10.80), N_VARS),
 }
 """Every weather point with its coordinates and its one variable set.
 
@@ -84,6 +92,11 @@ class Zone:
     (over DE-LU's own points, which must be among ``own`` + ``raw_extra``), and
     ``price_inputs`` names zones whose prices are features too (``("DE-LU",)`` only).
 
+    ``hydro_extra`` adds the hydro features of research/zones/genfeat.py ``_hydro_extra``:
+    trailing precipitation and temperature of ``hydro_points`` from the archived offset-2
+    forecasts, and their precipitation forecast over the six target days. ``doy=False``
+    drops the ``doy`` column (research/zones/bt.py variant ``hydnd``).
+
     A zone with a ``parent`` forecasts the blend ``blend`` x own + (1 - ``blend``) x parent:
     its model file embeds the parent zone's model (``core.model``).
     """
@@ -108,6 +121,8 @@ class Zone:
     price_inputs: tuple[str, ...] = ()  # zone codes
     parent: str | None = None  # zone code
     blend: float = 1.0  # weight of the own model, with a parent
+    hydro_extra: bool = False
+    doy: bool = True
     evening_hours: tuple[int, int] = (18, 21)
     scale_floor: float = 50.0
     scale_divisor: float = 100.0
@@ -126,6 +141,11 @@ class Zone:
     def neighbor_points(self) -> dict[str, Point]:
         """The neighbour points with their coordinates."""
         return {p: POINTS[p][0] for p in self.nb}
+
+    @property
+    def hydro_points(self) -> tuple[str, ...]:
+        """The points the ``hydro_extra`` features sum over: ``hydro``, then ``nb_hydro``."""
+        return tuple(dict.fromkeys(self.hydro + self.nb_hydro))
 
     @property
     def weather_vars(self) -> tuple[str, ...]:
@@ -241,7 +261,29 @@ DK2 = Zone(
     price_attribution=_SMARD,
 )  # fmt: skip
 
-ZONES: dict[str, Zone] = {z.code: z for z in (DE_LU, NL, DK1, DK2)}
+# research/zones/zonecfg.py ZONES["NO2"], with research/zones/bt.py variant "hydrel": the hydro
+# features, no ``doy``
+NO2 = Zone(
+    code="NO2",
+    name="Southern Norway",
+    tz="Europe/Oslo",
+    country="NO",
+    layout="generic",
+    default_vat=25.0,
+    own=("nb_no_south", "no2_kristiansand", "no2_stavanger", "no2_sirdal"),
+    nb=("nb_dk_west", "north_sea", "schleswig", "nb_nl", "no5_bergen", "no5_sogn", "no1_oslo",
+        "no1_hallingdal"),
+    wind=("no2_kristiansand", "no2_stavanger"),
+    solar=(),
+    nb_wind=("nb_dk_west", "north_sea", "schleswig", "nb_nl"),
+    nb_hydro=("no5_sogn", "no1_hallingdal", "no5_bergen"),
+    hydro=("nb_no_south", "no2_sirdal", "no2_stavanger"),
+    hydro_extra=True,
+    doy=False,
+    price_attribution=_SMARD,
+)  # fmt: skip
+
+ZONES: dict[str, Zone] = {z.code: z for z in (DE_LU, NL, DK1, DK2, NO2)}
 """Supported zones by code; the first is the config flow's default."""
 
 

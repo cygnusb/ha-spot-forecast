@@ -1,4 +1,5 @@
 from datetime import UTC, datetime, timedelta
+import json
 import os
 from pathlib import Path
 
@@ -13,6 +14,7 @@ from core.ingest import (
     parse_open_meteo,
     weather_by_horizon_from_previous_runs,
 )
+from core.zones import DE_LU, N_VARS, NB_VARS, NO2
 
 T0 = datetime(2026, 10, 22, tzinfo=UTC)
 RESEARCH = Path(
@@ -137,3 +139,65 @@ def test_ingest_matches_training_load_raw():
             np.testing.assert_array_equal(
                 s.window(s.start, len(s.values)), ref.window(s.start, len(s.values))
             )
+
+
+# ---------------------------------------------------------------- NO2 hydro history
+
+HA_FIXTURES = Path(__file__).resolve().parents[2] / "tests_ha" / "fixtures"
+_HYDRO_VARS = ("precipitation", "temperature_2m")
+
+
+def _hydro_history():
+    """The runtime hydro history: the recorded live ``past_days`` body, parsed as
+    ``sources.open_meteo.fetch_hydro_history`` does it."""
+    body = json.loads((HA_FIXTURES / "open_meteo_hydro_no2.json").read_text())
+    return parse_open_meteo(body, list(NO2.hydro_points), _HYDRO_VARS, "_previous_day2")
+
+
+def _same_hours(a, b):
+    first = max(a.start, b.start)
+    end = min(
+        a.start + len(a.values) * timedelta(hours=1), b.start + len(b.values) * timedelta(hours=1)
+    )
+    n = (end - first) // timedelta(hours=1)
+    return a.window(first, n), b.window(first, n)
+
+
+def test_runtime_hydro_history_equals_the_previous_runs_horizon_1_series():
+    """The ``past_days`` body against the ``_previous_day2`` columns of the previous-runs
+    recordings of the same points (2026-10-01 … 10-22): what training reads as ``weather[1]``."""
+
+    def prev(name, points, variables):
+        docs = json.loads((HA_FIXTURES / name).read_text())
+        return weather_by_horizon_from_previous_runs(docs, points, variables)[1]
+
+    n_points = [p for points, v in NO2.point_sets() if v == N_VARS for p in points]
+    reference = prev("open_meteo_prev_no2_n.json", n_points, N_VARS)
+    reference |= prev("open_meteo_prev_nb.json", list(DE_LU.nb), NB_VARS)
+    history = _hydro_history()
+    assert set(history) == {f"{p}__{v}" for p in NO2.hydro_points for v in _HYDRO_VARS}
+    for key, series in history.items():
+        live, archived = _same_hours(series, reference[key])
+        assert len(live) == 22 * 24 and not np.isnan(live).any(), key
+        np.testing.assert_array_equal(live, archived, err_msg=key)
+
+
+def test_runtime_hydro_history_equals_the_training_data():
+    """The same against the training raw files of the research data, over the 90 days the
+    recording shares with them (data to 2026-10-21)."""
+    if not (RESEARCH / "data" / "zones" / "weather").exists():
+        pytest.skip("research zone data missing")
+    weather = {}
+    for p in NO2.hydro_points:
+        base = RESEARCH / "data" / ("raw" if p.startswith("nb_") else "zones") / "weather"
+        files = sorted(f for f in base.glob(f"{p}_2026-*.json") if not f.name.startswith("."))
+        for f in files:
+            doc = json.loads(f.read_text())
+            for key, s in weather_by_horizon_from_previous_runs([doc], [p], ("precipitation",
+                    "temperature_2m"))[1].items():  # fmt: skip
+                weather[key] = merge_hourly(s, weather[key]) if key in weather else s
+    for key, series in _hydro_history().items():
+        live, archived = _same_hours(series, weather[key])
+        ok = ~np.isnan(archived)
+        assert ok.sum() >= 90 * 24, key
+        np.testing.assert_array_equal(live[ok], archived[ok], err_msg=key)

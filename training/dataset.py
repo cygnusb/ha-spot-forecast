@@ -162,7 +162,12 @@ def build_dataset(raw: RawData, first_anchor: date, last_anchor: date) -> Datase
     ):
         capacity = raw.capacity.get(f"{anchor:%Y-%m}", {})
         try:
-            fm = build_features(anchor, raw.prices, daily, weather, capacity, zone, extra)
+            # the hydro history is the offset-2 weather (research ``s1``); where its windows
+            # start before the data (the earliest anchors) the sums skip the missing hours,
+            # as research does
+            fm = build_features(
+                anchor, raw.prices, daily, weather, capacity, zone, extra, hydro_history=weather[1]
+            )
         except InsufficientHistory:
             continue
         price = np.array([raw.prices.at(t) for t in fm.times])

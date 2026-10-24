@@ -217,7 +217,7 @@ def test_a_bundled_zone_without_a_map_shape_fails_the_build(tmp_path, monkeypatc
 
 def test_zone_tables_match_the_bundled_models():
     """README's zone table: per bundled model its MAE D+1 … D+6 and skill over all horizons.
-    The NL, DK1 and DK2 sections of docs/accuracy.md: their reports per horizon."""
+    The NL, DK1, DK2 and NO2 sections of docs/accuracy.md: their reports per horizon."""
     readme = (REPO / "README.md").read_text(encoding="utf-8")
     section = readme.split("## Supported zones")[1].split("\n## ")[0]
     rows = {
@@ -239,6 +239,7 @@ def test_zone_tables_match_the_bundled_models():
         "nl": docs.split("## Netherlands (NL)")[1].split("\n## ")[0],
         "dk1": docs.split("### DK1")[1].split("\n### ")[0],
         "dk2": docs.split("### DK2")[1].split("\n## ")[0],
+        "no2": docs.split("## Southern Norway (NO2)")[1].split("\n## ")[0],
     }
     for slug, text in sections.items():
         horizons = models[slug]["metrics"]["horizons"]

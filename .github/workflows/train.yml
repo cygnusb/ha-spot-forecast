@@ -41,7 +41,8 @@ env:
 jobs:
   train:
     runs-on: ubuntu-latest
-    # four zones, about an hour each; the most a GitHub-hosted job may run
+    # five zones, estimated 2.5 hours of training (7 monthly refits and the final fit, 3
+    # quantiles each, 600 iterations) plus the fetch; the most a GitHub-hosted job may run
     timeout-minutes: 360
     permissions:
       contents: read

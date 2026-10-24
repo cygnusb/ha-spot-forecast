@@ -3,7 +3,7 @@
     "title": "Spot Forecast – Strompreis-Prognose für sechs Tage in Home Assistant",
     "description": "Eine kostenlose Home-Assistant-Integration, die den Day-Ahead-Strompreis für Deutschland und Luxemburg oder die Niederlande stündlich für die sechs Tage nach der veröffentlichten Auktion vorhersagt, mit einem Band für das Spitzenrisiko. Offene Daten, kein Konto, kein API-Schlüssel.",
     "og_title": "Spot Forecast für Home Assistant",
-    "og_description": "Day-Ahead-Strompreise für DE-LU, NL, DK1 und DK2, sechs Tage weiter als die Auktion, mit einem ehrlichen Band für das Spitzenrisiko."
+    "og_description": "Day-Ahead-Strompreise für DE-LU, NL, DK1, DK2 und NO2, sechs Tage weiter als die Auktion, mit einem ehrlichen Band für das Spitzenrisiko."
   },
   "nav": {
     "main_label": "Hauptnavigation",
@@ -17,7 +17,7 @@
   },
   "hero": {
     "title": "Strompreise, sechs Tage im Voraus.",
-    "lede": "Die Day-Ahead-Auktion reicht nur bis morgen. Spot Forecast ergänzt die sechs Tage danach, Stunde für Stunde, für die Zone DE-LU, NL, DK1 oder DK2, mit einem Band für das Spitzenrisiko, das zeigt, wie hoch ein Preis steigen kann. Alles läuft in Home Assistant, mit offenen Daten.",
+    "lede": "Die Day-Ahead-Auktion reicht nur bis morgen. Spot Forecast ergänzt die sechs Tage danach, Stunde für Stunde, für die Zone DE-LU, NL, DK1, DK2 oder NO2, mit einem Band für das Spitzenrisiko, das zeigt, wie hoch ein Preis steigen kann. Alles läuft in Home Assistant, mit offenen Daten.",
     "cta_install": "Über HACS installieren",
     "cta_accuracy": "Wie genau ist sie?",
     "facts": {
@@ -103,7 +103,8 @@
       "DE-LU": "Deutschland und Luxemburg",
       "NL": "Niederlande",
       "DK1": "Dänemark West",
-      "DK2": "Dänemark Ost"
+      "DK2": "Dänemark Ost",
+      "NO2": "Südnorwegen"
     },
     "table_note": "Außerhalb der Stichprobe, über den Walk-forward-Zeitraum des jeweiligen Modells. Das Preisniveau unterscheidet sich zwischen den Zonen: Vergleiche die Fehler einer Zone besser mit ihrem naiven Fehler in der Dokumentation als mit einer anderen Zone."
   },
@@ -179,7 +180,7 @@
     "title": "Offene Daten, mit Quellenangabe",
     "lede": "Die Preis- und Wetterquellen sind frei und brauchen keinen Schlüssel. Die Integration nennt sie in der Attribution des Sensors.",
     "prices_name": "Energy-Charts",
-    "prices": "Day-Ahead-Preise DE-LU, NL, DK1 und DK2. Energy-Charts des Fraunhofer ISE, Preisdaten von Bundesnetzagentur | SMARD.de, Lizenz CC BY 4.0.",
+    "prices": "Day-Ahead-Preise DE-LU, NL, DK1, DK2 und NO2. Energy-Charts des Fraunhofer ISE, Preisdaten von Bundesnetzagentur | SMARD.de, Lizenz CC BY 4.0.",
     "weather_name": "Open-Meteo",
     "weather": "Wetterprognosen des ECMWF-Modells IFS mit 0,25°. Open-Meteo, Lizenz CC BY 4.0, frei für nicht-kommerzielle Nutzung.",
     "map_name": "Natural Earth",

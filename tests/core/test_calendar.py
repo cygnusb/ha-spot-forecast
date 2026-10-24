@@ -44,6 +44,21 @@ def test_dk_edge_cases():
     assert date(2026, 6, 5) not in holidays("DK", 2026)  # Grundlovsdag: not in the package
 
 
+@pytest.mark.parametrize("year", range(2020, 2041))
+def test_no_matches_holidays_package_plus_the_eves(year):
+    """research/zones/genfeat.py ``offdays("NO", year)``: no Sundays, as package 0.107 lists."""
+    package = set(holidays_package.country_holidays("NO", years=year).keys())
+    assert holidays("NO", year) == frozenset(package | {date(year, 12, 24), date(year, 12, 31)})
+
+
+def test_no_edge_cases():
+    assert date(2026, 5, 17) in holidays("NO", 2026)  # Grunnlovsdag, a Sunday
+    assert date(2026, 4, 2) in holidays("NO", 2026)  # Skjærtorsdag
+    assert date(2026, 5, 1) in holidays("NO", 2026)
+    assert date(2026, 12, 24) in holidays("NO", 2026) and date(2026, 12, 31) in holidays("NO", 2026)
+    assert date(2026, 10, 25) not in holidays("NO", 2026)  # an ordinary Sunday
+
+
 def test_unknown_country_raises():
     with pytest.raises(KeyError):
         holidays("AT", 2026)
