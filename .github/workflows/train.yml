@@ -5,7 +5,9 @@ name: Train
 # release only if it passes the quality gate (training/gate.py). A failed gate or input data that
 # is not published yet opens an issue and publishes nothing for that zone; any other error fails
 # the run, which notifies the owner. One zone's failure never holds back another: the zones run
-# one after the other and their manifests chain (training/ci_zones.py).
+# one after the other and their manifests chain (training/ci_zones.py). The exception: DK1 and
+# DK2 blend with the DE-LU model trained in the same run, so they are skipped (as errors) when
+# the DE-LU training errors; a failed DE-LU gate does not stop them.
 #
 # Two jobs, so the token that can write never meets third-party code: `train` installs the
 # hash-locked training dependencies and runs the training with a read-only token; `publish`
@@ -39,8 +41,8 @@ env:
 jobs:
   train:
     runs-on: ubuntu-latest
-    # two zones, about an hour each
-    timeout-minutes: 240
+    # four zones, about an hour each; the most a GitHub-hosted job may run
+    timeout-minutes: 360
     permissions:
       contents: read
     outputs:

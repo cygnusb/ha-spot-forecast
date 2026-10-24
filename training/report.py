@@ -154,8 +154,8 @@ def _num(v: float | None) -> str:
     return "-" if v is None or math.isnan(v) else f"{v:.2f}"
 
 
-def render_markdown(version: str, metrics: dict) -> str:
-    """Markdown report in ct/kWh."""
+def render_markdown(version: str, metrics: dict, note: str = "") -> str:
+    """Markdown report in ct/kWh; ``note`` is a paragraph after the table's explanation."""
     head = (
         "| horizon | MAE | MAE last 3 mo | naive MAE | skill | peak MAE | peak bias "
         "| P90 exceeded | P10 undercut | neg. hours with P10 < 0 | rows |"
@@ -171,6 +171,7 @@ def render_markdown(version: str, metrics: dict) -> str:
         f"P90 / P10 calibrated with the rolling conformal offset ({CALIBRATION_DAYS} days). "
         "Prices in ct/kWh; *all* = mean over horizons.",
         "",
+        *([note, ""] if note else []),
         head,
         "|" + "---|" * (head.count("|") - 1),
     ]

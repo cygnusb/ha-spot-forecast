@@ -28,7 +28,7 @@ from zoneinfo import ZoneInfo
 import numpy as np
 
 from .calendar import holidays
-from .zones import DE_LU, POINTS, Zone, point_vars
+from .zones import DE_LU, POINTS, ZONES, Zone, point_vars
 
 FEATURE_SCHEMA = 2
 HORIZONS = range(1, 7)
@@ -109,6 +109,11 @@ def feature_names(zone: Zone) -> tuple[str, ...]:
 def uses_capacity(zone: Zone) -> bool:
     """Whether the zone's features include the installed capacity (DE-LU only)."""
     return bool(set(CAPACITY_NAMES) & set(feature_names(zone)))
+
+
+def needs_capacity(zone: Zone) -> bool:
+    """Whether the features of the zone, or of its parent zone, use the installed capacity."""
+    return uses_capacity(zone) or (zone.parent is not None and uses_capacity(ZONES[zone.parent]))
 
 
 def _radiation_points(zone: Zone) -> tuple[str, ...]:
