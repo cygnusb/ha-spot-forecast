@@ -27,8 +27,9 @@ def _arg(argv: list, name: str) -> str | None:
 
 @pytest.fixture
 def fake_ci(monkeypatch):
-    """``training.ci.run`` with a scripted outcome per zone code; records each zone's argv
-    and the manifest it was handed."""
+    """``training.ci.run`` with a scripted outcome per zone code (if not given
+    ``"published"``: nothing to upload or report); records each zone's argv and the manifest
+    it was handed."""
     outcomes: dict[str, str] = {}
     seen: dict[str, dict] = {}
 
@@ -38,7 +39,7 @@ def fake_ci(monkeypatch):
         prev = _arg(argv, "--previous-manifest")
         old = json.loads(Path(prev).read_text()) if prev else None
         seen[code] = {"argv": argv, "manifest": old}
-        outcome = outcomes[code]
+        outcome = outcomes.get(code, "published")
         if outcome == "error":
             raise ValueError("weather nrw__wind ends before the cutoff")
         if outcome == "lag":
