@@ -90,6 +90,8 @@ def dataset(zone, variant):
 REL = ("p_lastday", "p_lastweek", "D_mean", "D_min", "D_max", "D_mean30", "D_min7", "D_max7",
        "D_gq_evening14", "D_gq_q90_14")
 SPREAD = ("D_std", "D_std7")
+# desetprel: DE-LU price levels relative to the zone's own 7-day mean, in its scale units
+DE_REL = ("de_p_lastday", "de_p_lastweek", "de_D_mean", "de_D_mean7", "de_D_gq_evening14", "de_D_max")
 
 
 def relative(ds):
@@ -97,6 +99,10 @@ def relative(ds):
     X = ds["X"].copy()
     names = list(ds["names"])
     for n in REL:
+        if n in names:
+            i = names.index(n)
+            X[:, i] = (X[:, i] - ds["mean7"]) / ds["scale"]
+    for n in DE_REL:
         if n in names:
             i = names.index(n)
             X[:, i] = (X[:, i] - ds["mean7"]) / ds["scale"]
@@ -112,7 +118,7 @@ def main():
     zone, variant = sys.argv[1], sys.argv[2]
     max_iter = int(sys.argv[3]) if len(sys.argv) > 3 else 600
     t0 = time.time()
-    base_variant = {"rel": "base", "hydrel": "hydnd", "core_rel": "core"}.get(variant, variant)
+    base_variant = {"rel": "base", "hydrel": "hydnd", "core_rel": "core", "desetprel": "desetp"}.get(variant, variant)
     from core.features import FEATURE_SCHEMA
 
     if variant == "core_rel" and FEATURE_SCHEMA >= 2:
