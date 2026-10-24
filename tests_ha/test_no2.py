@@ -255,4 +255,10 @@ async def test_no2_backfill_skips_the_anchors_whose_hydro_history_has_a_hole(
         if run is not None:
             assert max(run.anchor + timedelta(days=s.h) for s in run.slots) < date(2026, 10, 1)
     assert "no hydro history for ['nb_no_south__temperature_2m']" in caplog.text
+    # visible without debug logging: how many anchors, and the first and last of them
+    warnings = [r.getMessage() for r in caplog.records if r.levelname == "WARNING"]
+    assert any(
+        "NO2 backfill skips 13 anchors (2026-09-25 … 2026-10-07): the Open-Meteo hydro history" in m
+        for m in warnings
+    ), warnings
     assert hass.states.get("sensor.spot_forecast_no2_backfill_status").state == "done"

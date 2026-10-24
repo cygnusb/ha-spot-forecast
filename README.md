@@ -50,8 +50,9 @@ month on GitHub and only evaluated on your device, with numpy.
    points and its neighbours' (DE-LU: 10 points in Germany and 12 in neighbouring
    countries; NL: 7 in and off the Netherlands and 7 around it; DK1 and DK2: 4–5 in
    Denmark, 7–8 around it and the 22 DE-LU points; NO2: 4 in southern Norway and 8 around
-   it, and the last 90 days' precipitation and temperature of six hydro points): wind at
-   100 m, solar radiation, temperature, cloud cover and precipitation. Weather carries most of the
+   it, and the precipitation of six hydro points over the last 90 days and their temperature
+   over the last 30): wind at 100 m, solar radiation, temperature, cloud cover and
+   precipitation. Weather carries most of the
    skill: without it the error stays close to the naive baseline's.
 3. **Three tree models.** Gradient-boosted trees predict, per hour, the
    expected price (median), a peak-risk value (P90) and a low-price value

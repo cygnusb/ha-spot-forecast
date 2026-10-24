@@ -19,7 +19,13 @@ from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.util import dt as dt_util
 
 from .const import PRICE_HISTORY_DAYS
-from .core.features import HORIZONS, Hourly, InsufficientHistory, hydro_history_gaps
+from .core.features import (
+    HORIZONS,
+    HYDRO_DAYS,
+    Hourly,
+    InsufficientHistory,
+    hydro_history_gaps,
+)
 from .core.forecast import run_forecast
 from .core.ingest import hourly_prices
 from .core.ledger import ISSUE_HOUR, Run, runs_from_backfill_file
@@ -122,6 +128,14 @@ async def run_backfill(
                 )
         except SourceError as err:
             return _stopped(err, BackfillResult(imported, 0, len(finalized)))
+        if hydro is not None:
+            holes = [a for a in anchors if hydro_history_gaps(hydro, a, zone)]
+            if holes:
+                _LOGGER.warning(
+                    "%s backfill skips %d anchors (%s … %s): the Open-Meteo hydro history "
+                    "misses hours of their %d days",
+                    zone.code, len(holes), holes[0], holes[-1], HYDRO_DAYS,
+                )  # fmt: skip
         runs = []
         for anchor in anchors:  # one job per anchor: a cancelled backfill stops promptly
             run = await hass.async_add_executor_job(
