@@ -354,3 +354,133 @@ def test_sample_check_rejects_huge_predictions(tiny_model_file):
     huge = replace(tiny_model_file.p10, baseline=1e3)
     with pytest.raises(ModelCorrupt, match="p10"):
         sample_check(replace(tiny_model_file, p10=huge))
+
+
+# ---------------------------------------------------------------- composite models (DK1, DK2)
+
+
+def _doc(m) -> dict:
+    return json.loads(gzip.decompress(dump_model(m)))
+
+
+def _encoded(doc: dict) -> bytes:
+    return gzip.compress(json.dumps(doc).encode())
+
+
+def test_composite_roundtrip(tiny_dk1_model_file, tiny_model_file):
+    m = load_model(dump_model(tiny_dk1_model_file))
+    assert (m.zone, m.blend, m.capacity) == ("dk1", 0.5, {})
+    assert m.parent is not None and m.parent.parent is None
+    assert (m.parent.zone, m.parent.version, m.parent.capacity) == (
+        "de_lu", tiny_model_file.version, tiny_model_file.capacity,
+    )  # fmt: skip
+    assert m.parent.p90_offsets == tiny_model_file.p90_offsets
+    X = _X(20)
+    np.testing.assert_array_equal(m.parent.median.predict(X), tiny_model_file.median.predict(X))
+    sample_check(m)
+    # the parent is the complete DE-LU document, which loads on its own as well
+    doc = _doc(tiny_dk1_model_file)
+    assert doc["parent"] == _doc(tiny_model_file) and doc["blend"] == 0.5
+    assert load_model(_encoded(doc["parent"])).version == tiny_model_file.version
+
+
+def test_models_without_parent_have_no_parent_fields(tiny_model_file, tiny_nl_model_file):
+    for m in (tiny_model_file, tiny_nl_model_file):
+        doc = _doc(m)
+        assert "parent" not in doc and "blend" not in doc
+        back = load_model(dump_model(m))
+        assert back.parent is None and back.blend == 1.0
+
+
+@pytest.mark.parametrize("slug", ["de_lu", "nl"])
+def test_bundled_models_dump_to_the_same_json(slug):
+    """Loading and dumping a model file of a zone without parent gives its JSON back.
+
+    The JSON, not the gzip bytes: the compressed stream depends on the zlib build.
+    """
+    from pathlib import Path
+
+    path = Path(model.__file__).parent.parent / "models" / f"{slug}.json.gz"
+    data = path.read_bytes()
+    assert gzip.decompress(dump_model(load_model(data))) == gzip.decompress(data)
+
+
+def _mismatch(data: bytes, match: str) -> None:
+    with pytest.raises(ModelMismatch, match=match) as err:
+        load_model(data)
+    assert not isinstance(err.value, ModelCorrupt)
+
+
+def test_composite_without_its_parent_is_a_mismatch(tiny_dk1_model_file):
+    doc = _doc(tiny_dk1_model_file)
+    del doc["parent"]
+    _mismatch(_encoded(doc), "lacks its DE-LU model")
+    _mismatch(dump_model(replace(tiny_dk1_model_file, parent=None)), "lacks its DE-LU model")
+
+
+def test_composite_with_a_parent_of_another_zone_is_a_mismatch(
+    tiny_dk1_model_file, tiny_nl_model_file
+):
+    _mismatch(dump_model(replace(tiny_dk1_model_file, parent=tiny_nl_model_file)), "'nl'")
+
+
+def test_composite_with_a_parent_of_another_schema_is_a_mismatch(
+    tiny_dk1_model_file, tiny_model_file
+):
+    parent = replace(tiny_model_file, feature_schema=FEATURE_SCHEMA + 1)
+    _mismatch(
+        dump_model(replace(tiny_dk1_model_file, parent=parent)), "parent model: feature schema"
+    )
+
+
+def test_composite_with_a_parent_of_other_features_is_a_mismatch(tiny_dk1_model_file):
+    doc = _doc(tiny_dk1_model_file)
+    doc["parent"]["features"] = doc["parent"]["features"][::-1]
+    _mismatch(_encoded(doc), "parent model: model feature list")
+
+
+def test_a_parent_on_a_zone_without_one_is_a_mismatch(tiny_model_file, tiny_nl_model_file):
+    _mismatch(dump_model(replace(tiny_nl_model_file, parent=tiny_model_file)), "no parent zone")
+    _mismatch(dump_model(replace(tiny_model_file, parent=tiny_model_file)), "no parent zone")
+
+
+def test_composite_parent_trees_are_checked(tiny_dk1_model_file):
+    def change(d):
+        p = d["parent"]["p90"]
+        p["left"][_first_internal(p)] = len(p["left"])
+
+    with pytest.raises(ModelCorrupt, match="parent model: p90: child index"):
+        load_model(_mutated(tiny_dk1_model_file, change))
+
+
+def test_composite_parent_node_cap_is_per_tree_set(tiny_dk1_model_file, monkeypatch):
+    n = max(len(t.feature) for m in (tiny_dk1_model_file, tiny_dk1_model_file.parent)
+            for t in (m.median, m.p90, m.p10))  # fmt: skip
+    monkeypatch.setattr(model, "MAX_NODES", n)
+    load_model(dump_model(tiny_dk1_model_file))  # each set within the cap, together above it
+    monkeypatch.setattr(model, "MAX_NODES", n - 1)
+    with pytest.raises(ModelCorrupt, match="nodes"):
+        load_model(dump_model(tiny_dk1_model_file))
+
+
+@pytest.mark.parametrize("blend", [-0.1, 1.5, "x", None], ids=str)
+def test_composite_blend_must_be_a_weight(tiny_dk1_model_file, blend):
+    doc = _doc(tiny_dk1_model_file)
+    doc["blend"] = blend
+    with pytest.raises(ModelCorrupt):
+        load_model(_encoded(doc))
+
+
+def test_composite_without_blend_is_corrupt(tiny_dk1_model_file):
+    doc = _doc(tiny_dk1_model_file)
+    del doc["blend"]
+    with pytest.raises(ModelCorrupt):
+        load_model(_encoded(doc))
+
+
+def test_sample_check_checks_the_parent(tiny_dk1_model_file):
+    parent = tiny_dk1_model_file.parent
+    bad = replace(parent, p10=replace(parent.p10, baseline=5e3))
+    m = load_model(dump_model(replace(tiny_dk1_model_file, parent=bad)))
+    with pytest.raises(ModelCorrupt, match="parent model: p10"):
+        sample_check(m)

@@ -19,7 +19,7 @@ from core.features import (
     decode,
     feature_names,
 )
-from core.zones import DE_LU, NL
+from core.zones import DE_LU, DK1, DK2, NL, point_vars
 
 GOLDEN_ANCHORS = [
     date(2025, 6, 15),
@@ -424,3 +424,190 @@ def test_nl_feature_values_match_research(research_nl, anchor):
         cols = [i for i, name in enumerate(names) if name not in ("p_lastday", "p_lastweek")]
     np.testing.assert_array_equal(fm.X[:, cols], expected[:, cols])
     assert np.isfinite(fm.X[:, names.index("wind_mean")]).all()
+
+
+# ---------------------------------------------------------------- DK1, DK2 (generic + DE-LU inputs)
+
+COPENHAGEN = ZoneInfo("Europe/Copenhagen")
+_DE_EXTRA = ("de_wind_power_idx", "de_solar_est_mean", "de_temp_mean", "de_wind_power_idx_day",
+             "de_solar_est_mean_day", "de_temp_mean_day")  # fmt: skip
+_DE_PRICE = ("de_p_lastday", "de_p_lastweek", "de_D_mean", "de_D_mean7", "de_D_gq_evening14",
+             "de_D_max")  # fmt: skip
+
+
+@pytest.mark.parametrize("zone", [DK1, DK2], ids=lambda z: z.code)
+def test_dk_feature_names(zone):
+    """The generic layout with the DE-LU own points' raw columns after the zone's own, then
+    the DE-LU aggregates and the DE-LU price features (research/zones/bt.py "desetp")."""
+    names = feature_names(zone)
+    generic = feature_names(replace(zone, raw_extra=(), de_extra=False, price_inputs=()))
+    own_raw = [f"{p}__{v}" for p in zone.own for v in point_vars(p)]
+    de_raw = [f"{p}__{v}" for p in DE_LU.own for v in point_vars(p)]
+    assert names[: 20 + len(own_raw)] == generic[: 20 + len(own_raw)]
+    assert names[20 + len(own_raw) : 20 + len(own_raw) + len(de_raw)] == tuple(de_raw)
+    assert names[20 + len(own_raw) + len(de_raw) :] == (
+        *generic[20 + len(own_raw) :], *_DE_EXTRA, *_DE_PRICE
+    )  # fmt: skip
+    assert len(names) == {"DK1": 102, "DK2": 98}[zone.code]
+
+
+def _shifted(prices: Hourly, factor: float, offset: float) -> Hourly:
+    return Hourly(prices.start, prices.values * factor + offset)
+
+
+def _dk_inputs(anchor: date):
+    """DK prices and DE-LU prices that differ, both naming their hour; no weather."""
+    de = _hour_index_prices(anchor, days=45)
+    dk = _shifted(de, 0.5, 7.0)
+    return dk, {"DE-LU": (de, daily_stats(de, DE_LU))}
+
+
+def test_dk_price_inputs_are_relative_to_the_own_7_day_mean():
+    anchor = date(2026, 6, 10)
+    dk, extra = _dk_inputs(anchor)
+    daily = daily_stats(dk, DK1)
+    fm = build_features(anchor, dk, daily, {}, {}, DK1, extra)
+    c = {n: i for i, n in enumerate(feature_names(DK1))}
+    de, de_daily = extra["DE-LU"]
+    a, i = daily.dates.index(anchor), de_daily.dates.index(anchor)
+    for name in ("mean", "mean7", "gq_evening14", "max"):
+        expected = (getattr(de_daily, name)[i] - fm.mean7) / fm.scale
+        assert (fm.X[:, c[f"de_D_{name}"]] == expected).all(), name
+    assert (fm.mean7 == daily.mean7[a]).all()  # the own zone's level, not DE-LU's
+    for lag, back in (("de_p_lastday", lambda h: h), ("de_p_lastweek", lambda h: 7)):
+        expected = [
+            de.at(t - timedelta(days=back(int(h)))) for t, h in zip(fm.times, fm.h, strict=True)
+        ]
+        np.testing.assert_allclose(decode(fm.X[:, c[lag]], fm), expected, rtol=1e-12)
+
+
+_DST_ANCHORS = [date(2026, 10, 24), date(2026, 10, 25), date(2026, 10, 26), date(2027, 3, 27),
+                date(2027, 3, 28), date(2027, 3, 29)]  # fmt: skip
+
+
+@pytest.mark.parametrize("anchor", _DST_ANCHORS, ids=str)
+def test_dk_de_price_lags_equal_the_de_lu_lags_across_dst(anchor):
+    """A DK row's DE-LU price lags are the lags of the DE-LU row of the same UTC hour."""
+    dk, extra = _dk_inputs(anchor)
+    de, de_daily = extra["DE-LU"]
+    fm = build_features(anchor, dk, daily_stats(dk, DK1), {}, {}, DK1, extra)
+    ref = build_features(anchor, de, de_daily, {}, {}, DE_LU)
+    assert fm.times == ref.times and (fm.h == ref.h).all()
+    c = {n: i for i, n in enumerate(feature_names(DK1))}
+    for lag in ("p_lastday", "p_lastweek"):
+        got = decode(fm.X[:, c[f"de_{lag}"]], fm)
+        expected = decode(ref.X[:, col(lag)], ref)
+        np.testing.assert_allclose(got, expected, rtol=1e-12, err_msg=lag)
+        assert not np.isnan(got).any()
+
+
+@pytest.mark.parametrize("extra", [None, {}, {"NL": None}], ids=["none", "empty", "other"])
+def test_dk_without_de_lu_prices_raises(extra):
+    anchor = date(2026, 6, 10)
+    dk, _ = _dk_inputs(anchor)
+    with pytest.raises(InsufficientHistory, match="DE-LU"):
+        build_features(anchor, dk, daily_stats(dk, DK2), {}, {}, DK2, extra)
+
+
+def test_dk_with_short_de_lu_prices_gives_nan_de_features():
+    """As research: DE-LU statistics the anchor day lacks are NaN features, not an error
+    (the forecast checks the DE-LU prices through the parent model, see core.forecast)."""
+    anchor = date(2026, 6, 10)
+    dk, extra = _dk_inputs(anchor)
+    de, _ = extra["DE-LU"]
+    short = Hourly(de.start, de.values[: 24 * 20])
+    fm = build_features(anchor, dk, daily_stats(dk, DK1), {}, {}, DK1,
+                        {"DE-LU": (short, daily_stats(short, DE_LU))})  # fmt: skip
+    c = {n: i for i, n in enumerate(feature_names(DK1))}
+    assert np.isnan(fm.X[:, [c[n] for n in _DE_PRICE]]).all()
+
+
+def test_de_lu_and_nl_ignore_extra_prices(golden):
+    case = golden[date(2025, 6, 15)]
+    fm = build(case)
+    de = {"DE-LU": (case.prices, daily_stats(case.prices, DE_LU))}
+    again = build_features(
+        case.anchor, case.prices, daily_stats(case.prices, DE_LU), case.weather, case.capacity,
+        DE_LU, de,
+    )  # fmt: skip
+    np.testing.assert_array_equal(fm.X, again.X)
+
+
+def test_dk_de_extra_aggregates_on_synthetic_inputs():
+    anchor = date(2026, 6, 10)
+    dk, extra = _dk_inputs(anchor)
+    keys = [f"{p}__{v}" for points, vs in DK1.point_sets() for p in points for v in vs]
+    series = Hourly(dk.start, np.full(len(dk.values) + 24 * 8, 10.0))
+    weather = {h: dict.fromkeys(keys, series) for h in range(1, 7)}
+    fm = build_features(anchor, dk, daily_stats(dk, DK1), weather, {}, DK1, extra)
+    c = {n: i for i, n in enumerate(feature_names(DK1))}
+    assert (fm.X[:, c["de_temp_mean"]] == 10.0).all()
+    assert (fm.X[:, c["de_temp_mean_day"]] == 10.0).all()
+    assert (fm.X[:, c["de_wind_power_idx"]] == fm.X[:, c["wind_power_idx"]]).all()
+    assert (fm.X[:, c["bayern__temperature_2m"]] == 10.0).all()
+    assert fm.X[fm.h == 1, c["de_solar_est_mean"]].max() > 0  # June daylight
+
+
+@pytest.fixture(scope="module", params=["DK1", "DK2"])
+def research_dk(request):
+    """research/zones genfeat and bt with variant "desetp" of the zone, and its real inputs."""
+    if not (RESEARCH / "data" / "zones" / "weather").exists():
+        pytest.skip("research zone data missing")
+    pytest.importorskip("holidays")
+    pytest.importorskip("sklearn")
+    saved = list(sys.path)
+    sys.path.insert(0, str(RESEARCH / "zones"))
+    try:
+        import bt
+        import genfeat
+    finally:
+        sys.path[:] = saved
+    code = request.param
+    de = genfeat.ZONES["DE-LU"]
+    base = genfeat.ZONES[code]
+    # bt.py ``dataset(zone, "desetp")``
+    cfg = replace(base, extra={"raw_extra": tuple(p for p in de.points if p not in base.points),
+                               "de_price": True})  # fmt: skip
+    dp = genfeat.load_prices("DE-LU")
+    berlin = SimpleNamespace(tz="Europe/Berlin", evening_hours=(18, 21))
+    return SimpleNamespace(
+        genfeat=genfeat,
+        bt=bt,
+        cfg=cfg,
+        zone={"DK1": DK1, "DK2": DK2}[code],
+        prices=genfeat.load_prices(code),
+        weather=genfeat.load_weather(cfg, de_extra=True),
+        de=(dp, genfeat.daily_stats(dp, berlin)),
+    )
+
+
+def test_dk_feature_names_match_research(research_dk):
+    r = research_dk
+    assert feature_names(r.zone) == r.genfeat.feature_names(r.cfg, de_extra=True)
+
+
+@pytest.mark.parametrize("anchor", _FAR_FROM_DST + _NEAR_DST, ids=str)
+def test_dk_feature_values_match_research(research_dk, anchor):
+    """genfeat ``build_features`` (variant "desetp") + bt ``relative`` on the real data, to the
+    last bit; the four lag columns only away from the DST switches (research lags are UTC)."""
+    r = research_dk
+    names = r.genfeat.feature_names(r.cfg, de_extra=True)
+    daily = r.genfeat.daily_stats(r.prices, SimpleNamespace(tz=r.cfg.tz, evening_hours=(18, 21)))
+    rows = r.genfeat.build_features(anchor, r.prices, daily, r.weather, r.cfg, names, False, r.de)
+    n = len(rows.X)
+    ds = {"X": rows.X, "names": names, "mean7": np.full(n, rows.mean7)}
+    expected = r.bt.relative({**ds, "scale": np.full(n, rows.scale)})["X"]
+    de_prices = r.de[0]
+    extra = {"DE-LU": (de_prices, daily_stats(de_prices, DE_LU))}
+    fm = build_features(
+        anchor, r.prices, daily_stats(r.prices, r.zone), r.weather, {}, r.zone, extra
+    )
+    assert fm.times == rows.times
+    assert (fm.mean7 == rows.mean7).all() and (fm.scale == rows.scale).all()
+    cols = list(range(len(names)))
+    if anchor in _NEAR_DST:
+        lags = ("p_lastday", "p_lastweek", "de_p_lastday", "de_p_lastweek")
+        cols = [i for i, name in enumerate(names) if name not in lags]
+    np.testing.assert_array_equal(fm.X[:, cols], expected[:, cols])
+    assert np.isfinite(fm.X[:, names.index("wind_mean")]).all()
+    assert np.isfinite(fm.X[:, names.index("de_D_mean")]).all()

@@ -33,6 +33,19 @@ async def async_get_config_entry_diagnostics(
             "source": coordinator.model_source,
             "train_cutoff": model.train_cutoff.isoformat(),
             "created": model.created.isoformat(),
+            # a composite model (DK1, DK2): the embedded model it blends with
+            **(
+                {}
+                if model.parent is None
+                else {
+                    "parent": {
+                        "version": model.parent.version,
+                        "train_cutoff": model.parent.train_cutoff.isoformat(),
+                        "created": model.parent.created.isoformat(),
+                    },
+                    "blend": model.blend,
+                }
+            ),
         },
         "last_success": None if data.last_success is None else data.last_success.isoformat(),
         "stale": data.stale,

@@ -95,7 +95,7 @@ def test_training_installs_the_hash_locked_requirements():
 @pytest.mark.parametrize("workflow", ["train.yml", "validate.yml", "release.yml", "pages.yml"])
 def test_every_job_has_a_timeout(workflow):
     for name, job in _load(workflow)["jobs"].items():
-        expected = 240 if (workflow, name) == ("train.yml", "train") else 30
+        expected = 360 if (workflow, name) == ("train.yml", "train") else 30
         assert job.get("timeout-minutes") == expected, name
 
 

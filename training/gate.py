@@ -41,13 +41,23 @@ def month_metrics(p: Predictions, month_start: date) -> dict:
 def previous_model_predictions(model: ModelFile, ds: Dataset, month_start: date) -> Predictions:
     """The dataset rows with a target day in the month, predicted by ``model``.
 
-    Out of sample only if ``model.train_cutoff`` <= ``month_start``; the caller checks that.
+    A composite model predicts the parent zone's rows (``Dataset.X_parent``) with its parent
+    model and blends, as the integration does. Out of sample only if ``model.train_cutoff``
+    <= ``month_start``; the caller checks that.
     """
     rows = ds.subset(_in_month(ds.target_date, month_start))
-    # decode reads only scale and mean7, which the Dataset carries per row like FeatureMatrix
-    median, p90, p10 = (
-        decode(t.predict(rows.X), rows) for t in (model.median, model.p90, model.p10)
-    )
+
+    def predict(m: ModelFile, r: Dataset) -> list[np.ndarray]:
+        # decode reads only scale and mean7, which the Dataset carries per row like FeatureMatrix
+        return [decode(t.predict(r.X), r) for t in (m.median, m.p90, m.p10)]
+
+    median, p90, p10 = predict(model, rows)
+    if model.parent is not None:
+        b = model.blend
+        from_parent = predict(model.parent, rows.parent_rows())
+        median, p90, p10 = (
+            b * o + (1 - b) * p for o, p in zip((median, p90, p10), from_parent, strict=True)
+        )
     return Predictions(
         times=rows.times,
         h=rows.h,

@@ -25,7 +25,7 @@ from .core.ingest import hourly_prices
 from .core.ledger import ISSUE_HOUR, Run, runs_from_backfill_file
 from .core.model import ModelFile
 from .core.zones import Zone
-from .sources.energy_charts import fetch_prices
+from .sources.energy_charts import fetch_price_inputs, fetch_prices
 from .sources.http import SourceError
 from .sources.open_meteo import fetch_previous_runs
 
@@ -79,13 +79,13 @@ async def run_backfill(
         zone.tz,
     )
     run_blocking = hass.async_add_executor_job
+    price_start = min(first, start - (_MAX_H + PRICE_HISTORY_DAYS) * _DAY)
     try:
         market = await fetch_prices(
-            session,
-            zone.code,
-            min(first, start - (_MAX_H + PRICE_HISTORY_DAYS) * _DAY),
-            today,
-            run_blocking=run_blocking,
+            session, zone.code, price_start, today, run_blocking=run_blocking
+        )
+        extra_prices = await fetch_price_inputs(
+            session, zone, price_start, today, run_blocking=run_blocking
         )
     except SourceError as err:
         return _stopped(err, BackfillResult(0, 0, 0))
@@ -113,7 +113,7 @@ async def run_backfill(
         runs = []
         for anchor in anchors:  # one job per anchor: a cancelled backfill stops promptly
             run = await hass.async_add_executor_job(
-                _recompute, model, zone, anchor, prices, weather, start
+                _recompute, model, zone, anchor, prices, weather, start, extra_prices
             )
             if run is not None:
                 runs.append(run)
@@ -140,16 +140,20 @@ def _recompute(
     prices: Hourly,
     weather: Mapping[int, Mapping[str, Hourly]],
     first_target: date,
+    extra_prices: Mapping[str, Hourly] | None = None,
 ) -> Run | None:
     """The backfill run of ``anchor`` with the target days from ``first_target`` on (blocking).
 
-    None when the anchor cannot be forecast: too short prices, or a bug in the forecast,
-    which is logged and skips only this anchor (as a live run keeps the last forecast).
+    None when the anchor cannot be forecast: too short prices (its own or those of a price
+    input), or a bug in the forecast, which is logged and skips only this anchor (as a live
+    run keeps the last forecast).
     """
     tz = ZoneInfo(zone.tz)
-    known = _until(prices, _midnight(anchor + _DAY, tz))  # what was published by then
+    end = _midnight(anchor + _DAY, tz)
+    known = _until(prices, end)  # what was published by then
+    extra = {code: _until(s, end) for code, s in (extra_prices or {}).items()}
     try:
-        slots = run_forecast(model, anchor, known, weather, zone)
+        slots = run_forecast(model, anchor, known, weather, zone, None, extra)
     except InsufficientHistory as err:  # IncompleteAnchorDay included
         _LOGGER.debug("Backfill skips anchor %s: %s", anchor, err)
         return None

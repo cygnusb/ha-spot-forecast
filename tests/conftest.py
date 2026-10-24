@@ -169,3 +169,27 @@ def tiny_nl_model_file(tiny_model_file):
         p10=make_random_trees(5, 4, n, seed=22),
         capacity={},
     )
+
+
+@pytest.fixture(scope="session")
+def tiny_dk1_model_file(tiny_model_file):
+    """A composite DK1 model: trees over the DK1 layout, ``tiny_model_file`` as its DE-LU
+    parent, blended 50/50."""
+    from dataclasses import replace
+
+    from core.features import feature_names
+    from core.zones import DK1
+
+    n = len(feature_names(DK1))
+    return replace(
+        tiny_model_file,
+        zone="dk1",
+        version="dk1-2026-11",
+        features=feature_names(DK1),
+        median=make_random_trees(5, 4, n, seed=30),
+        p90=make_random_trees(5, 4, n, seed=31),
+        p10=make_random_trees(5, 4, n, seed=32),
+        capacity={},
+        parent=tiny_model_file,
+        blend=0.5,
+    )

@@ -9,6 +9,15 @@ python -m training.ci_zones --raw DIR --out DIR --cutoff YYYY-MM-DD [--previous 
 that passed, else the downloaded one, so every zone's entry lands and the others' stay as
 they were. A zone that fails its gate, waits for data or errors never stops the next one.
 
+The zones run in ``ZONES`` order, so a parent zone (DE-LU) trains before the zones that blend
+with it (DK1, DK2). Those get the parent's candidate model of this run and its walk-forward
+predictions from ``--out``/<parent slug>/ (``--parent-model``, ``--parent-predictions``):
+the parent's model is what their model files embed, whether or not the parent's own gate
+passed (a failed parent gate keeps the published parent model for the parent zone, but a
+child zone's install only ever blends with the model inside the child's file). When the
+parent's training produced no candidate, the child zones are skipped that month and their
+published models stay: as errors if the parent errored, as lagged if it waits for data.
+
 Besides the per-zone outputs it writes to ``--out``:
 
 - ``manifest.json``: the last manifest a zone wrote, only if a zone passed;
@@ -45,8 +54,11 @@ def _parse(argv: list[str]) -> argparse.Namespace:
     return ap.parse_args(argv)
 
 
-def _zone_argv(args: argparse.Namespace, code: str, out: Path, manifest: Path | None) -> list:
+def _zone_argv(
+    args: argparse.Namespace, code: str, out: Path, manifest: Path | None, parent: list
+) -> list:
     argv = ["--raw", args.raw, "--out", str(out), "--cutoff", args.cutoff, "--zone", code]
+    argv += parent
     if manifest is not None:
         argv += ["--previous-manifest", str(manifest)]
     if args.previous is not None:
@@ -59,6 +71,19 @@ def _zone_argv(args: argparse.Namespace, code: str, out: Path, manifest: Path | 
     return argv
 
 
+def _parent_files(out: Path, code: str, entry: dict) -> tuple[Path, Path] | None:
+    """The candidate model and walk-forward predictions the parent zone's run wrote, or
+    None if it wrote none (it errored or waits for data)."""
+    if entry.get("rc") != 0:
+        return None
+    zone_out = out / ZONES[code].slug
+    files = (
+        zone_out / f"{entry['version']}.json.gz",
+        zone_out / f"{entry['version']}.predictions.json.gz",
+    )
+    return files if all(f.exists() for f in files) else None
+
+
 def run(argv: list[str], max_iter: int = 600, today: date | None = None) -> int:
     args = _parse(argv)
     downloaded = args.previous / "manifest.json" if args.previous is not None else None
@@ -67,9 +92,22 @@ def run(argv: list[str], max_iter: int = 600, today: date | None = None) -> int:
     summary: dict = {"zones": zones, "passed": [], "failed": [], "lagged": [], "errors": []}
     for code, zone in ZONES.items():
         out = args.out / zone.slug
+        parent: list = []
+        if zone.parent is not None:
+            parent_entry = zones.get(ZONES[zone.parent].slug, {})
+            files = _parent_files(args.out, zone.parent, parent_entry)
+            if files is None:
+                rc = 2 if parent_entry.get("rc") == 2 else 1
+                why = "waits for data" if rc == 2 else "produced no model"
+                print(f"{code}: skipped, the training of its parent zone {zone.parent} {why}",
+                      file=sys.stderr)  # fmt: skip
+                zones[zone.slug] = {"rc": rc, "skipped": f"parent {zone.parent}"}
+                summary["lagged" if rc == 2 else "errors"].append(code)
+                continue
+            parent = ["--parent-model", str(files[0]), "--parent-predictions", str(files[1])]
         print(f"::group::{code}", flush=True)
         try:
-            rc = ci.run(_zone_argv(args, code, out, manifest), max_iter, today)
+            rc = ci.run(_zone_argv(args, code, out, manifest, parent), max_iter, today)
         except Exception:  # noqa: BLE001 - one zone's error never stops the others
             traceback.print_exc()
             rc = 1

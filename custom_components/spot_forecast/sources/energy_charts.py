@@ -7,7 +7,9 @@ from datetime import date
 import aiohttp
 
 from ..const import MAX_PRICES_BYTES
-from ..core.ingest import MarketSlot, parse_energy_charts
+from ..core.features import Hourly
+from ..core.ingest import MarketSlot, hourly_prices, parse_energy_charts
+from ..core.zones import Zone
 from .http import RunBlocking, SourceError, decode_json, get_body
 
 PRICE_URL = "https://api.energy-charts.info/price"
@@ -33,6 +35,23 @@ async def fetch_prices(
         MAX_PRICES_BYTES,
     )
     return await run_blocking(_parse, body)
+
+
+async def fetch_price_inputs(
+    session: aiohttp.ClientSession,
+    zone: Zone,
+    start: date,
+    end: date,
+    *,
+    run_blocking: RunBlocking,
+) -> dict[str, Hourly]:
+    """The hourly prices (EUR/MWh) of the zones in ``zone.price_inputs``, by zone code, for
+    the market days ``start`` through ``end``; one request each, one after the other."""
+    out: dict[str, Hourly] = {}
+    for code in zone.price_inputs:
+        market = await fetch_prices(session, code, start, end, run_blocking=run_blocking)
+        out[code] = await run_blocking(hourly_prices, market)
+    return out
 
 
 def _parse(body: bytes) -> list[MarketSlot]:

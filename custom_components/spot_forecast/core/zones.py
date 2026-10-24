@@ -9,6 +9,7 @@ Point = tuple[float, float]
 DE_VARS = ("wind_speed_100m", "shortwave_radiation", "temperature_2m", "cloud_cover")
 NB_VARS = ("wind_speed_100m", "shortwave_radiation", "temperature_2m", "precipitation")
 S_VARS = ("wind_speed_100m", "temperature_2m", "cloud_cover")
+N_VARS = ("wind_speed_100m", "temperature_2m", "precipitation")
 
 POINTS: dict[str, tuple[Point, tuple[str, ...]]] = {
     # DE-LU
@@ -41,6 +42,20 @@ POINTS: dict[str, tuple[Point, tuple[str, ...]]] = {
     "nl_groningen": ((53.30, 6.70), S_VARS),  # wind + solar
     "nl_randstad": ((52.00, 4.40), S_VARS),  # demand + solar
     "nl_brabant": ((51.50, 5.40), S_VARS),  # solar + demand
+    # DK1
+    "dk1_horns_rev": ((55.50, 7.80), S_VARS),  # offshore
+    "dk1_north_jutland": ((57.20, 9.90), S_VARS),
+    "dk1_aarhus": ((56.20, 10.10), S_VARS),
+    "dk1_south_jutland": ((55.30, 9.20), S_VARS),
+    # DK2
+    "dk2_copenhagen": ((55.70, 12.40), S_VARS),
+    "dk2_kriegers_flak": ((55.00, 12.90), S_VARS),  # offshore
+    "dk2_lolland": ((54.80, 11.40), S_VARS),
+    "dk2_bornholm": ((55.10, 14.90), S_VARS),
+    # neighbours of DK1 and DK2
+    "no2_sirdal": ((58.90, 6.90), N_VARS),  # hydro
+    "se3_gothenburg": ((57.70, 12.00), N_VARS),
+    "se4_malmo": ((55.60, 13.10), S_VARS),
 }
 """Every weather point with its coordinates and its one variable set.
 
@@ -63,6 +78,14 @@ class Zone:
     research backtest, ``"generic"`` the zone-generic one of research/zones/genfeat.py.
     The roles name the points their aggregates average over; ``nb_nordic`` is used by the
     ``"de_lu"`` layout only, ``hydro`` by the ``"generic"`` one only.
+
+    The generic layout's research options: ``raw_extra`` adds the raw columns of more points
+    after the own points' ones, ``de_extra`` the DE-LU wind, solar and temperature aggregates
+    (over DE-LU's own points, which must be among ``own`` + ``raw_extra``), and
+    ``price_inputs`` names zones whose prices are features too (``("DE-LU",)`` only).
+
+    A zone with a ``parent`` forecasts the blend ``blend`` x own + (1 - ``blend``) x parent:
+    its model file embeds the parent zone's model (``core.model``).
     """
 
     code: str
@@ -80,6 +103,11 @@ class Zone:
     price_attribution: str  # who publishes the zone's day-ahead prices, and the licence
     hydro: tuple[str, ...] = ()
     nb_nordic: tuple[str, ...] = ()
+    raw_extra: tuple[str, ...] = ()
+    de_extra: bool = False
+    price_inputs: tuple[str, ...] = ()  # zone codes
+    parent: str | None = None  # zone code
+    blend: float = 1.0  # weight of the own model, with a parent
     evening_hours: tuple[int, int] = (18, 21)
     scale_floor: float = 50.0
     scale_divisor: float = 100.0
@@ -110,12 +138,17 @@ class Zone:
         return tuple(dict.fromkeys(v for p in self.nb for v in point_vars(p)))
 
     def point_sets(self) -> list[tuple[dict[str, Point], tuple[str, ...]]]:
-        """Own and neighbour points grouped by variable set, in first-appearance order.
+        """Every point a forecast of the zone reads, grouped by variable set, in
+        first-appearance order: own, neighbour and ``raw_extra`` points, then the parent's.
 
         One Open-Meteo request each. For DE-LU: the own points, then the neighbours.
         """
+        names = self.own + self.nb + self.raw_extra
+        if self.parent is not None:
+            parent = ZONES[self.parent]
+            names += parent.own + parent.nb
         groups: dict[tuple[str, ...], dict[str, Point]] = {}
-        for p in dict.fromkeys(self.own + self.nb):
+        for p in dict.fromkeys(names):
             groups.setdefault(point_vars(p), {})[p] = POINTS[p][0]
         return [(points, variables) for variables, points in groups.items()]
 
@@ -159,7 +192,56 @@ NL = Zone(
     price_attribution=_SMARD,
 )  # fmt: skip
 
-ZONES: dict[str, Zone] = {z.code: z for z in (DE_LU, NL)}
+# research/zones/zonecfg.py ZONES["DK1"] and ZONES["DK2"], with the inputs of research/zones/bt.py
+# variant "desetprel" (DE-LU weather points and prices) and blended 50/50 with DE-LU. The raw
+# extra points are the DE-LU points that are not own points: none is for DK1 or DK2.
+_DE_LU_RAW = DE_LU.own
+
+DK1 = Zone(
+    code="DK1",
+    name="Denmark West",
+    tz="Europe/Copenhagen",
+    country="DK",
+    layout="generic",
+    default_vat=25.0,
+    own=("nb_dk_west", "dk1_horns_rev", "dk1_north_jutland", "dk1_aarhus", "dk1_south_jutland"),
+    nb=("schleswig", "north_sea", "ostfriesland", "nb_nl", "nb_no_south", "no2_sirdal",
+        "se3_gothenburg", "dk2_copenhagen"),
+    wind=("nb_dk_west", "dk1_horns_rev", "dk1_north_jutland", "dk1_aarhus", "dk1_south_jutland"),
+    solar=("dk1_north_jutland", "dk1_aarhus", "dk1_south_jutland"),
+    nb_wind=("schleswig", "north_sea", "ostfriesland", "nb_nl", "dk2_copenhagen"),
+    nb_hydro=("nb_no_south", "no2_sirdal"),
+    raw_extra=_DE_LU_RAW,
+    de_extra=True,
+    price_inputs=("DE-LU",),
+    parent="DE-LU",
+    blend=0.5,
+    price_attribution=_SMARD,
+)  # fmt: skip
+
+DK2 = Zone(
+    code="DK2",
+    name="Denmark East",
+    tz="Europe/Copenhagen",
+    country="DK",
+    layout="generic",
+    default_vat=25.0,
+    own=("dk2_copenhagen", "dk2_kriegers_flak", "dk2_lolland", "dk2_bornholm"),
+    nb=("baltic", "nb_se_south", "se4_malmo", "dk1_aarhus", "se3_gothenburg", "nb_no_south",
+        "nb_se_north"),
+    wind=("dk2_copenhagen", "dk2_kriegers_flak", "dk2_lolland", "dk2_bornholm"),
+    solar=("dk2_copenhagen", "dk2_lolland"),
+    nb_wind=("baltic", "nb_se_south", "se4_malmo", "dk1_aarhus"),
+    nb_hydro=("nb_no_south", "nb_se_north"),
+    raw_extra=_DE_LU_RAW,
+    de_extra=True,
+    price_inputs=("DE-LU",),
+    parent="DE-LU",
+    blend=0.5,
+    price_attribution=_SMARD,
+)  # fmt: skip
+
+ZONES: dict[str, Zone] = {z.code: z for z in (DE_LU, NL, DK1, DK2)}
 """Supported zones by code; the first is the config flow's default."""
 
 

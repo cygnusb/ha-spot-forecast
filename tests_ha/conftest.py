@@ -46,7 +46,7 @@ from custom_components.spot_forecast.const import (
     DOMAIN,
     MANIFEST_URL,
 )
-from custom_components.spot_forecast.core.zones import DE_LU, NL
+from custom_components.spot_forecast.core.zones import DE_LU, DK1, DK2, N_VARS, NL, S_VARS
 from custom_components.spot_forecast.sources import http
 
 pytest_plugins = "pytest_homeassistant_custom_component"
@@ -143,6 +143,38 @@ NL_WEATHER = (
 )
 
 
+# DK1's and DK2's recordings (see fixtures/README.md): prices, and the point sets that are not
+# DE-LU's (by variable set); their point sets of DE-LU points come from the DE-LU recordings
+DK_PRICES = {"DK1": "energy_charts_price_dk1.json", "DK2": "energy_charts_price_dk2.json"}
+_DK_TAGS = {S_VARS: "s", N_VARS: "n"}
+_DE_LU_RECORDINGS = (
+    (DE_LU.own, "open_meteo_de.json", "open_meteo_prev_de.json"),
+    (DE_LU.nb, "open_meteo_nb.json", "open_meteo_prev_nb.json"),
+)
+
+
+def dk_weather(recorded: Callable[[str], Any], zone, previous: bool) -> list[tuple[str, Any]]:
+    """Per point set of ``zone`` (DK1 or DK2): its latitudes and the recorded response.
+
+    A point set of DE-LU points is DE-LU's recording, its location documents reordered to
+    the set's point order (Open-Meteo answers in request order); the others are DK's own.
+    """
+    by_point: dict[str, Any] = {}
+    for points, forecast, prev in _DE_LU_RECORDINGS:
+        docs = recorded(prev if previous else forecast)
+        by_point |= dict(zip(points, docs, strict=True))
+    out = []
+    for points, variables in zone.point_sets():
+        latitudes = ",".join(str(lat) for lat, _ in points.values())
+        if variables in _DK_TAGS:
+            kind = "open_meteo_prev" if previous else "open_meteo"
+            body = recorded(f"{kind}_{zone.slug}_{_DK_TAGS[variables]}.json")
+        else:
+            body = [by_point[p] for p in points]
+        out.append((latitudes, body))
+    return out
+
+
 class Sources:
     """Serves the recorded payloads, or errors, for Energy-Charts and Open-Meteo.
 
@@ -167,6 +199,9 @@ class Sources:
         prices: str = "energy_charts_price.json",
         *,
         nl_prices: str = NL_PRICES,
+        dk_prices: dict[str, str] | None = None,
+        zone_prices_status: dict[str, int] | None = None,
+        prices_until: dict[str, datetime] | None = None,
         prices_status: int = 200,
         weather_status: int = 200,
         previous_runs_status: int = 200,
@@ -175,18 +210,22 @@ class Sources:
     ) -> None:
         """Replace all registered responses (and the call log).
 
-        ``prices`` are DE-LU's, ``nl_prices`` NL's (by the request's ``bzn``); the NL
-        weather is served for its own point sets. ``price_overrides`` sets the price
-        (EUR/MWh) of the quarter hours starting at the given instants. ``through`` extends
-        the prices past the recording to the end of that local day (see ``_extended``).
-        Prices are cut to the requested ``start``/``end`` market days.
+        ``prices`` are DE-LU's, ``nl_prices`` NL's, ``dk_prices`` DK1's and DK2's (by the
+        request's ``bzn``); the NL and DK weather is served for their own point sets.
+        ``zone_prices_status`` answers a zone's price requests with that HTTP status, and
+        ``prices_until`` serves a zone's prices only before that instant.
+        ``price_overrides`` sets the price (EUR/MWh) of the quarter hours starting at the
+        given instants. ``through`` extends the prices past the recording to the end of that
+        local day (see ``_extended``). Prices are cut to the requested ``start``/``end``
+        market days.
         """
         self._mock.clear_requests()
         if prices_status != 200:
             self._mock.get(EC_URL, status=prices_status)
         else:
             docs = {}
-            for zone, name in (("DE-LU", prices), ("NL", nl_prices)):
+            served = (("DE-LU", prices), ("NL", nl_prices), *(dk_prices or DK_PRICES).items())
+            for zone, name in served:
                 doc = docs[zone] = _with_history(self._recorded(name))
                 if through is not None:
                     docs[zone] = doc = _extended(doc, through)
@@ -194,10 +233,16 @@ class Sources:
                     doc["price"][doc["unix_seconds"].index(int(at.timestamp()))] = price
 
             async def respond(method, url, data):
-                doc = docs[url.query["bzn"]]
+                zone = url.query["bzn"]
+                status = (zone_prices_status or {}).get(zone, 200)
+                if status != 200:
+                    return AiohttpClientMockResponse(method, url, status=status)
+                doc = docs[zone]
                 first, last = (date.fromisoformat(url.query[k]) for k in ("start", "end"))
                 lo = datetime.combine(first, time(), BERLIN).timestamp()
                 hi = datetime.combine(last + timedelta(days=1), time(), BERLIN).timestamp()
+                if zone in (prices_until or {}):
+                    hi = min(hi, prices_until[zone].timestamp())
                 pairs = [
                     (u, p)
                     for u, p in zip(doc["unix_seconds"], doc["price"], strict=True)
@@ -223,6 +268,9 @@ class Sources:
                 self._mock.get(
                     FORECAST_URL, params={"latitude": latitudes}, json=self._recorded(name)
                 )
+            for zone in (DK1, DK2):
+                for latitudes, body in dk_weather(self._recorded, zone, previous=False):
+                    self._mock.get(FORECAST_URL, params={"latitude": latitudes}, json=body)
         if previous_runs_status != 200:
             self._mock.get(PREVIOUS_RUNS_URL, status=previous_runs_status)
         else:
@@ -239,6 +287,9 @@ class Sources:
                 self._mock.get(
                     PREVIOUS_RUNS_URL, params={"latitude": latitudes}, json=self._recorded(name)
                 )
+            for zone in (DK1, DK2):
+                for latitudes, body in dk_weather(self._recorded, zone, previous=True):
+                    self._mock.get(PREVIOUS_RUNS_URL, params={"latitude": latitudes}, json=body)
 
         async def release(method, url, data):
             body = self.release.get(str(url))

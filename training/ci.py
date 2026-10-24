@@ -2,6 +2,7 @@
 
 python -m training.ci --raw DIR --out DIR --cutoff YYYY-MM-DD [--zone CODE]
     [--previous-manifest FILE] [--previous-model FILE ...] [--capacity-month YYYY-MM]
+    [--parent-model FILE --parent-predictions FILE]
 
 One zone per run; ``training.ci_zones`` runs every zone and chains the manifests.
 
@@ -76,6 +77,8 @@ def _score_previous(
     v = model.version
     if model.zone != zone:
         return v, None, f"{v} is for zone {model.zone}, not {zone}"
+    if model.parent is not None and ds.X_parent is None:
+        return v, None, f"{v} blends with {model.parent.zone}, the dataset has no rows of it"
     if model.train_cutoff > month:
         why = f"trained up to {model.train_cutoff}, after the gate month start {month}"
         return v, None, f"{v} is not out of sample: {why}"
@@ -218,6 +221,8 @@ def _parse(argv: list[str]) -> argparse.Namespace:
         "model that cannot be compared does not fail the gate (the reason says so)",
     )
     ap.add_argument("--capacity-month", default=None, help="passed on to training.train")
+    ap.add_argument("--parent-model", default=None, help="passed on to training.train")
+    ap.add_argument("--parent-predictions", default=None, help="passed on to training.train")
     return ap.parse_args(argv)
 
 
@@ -233,6 +238,10 @@ def run(argv: list[str], max_iter: int = 600, today: date | None = None) -> int:
     train_argv += ["--zone", args.zone]
     if args.capacity_month:
         train_argv += ["--capacity-month", args.capacity_month]
+    if args.parent_model:
+        train_argv += ["--parent-model", args.parent_model]
+    if args.parent_predictions:
+        train_argv += ["--parent-predictions", args.parent_predictions]
     try:
         result = train.run(train_argv, max_iter)
     except DataLag as e:

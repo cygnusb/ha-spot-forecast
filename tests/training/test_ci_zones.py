@@ -27,8 +27,10 @@ def _arg(argv: list, name: str) -> str | None:
 
 @pytest.fixture
 def fake_ci(monkeypatch):
-    """``training.ci.run`` with a scripted outcome per zone code; records each zone's argv
-    and the manifest it was handed."""
+    """``training.ci.run`` with a scripted outcome per zone code (if not given
+    ``"published"``: nothing to upload or report); records each zone's argv and the manifest
+    it was handed. A run that gets as far as the gate writes the candidate model and
+    predictions, as ``training.train`` does."""
     outcomes: dict[str, str] = {}
     seen: dict[str, dict] = {}
 
@@ -38,13 +40,15 @@ def fake_ci(monkeypatch):
         prev = _arg(argv, "--previous-manifest")
         old = json.loads(Path(prev).read_text()) if prev else None
         seen[code] = {"argv": argv, "manifest": old}
-        outcome = outcomes[code]
+        outcome = outcomes.get(code, "published")
         if outcome == "error":
             raise ValueError("weather nrw__wind ends before the cutoff")
         if outcome == "lag":
             return 2
         version = f"{slug}-2026-11"
         out.mkdir(parents=True, exist_ok=True)
+        (out / f"{version}.json.gz").write_bytes(b"model")
+        (out / f"{version}.predictions.json.gz").write_bytes(b"predictions")
         gate = {
             "version": version,
             "already_published": outcome == "published",
@@ -147,13 +151,15 @@ def test_an_erroring_or_lagging_zone_does_not_block_the_next(tmp_path, fake_ci, 
     outcomes.update({"DE-LU": "error", "NL": "pass"})
     rc, summary, out = _go(tmp_path)
     assert rc == 1  # reported, after NL ran and the files are written
-    assert summary["errors"] == ["DE-LU"] and summary["passed"] == ["nl-2026-11"]
+    # DK1 and DK2 blend with DE-LU: skipped, as errors
+    assert summary["errors"] == ["DE-LU", "DK1", "DK2"] and summary["passed"] == ["nl-2026-11"]
     assert "weather nrw__wind ends before the cutoff" in capsys.readouterr().err
     assert _final(out)["zones"]["de_lu"] == DOWNLOADED["zones"]["de_lu"]
 
     outcomes.update({"DE-LU": "lag"})
     rc, summary, _ = _go(tmp_path / "again")
-    assert rc == 0 and summary["lagged"] == ["DE-LU"] and summary["passed"] == ["nl-2026-11"]
+    assert rc == 0 and summary["lagged"] == ["DE-LU", "DK1", "DK2"]
+    assert summary["passed"] == ["nl-2026-11"]
 
 
 def test_first_run_without_a_manifest(tmp_path, fake_ci):
@@ -173,3 +179,80 @@ def test_options_reach_every_zone(tmp_path, fake_ci):
     for code in ("DE-LU", "NL"):
         assert "--accept-incomparable" in seen[code]["argv"]
         assert _arg(seen[code]["argv"], "--capacity-month") == "2026-09"
+
+
+def test_zones_train_in_order_parent_first(tmp_path, fake_ci):
+    _, seen = fake_ci
+    _go(tmp_path)
+    assert list(seen) == ["DE-LU", "NL", "DK1", "DK2"]
+
+
+@pytest.mark.parametrize("de_lu", ["pass", "fail", "published"])
+def test_dk_zones_get_the_de_lu_candidate_of_the_run(tmp_path, fake_ci, de_lu):
+    """Whether DE-LU's gate passed, failed or its version is published already: DK1 and DK2
+    train with the DE-LU model this run trained, which is what their files embed."""
+    outcomes, seen = fake_ci
+    outcomes.update({"DE-LU": de_lu, "DK1": "pass", "DK2": "pass"})
+    rc, summary, out = _go(tmp_path)
+    assert rc == 0
+    for code in ("DK1", "DK2"):
+        argv = seen[code]["argv"]
+        assert _arg(argv, "--parent-model") == str(out / "de_lu" / "de_lu-2026-11.json.gz")
+        assert _arg(argv, "--parent-predictions") == str(
+            out / "de_lu" / "de_lu-2026-11.predictions.json.gz"
+        )
+    for code in ("DE-LU", "NL"):
+        assert "--parent-model" not in seen[code]["argv"]
+    assert summary["passed"][-2:] == ["dk1-2026-11", "dk2-2026-11"]
+    final = _final(out)
+    assert final["zones"]["dk1"] == {"version": "dk1-2026-11"}
+    expected = {"version": "de_lu-2026-11"} if de_lu == "pass" else DOWNLOADED["zones"]["de_lu"]
+    assert final["zones"]["de_lu"] == expected
+
+
+def test_de_lu_fails_its_gate_dk_still_published(tmp_path, fake_ci):
+    outcomes, _ = fake_ci
+    outcomes.update({"DE-LU": "fail", "NL": "fail", "DK1": "pass", "DK2": "fail"})
+    rc, summary, out = _go(tmp_path)
+    assert rc == 0
+    assert summary["passed"] == ["dk1-2026-11"]
+    assert summary["failed"] == ["de_lu-2026-11", "nl-2026-11", "dk2-2026-11"]
+    final = _final(out)
+    assert final["zones"]["de_lu"] == DOWNLOADED["zones"]["de_lu"]
+    assert final["zones"]["dk1"] == {"version": "dk1-2026-11"} and "dk2" not in final["zones"]
+
+
+@pytest.mark.parametrize(("de_lu", "listed"), [("error", "errors"), ("lag", "lagged")])
+def test_de_lu_without_a_candidate_skips_dk_and_keeps_their_entries(
+    tmp_path, fake_ci, capsys, de_lu, listed
+):
+    outcomes, seen = fake_ci
+    outcomes.update({"DE-LU": de_lu, "NL": "pass", "DK1": "pass", "DK2": "pass"})
+    downloaded = {**DOWNLOADED, "zones": {**DOWNLOADED["zones"], "dk1": {"version": "dk1-2026-10"}}}
+    rc, summary, out = _go(tmp_path, downloaded)
+    assert "DK1" not in seen and "DK2" not in seen  # never trained
+    assert summary[listed] == ["DE-LU", "DK1", "DK2"]
+    assert summary["zones"]["dk1"] == {"rc": 1 if de_lu == "error" else 2,
+                                       "skipped": "parent DE-LU"}  # fmt: skip
+    assert rc == (1 if de_lu == "error" else 0)
+    assert "DK1: skipped, the training of its parent zone DE-LU" in capsys.readouterr().err
+    final = _final(out)  # NL passed: the manifest keeps the DK1 entry and has no DK2 one
+    assert final["zones"]["dk1"] == {"version": "dk1-2026-10"} and "dk2" not in final["zones"]
+    assert final["zones"]["nl"] == {"version": "nl-2026-11"}
+
+
+def test_de_lu_without_its_files_skips_dk(tmp_path, fake_ci, monkeypatch):
+    """A DE-LU run that ended without writing the files (a bug) is no parent either."""
+    outcomes, seen = fake_ci
+    outcomes.update({"DE-LU": "pass", "DK1": "pass", "DK2": "pass"})
+    real = ci.run
+
+    def run(argv, max_iter=600, today=None):
+        rc = real(argv, max_iter, today)
+        if _arg(argv, "--zone") == "DE-LU":
+            (Path(_arg(argv, "--out")) / "de_lu-2026-11.predictions.json.gz").unlink()
+        return rc
+
+    monkeypatch.setattr(ci, "run", run)
+    rc, summary, _ = _go(tmp_path)
+    assert rc == 1 and "DK1" not in seen and summary["errors"] == ["DK1", "DK2"]

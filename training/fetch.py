@@ -22,7 +22,7 @@ import time
 
 import requests
 
-from core.features import uses_capacity
+from core.features import needs_capacity
 from core.zones import ZONES, Point, Zone
 
 from .constants import OFFSETS, WEATHER_MODEL
@@ -175,10 +175,17 @@ def weather_sets(zones: list[Zone]) -> list[tuple[dict[str, Point], tuple[str, .
     return out
 
 
+def price_zones(zones: list[Zone]) -> list[Zone]:
+    """The zones whose prices the zones need: each zone and its price inputs, once each."""
+    codes = dict.fromkeys(c for z in zones for c in (z.code, *z.price_inputs))
+    return [ZONES[c] for c in codes]
+
+
 def fetch_all(raw: Path, end: dt.date, zones: list[Zone]) -> None:
-    if any(uses_capacity(z) for z in zones):
+    if any(needs_capacity(z) for z in zones):
         fetch_installed(raw)
-    for zone in zones:  # serial, with the pauses in fetch_prices: Energy-Charts rate limits
+    # serial, with the pauses in fetch_prices: Energy-Charts rate limits
+    for zone in price_zones(zones):
         fetch_prices(raw, end, zone)
     for points, variables in weather_sets(zones):
         fetch_weather(raw, end, points, variables)
