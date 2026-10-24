@@ -393,13 +393,16 @@ def test_models_without_parent_have_no_parent_fields(tiny_model_file, tiny_nl_mo
 
 
 @pytest.mark.parametrize("slug", ["de_lu", "nl"])
-def test_bundled_models_dump_to_the_same_bytes(slug):
-    """Loading and dumping a model file of a zone without parent gives its bytes back."""
+def test_bundled_models_dump_to_the_same_json(slug):
+    """Loading and dumping a model file of a zone without parent gives its JSON back.
+
+    The JSON, not the gzip bytes: the compressed stream depends on the zlib build.
+    """
     from pathlib import Path
 
     path = Path(model.__file__).parent.parent / "models" / f"{slug}.json.gz"
     data = path.read_bytes()
-    assert dump_model(load_model(data)) == data
+    assert gzip.decompress(dump_model(load_model(data))) == gzip.decompress(data)
 
 
 def _mismatch(data: bytes, match: str) -> None:
