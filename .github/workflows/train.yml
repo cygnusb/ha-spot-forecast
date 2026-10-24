@@ -41,8 +41,8 @@ env:
 jobs:
   train:
     runs-on: ubuntu-latest
-    # five zones, DE-LU's training alone took about 3 minutes here (2026-10); the limit is the
-    # most a GitHub-hosted job may run, for a slow fetch (Open-Meteo, Energy-Charts timeouts)
+    # five zones, estimated 2.5 hours of training (7 monthly refits and the final fit, 3
+    # quantiles each, 600 iterations) plus the fetch; the most a GitHub-hosted job may run
     timeout-minutes: 360
     permissions:
       contents: read
