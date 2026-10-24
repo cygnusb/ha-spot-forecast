@@ -1,4 +1,4 @@
-"""Training a zone of the generic layout (NL) end to end on a small synthetic raw dir."""
+"""Training a zone of the generic layout (NL, NO2) end to end on a small synthetic raw dir."""
 
 from __future__ import annotations
 
@@ -14,9 +14,10 @@ pytest.importorskip("pandas")
 pytest.importorskip("sklearn")
 from core.features import feature_names
 from core.model import load_model
-from core.zones import DE_LU, NL
+from core.zones import DE_LU, NL, NO2
 from training.dataset import build_dataset, load_raw
 from training.fetch import month_chunks
+from training.train import build_training_data
 
 FIRST, LAST = date(2026, 6, 1), date(2026, 9, 30)
 
@@ -100,3 +101,27 @@ def test_ci_checks_the_nl_files_like_the_integration(trained_nl):
         date(2026, 10, 3),
     )
     assert model.zone == "nl"
+
+
+def test_no2_dataset_takes_the_hydro_history_from_the_offset_2_weather(tmp_path):
+    """``hydro_history`` = ``weather[1]`` (offset 2, research ``s1``); the 90-day sums skip the
+    hours before the data, as research does."""
+    raw = load_raw(_raw_dir(tmp_path, NO2), NO2)
+    ds = build_training_data(raw, date(2026, 10, 1))
+    names = feature_names(NO2)
+    assert ds.X.shape[1] == len(names) == 51 and "doy" not in names
+    c = {n: i for i, n in enumerate(names)}
+    anchor = date(2026, 9, 20)
+    row = ds.X[np.flatnonzero(ds.anchor == anchor)[0]]
+    end = datetime(2026, 9, 20, 22, tzinfo=UTC)  # end of the anchor day in Europe/Oslo
+    for days in (14, 90):
+        expected = sum(
+            np.nansum(raw.weather[2][f"{p}__precipitation"].window(end - timedelta(days=days),
+                                                                    days * 24))
+            for p in NO2.hydro_points
+        )  # fmt: skip
+        assert row[c[f"hyd_precip_past{days}"]] == expected
+    assert row[c["hyd_precip_past90"]] > row[c["hyd_precip_past30"]] > 0
+    # an early anchor: its 90 days start before June, the sums cover the data there is
+    early = ds.X[np.flatnonzero(ds.anchor == date(2026, 7, 5))[0]]
+    assert 0 < early[c["hyd_precip_past90"]] < row[c["hyd_precip_past90"]]

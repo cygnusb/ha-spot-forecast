@@ -241,6 +241,17 @@ def test_de_lu_without_a_candidate_skips_dk_and_keeps_their_entries(
     assert final["zones"]["nl"] == {"version": "nl-2026-11"}
 
 
+@pytest.mark.parametrize("de_lu", ["error", "lag", "fail"])
+def test_no2_trains_whatever_de_lu_does(tmp_path, fake_ci, de_lu):
+    """NO2 has no parent: a DE-LU error, data lag or failed gate never skips it."""
+    outcomes, seen = fake_ci
+    outcomes.update({"DE-LU": de_lu, "NO2": "pass"})
+    _, summary, out = _go(tmp_path)
+    assert "--parent-model" not in seen["NO2"]["argv"]
+    assert summary["zones"]["no2"]["rc"] == 0 and summary["passed"][-1] == "no2-2026-11"
+    assert _final(out)["zones"]["no2"] == {"version": "no2-2026-11"}
+
+
 def test_de_lu_without_its_files_skips_dk(tmp_path, fake_ci, monkeypatch):
     """A DE-LU run that ended without writing the files (a bug) is no parent either."""
     outcomes, seen = fake_ci
