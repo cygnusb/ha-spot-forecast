@@ -7,8 +7,11 @@ are relative to the 7-day mean in units of the target scale (research/zones/bt.p
 ``relative``).
 
 DE-LU has the layout of ``build_samples`` (``FEATURE_NAMES``); the other zones have the
-zone-generic one of research/zones/genfeat.py (``feature_names``, ``_weather_features``),
-without its research-only options (``hydro_extra``, ``de_extra``, ``de_price``).
+zone-generic one of research/zones/genfeat.py (``feature_names``, ``_weather_features``,
+``build_features``), with its options ``raw_extra``, ``de_extra`` and ``de_price`` where the
+zone sets them (``Zone.raw_extra``, ``Zone.de_extra``, ``Zone.price_inputs``), not
+``hydro_extra``. The DE-LU price features are relative to the zone's own 7-day mean and scale
+(research/zones/bt.py ``DE_REL``) and their lags read the wall-clock hour as every lag does.
 
 Any change here that alters a feature value breaks parity with the research backtest
 and with every shipped model; ``tests/core/test_features.py`` pins the golden values.
@@ -25,7 +28,7 @@ from zoneinfo import ZoneInfo
 import numpy as np
 
 from .calendar import holidays
-from .zones import DE_LU, Zone, point_vars
+from .zones import DE_LU, POINTS, Zone, point_vars
 
 FEATURE_SCHEMA = 2
 HORIZONS = range(1, 7)
@@ -41,6 +44,13 @@ CAPACITY_NAMES = ("cap_solar", "cap_wind_on", "cap_wind_off")
 RELATIVE_NAMES = ("p_lastday", "p_lastweek", "D_mean", "D_min", "D_max", "D_mean30", "D_min7",
                   "D_max7", "D_gq_evening14", "D_gq_q90_14")  # fmt: skip
 SPREAD_NAMES = ("D_std", "D_std7")
+# generic layout, ``Zone.de_extra``: DE-LU aggregates (research/zones/genfeat.py ``DE_EXTRA``)
+DE_EXTRA_NAMES = ("de_wind_power_idx", "de_solar_est_mean", "de_temp_mean",
+                  "de_wind_power_idx_day", "de_solar_est_mean_day", "de_temp_mean_day")  # fmt: skip
+# generic layout, ``Zone.price_inputs == ("DE-LU",)``: DE-LU prices (genfeat ``DE_PRICE``), all
+# of them price levels, relative to the zone's own D_mean7 and scale (bt.py ``DE_REL``)
+DE_PRICE_NAMES = ("de_p_lastday", "de_p_lastweek", "de_D_mean", "de_D_mean7",
+                  "de_D_gq_evening14", "de_D_max")  # fmt: skip
 
 FEATURE_NAMES: tuple[str, ...] = (
     "h", "hour", "dow", "doy", "holiday", "offday", "issue_dow", "p_lastday", "p_lastweek",
@@ -79,7 +89,7 @@ def feature_names(zone: Zone) -> tuple[str, ...]:
     names = [
         "h", "hour", "dow", "doy", "holiday", "offday", "issue_dow", "p_lastday", "p_lastweek",
         *(f"D_{n}" for n in _DAILY_NAMES),
-        *(f"{p}__{v}" for p in zone.own for v in point_vars(p)),
+        *(f"{p}__{v}" for p in zone.own + zone.raw_extra for v in point_vars(p)),
         *agg,
         *(f"{c}_day" for c in day),
     ]  # fmt: skip
@@ -87,6 +97,12 @@ def feature_names(zone: Zone) -> tuple[str, ...]:
         names.append("precip_hydro_day")
     if zone.nb_hydro:
         names.append("nb_precip_hydro_day")
+    if zone.de_extra:
+        names += DE_EXTRA_NAMES
+    if zone.price_inputs:
+        if zone.price_inputs != (DE_LU.code,):
+            raise ValueError(f"unsupported price inputs {zone.price_inputs!r}")
+        names += DE_PRICE_NAMES
     return tuple(names)
 
 
@@ -103,7 +119,8 @@ def _radiation_points(zone: Zone) -> tuple[str, ...]:
 def _relative_columns(zone: Zone) -> tuple[list[int], list[int]]:
     """Column indices of the relative price levels and of the spreads."""
     names = feature_names(zone)
-    return [names.index(n) for n in RELATIVE_NAMES], [names.index(n) for n in SPREAD_NAMES]
+    levels = RELATIVE_NAMES + tuple(n for n in DE_PRICE_NAMES if n in names)
+    return [names.index(n) for n in levels], [names.index(n) for n in SPREAD_NAMES]
 
 
 class InsufficientHistory(ValueError):
@@ -307,13 +324,13 @@ def _generic_weather_features(
     w: Callable[[str], np.ndarray], times: list[datetime], zone: Zone
 ) -> dict:
     """research/zones/genfeat.py ``_weather_features`` for the hours of one local target day."""
-    f = {f"{p}__{v}": w(f"{p}__{v}") for p in zone.own for v in point_vars(p)}
+    f = {f"{p}__{v}": w(f"{p}__{v}") for p in zone.own + zone.raw_extra for v in point_vars(p)}
 
     def avg(fn: Callable[[str], np.ndarray], points: tuple[str, ...] | list[str]) -> np.ndarray:
         return sum(fn(p) for p in points) / len(points)
 
     def est(p: str) -> np.ndarray:
-        return _clear_sky_ghi(times, *zone.points[p]) * (
+        return _clear_sky_ghi(times, *POINTS[p][0]) * (
             1 - 0.75 * (w(f"{p}__cloud_cover") / 100) ** 3.4
         )
 
@@ -332,8 +349,13 @@ def _generic_weather_features(
     f["nb_temp_mean"] = avg(lambda p: w(f"{p}__temperature_2m"), zone.nb)
     if zone.nb_hydro:
         f["nb_precip_hydro"] = sum(w(f"{p}__precipitation") for p in zone.nb_hydro)
+    if zone.de_extra:
+        f["de_wind_power_idx"] = avg(lambda p: _wind_power(w(f"{p}__wind_speed_100m")), DE_LU.wind)
+        f["de_solar_est_mean"] = avg(est, DE_LU.solar)
+        f["de_temp_mean"] = avg(lambda p: w(f"{p}__temperature_2m"), DE_LU.own)
     n = len(times)
-    for c in ("wind_power_idx", "solar_mean", "solar_est_mean", "temp_mean", "nb_wind_power_idx",
+    for c in ("de_wind_power_idx", "de_solar_est_mean", "de_temp_mean", "wind_power_idx",
+              "solar_mean", "solar_est_mean", "temp_mean", "nb_wind_power_idx",
               "nb_temp_mean"):  # fmt: skip
         if c in f:
             f[f"{c}_day"] = np.full(n, _day_mean(f[c]))
@@ -366,6 +388,7 @@ def build_features(
     weather: Mapping[int, Mapping[str, Hourly]],
     capacity: Mapping[str, float],
     zone: Zone,
+    extra_prices: Mapping[str, tuple[Hourly, DailyStats]] | None = None,
 ) -> FeatureMatrix:
     """Feature rows for every hour of the local days anchor+1 … anchor+6.
 
@@ -374,7 +397,13 @@ def build_features(
     the same local wall-clock hour on the anchor day (``p_lastday``) and a week before the
     target day (``p_lastweek``). ``weather[h]`` holds the ``"{point}__{var}"`` series for
     target day anchor+h. Missing inputs give NaN features. ``capacity`` is read only by
-    layouts with capacity features (DE-LU). The columns are ``feature_names(zone)``.
+    layouts with capacity features (DE-LU). ``extra_prices`` holds, per zone code of
+    ``zone.price_inputs``, that zone's prices and ``daily_stats``; they are read the same
+    way (lags in the local hours of ``zone``, statistics of the anchor day). The columns
+    are ``feature_names(zone)``.
+
+    Raises ``InsufficientHistory`` without 30 days of prices to the anchor day, or when
+    ``extra_prices`` lacks one of ``zone.price_inputs``.
     """
     names = feature_names(zone)
     relative, spread = _relative_columns(zone)
@@ -382,15 +411,23 @@ def build_features(
     a = daily.index(anchor)
     if a is None or np.isnan(daily.mean30[a]) or np.isnan(daily.gq_evening14[a]):
         raise InsufficientHistory(f"less than 30 days of prices before the end of {anchor}")
+    missing = [c for c in zone.price_inputs if c not in (extra_prices or {})]
+    if missing:
+        raise InsufficientHistory(f"no prices of {', '.join(missing)} for zone {zone.code}")
     d_features = {f"D_{n}": getattr(daily, n)[a] for n in _DAILY_NAMES}
+    if zone.price_inputs:
+        de_prices, de_daily = extra_prices[DE_LU.code]
+        i = de_daily.index(anchor)
+        for n in ("mean", "mean7", "gq_evening14", "max"):
+            d_features[f"de_D_{n}"] = np.nan if i is None else getattr(de_daily, n)[i]
     scale = max(daily.gq_evening14[a], zone.scale_floor) / zone.scale_divisor
     tz = ZoneInfo(zone.tz)
     known_until = datetime.combine(anchor + _DAY, time(), tz).astimezone(UTC)
 
-    def lag(day: date, hours: np.ndarray) -> np.ndarray:
-        """Prices at the local ``hours`` of ``day``; hours after the anchor day read NaN."""
+    def lag(day: date, hours: np.ndarray, series: Hourly = prices) -> np.ndarray:
+        """``series`` at the local ``hours`` of ``day``; hours after the anchor day read NaN."""
         first, n, index = _wall_clock_index(day, hours, tz)
-        out = prices.window(first, n)
+        out = series.window(first, n)
         out[max((known_until - first) // _HOUR, 0) :] = np.nan
         return out[index]
 
@@ -423,6 +460,9 @@ def build_features(
             **weather_features(w, day_times, zone),
             **{c: capacity.get(c, np.nan) for c in CAPACITY_NAMES},
         }
+        if zone.price_inputs:
+            cols["de_p_lastday"] = lag(target - h * _DAY, hour, de_prices)
+            cols["de_p_lastweek"] = lag(target - 7 * _DAY, hour, de_prices)
         blocks.append(
             np.column_stack([np.broadcast_to(np.asarray(cols[c], dtype=float), n) for c in names])
         )
