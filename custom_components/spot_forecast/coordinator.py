@@ -42,7 +42,7 @@ from .core.output import prices_attribute
 from .core.schedule import choose_anchor, is_expired, is_stale, next_run
 from .core.zones import ZONES, Zone
 from .issues import async_check_model_age, async_delete_model_issue
-from .sources.energy_charts import fetch_prices
+from .sources.energy_charts import fetch_price_inputs, fetch_prices
 from .sources.http import SourceError
 from .sources.open_meteo import fetch_forecast
 from .store import ForecastStore, StoredState
@@ -436,9 +436,10 @@ class SpotForecastCoordinator(DataUpdateCoordinator[SpotData]):
     async def _async_run(self, now: datetime, ledger: Ledger) -> bool:
         """Fetch prices and weather, forecast and record the run in ``ledger``.
 
-        Raises on missing data; fresh prices are kept in ``ledger`` even when the weather or
-        the forecast fails afterwards. An unexpected error in the forecast itself is logged
-        and returns False. True when a run was recorded.
+        Raises on missing data; fresh prices are kept in ``ledger`` even when the prices of
+        a price input (DE-LU for DK1 and DK2), the weather or the forecast fail afterwards.
+        An unexpected error in the forecast itself is logged and returns False. True when a
+        run was recorded.
         """
         today = self._today(now)
         session = async_get_clientsession(self.hass)
@@ -451,6 +452,13 @@ class SpotForecastCoordinator(DataUpdateCoordinator[SpotData]):
             run_blocking=run_blocking,
         )
         prices, self._market, anchor = await run_blocking(self._take_prices, ledger, market, now)
+        extra_prices = await fetch_price_inputs(
+            session,
+            self.zone,
+            today - timedelta(days=PRICE_HISTORY_DAYS),
+            today + timedelta(days=1),
+            run_blocking=run_blocking,
+        )
         weather = await fetch_forecast(session, self.zone, run_blocking=run_blocking)
         try:
             slots = await run_blocking(
@@ -460,6 +468,8 @@ class SpotForecastCoordinator(DataUpdateCoordinator[SpotData]):
                 prices,
                 dict.fromkeys(HORIZONS, weather),
                 self.zone,
+                None,
+                extra_prices,
             )
         except InsufficientHistory:
             raise

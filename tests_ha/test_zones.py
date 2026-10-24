@@ -142,6 +142,8 @@ async def test_user_flow_offers_the_zones_with_their_names(
     assert options == [
         {"value": "DE-LU", "label": "DE-LU \u2013 Germany and Luxembourg"},
         {"value": "NL", "label": "NL \u2013 Netherlands"},
+        {"value": "DK1", "label": "DK1 \u2013 Denmark West"},
+        {"value": "DK2", "label": "DK2 \u2013 Denmark East"},
     ]
     assert _default(result["data_schema"], CONF_ZONE) == "DE-LU"
 
