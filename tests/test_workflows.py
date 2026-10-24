@@ -303,7 +303,7 @@ def test_train_workflow_archives_only_open_data():
 
 def test_validate_workflow_has_matrix_floor_and_latest():
     wf = _load("validate.yml")
-    assert _on(wf)["schedule"] == [{"cron": "0 4 * * *"}]
+    assert _on(wf)["schedule"] == [{"cron": "0 4 * * 1"}]
     jobs = wf["jobs"]
     assert {"hassfest", "hacs", "tests", "tests-homeassistant", "lint"} <= set(jobs)
     hacs = next(s for s in jobs["hacs"]["steps"] if s.get("uses") == "hacs/action@main")
@@ -323,6 +323,17 @@ def test_validate_workflow_has_matrix_floor_and_latest():
     _step(jobs["lint"]["steps"], "pip install ruff==0.16.5")
     age = _step(jobs["model-age"]["steps"], "python tools/check_model_age.py")
     assert age["env"]["GH_TOKEN"] == "${{ github.token }}"  # the API check of the release
+
+
+def test_validate_workflow_runs_once_per_change():
+    """Branches run through their pull request, tags not at all; superseded runs are cancelled."""
+    wf = _load("validate.yml")
+    on = _on(wf)
+    assert on["push"] == {"branches": ["main"]}
+    assert "pull_request" in on
+    assert wf["concurrency"]["group"] == "validate-${{ github.event_name }}-${{ github.ref }}"
+    cancel = wf["concurrency"]["cancel-in-progress"]
+    assert "push" in cancel and "pull_request" in cancel and "schedule" not in cancel
 
 
 def test_release_workflow_zips_after_model_fetch():
