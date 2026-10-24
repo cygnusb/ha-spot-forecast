@@ -18,8 +18,15 @@ has.
 
 ## Setup
 
-The setup has one step: the **bidding zone**. Only DE-LU is available in this
-version. Each zone can be set up once.
+The setup has one step: the **bidding zone**:
+
+| Zone | Country | Default VAT |
+|---|---|---|
+| DE-LU | Germany and Luxembourg | 19 % |
+| NL | Netherlands | 21 % |
+
+Each zone can be set up once; several zones run side by side, each with its own
+model, entities (`sensor.spot_forecast_nl_price`, …) and statistics.
 
 The integration ships with a trained model and its backfill file, so it works
 right after setup and without access to GitHub.
@@ -31,7 +38,7 @@ right after setup and without access to GitHub.
 | Option | Default | Range | What it does |
 |---|---|---|---|
 | Grid fees and taxes | 0 | 0–1 EUR/kWh, to 0.0001 | Gross amount per kWh, VAT included, added for the [total-price sensor](entities.md#total-price) and the "mit Abgaben" view of the [forecast card](cards.md#forecast-card). 0 means no total-price sensor. |
-| VAT on the market price | 19 % | 0–30 %, in steps of 0.1 | Value-added tax charged on the exchange price for the total price. |
+| VAT on the market price | the zone's (19 % DE-LU, 21 % NL) | 0–30 %, in steps of 0.1 | Value-added tax charged on the exchange price for the total price. |
 | Peak price threshold | the model's, 21.2 ct/kWh | 0–100 ct/kWh | Wholesale price at or above which an hour counts as a price peak, for the [peak-risk sensor](entities.md#peak-risk). |
 | Backfill window (days) | 60 | 0–180 | How many past days of forecasts are reconstructed on first start, so the look-back card and the calibration have history. 0 turns the backfill off. |
 | Update models automatically | on | | Check for a newer model for the zone after setup and once a day between 03:00 and 06:00, and download it if it passes its checks. Off stops further downloads; a model downloaded before stays in use (see [model updates](model.md#model-updates)). |
@@ -50,8 +57,10 @@ the exchange price itself, so the total price is
 total price = exchange price × (1 + VAT / 100) + grid fees and taxes
 ```
 
-The default VAT is Germany's 19 %. Luxembourg, the other half of the bidding
-zone, charges a different rate on electricity: enter the one on your bill. A
+The default VAT is the zone's standard rate: Germany's 19 % for DE-LU, the
+Netherlands' 21 % for NL. Luxembourg, the other half of DE-LU, charges a
+different rate on electricity: enter the one on your bill. An entry without the
+option set always uses its zone's default. A
 negative exchange price lowers the total by its amount plus VAT. The
 statistics, the look-back, the error figures and the peak-risk and
 negative-price sensors stay on the exchange price, so they keep comparing like

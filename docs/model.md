@@ -17,18 +17,39 @@ right after them. The anchor is in the sensor's `anchor_day` attribute.
 
 | What | Source | When |
 |---|---|---|
-| Day-ahead prices DE-LU, the last 40 days | [Energy-Charts](https://www.energy-charts.info/) `/price?bzn=DE-LU` | every run, one request |
-| Weather forecast, hourly, 8 days, ECMWF IFS 0.25° | [Open-Meteo](https://open-meteo.com/), two multi-location requests (German points, neighbour points) | every run |
-| Installed wind and solar capacity | the model file (last training value) | |
-| Public holidays in Germany | computed in the integration | |
+| Day-ahead prices of the zone, the last 40 days | [Energy-Charts](https://www.energy-charts.info/) `/price?bzn=DE-LU` (or `NL`) | every run, one request |
+| Weather forecast, hourly, 8 days, ECMWF IFS 0.25° | [Open-Meteo](https://open-meteo.com/), one multi-location request per set of points with the same variables (DE-LU: German points, neighbour points; NL: three) | every run |
+| Installed wind and solar capacity (DE-LU) | the model file (last training value) | |
+| Public holidays of the zone's country | computed in the integration | |
 
-Weather comes from 10 points in Germany (wind at 100 m, solar radiation,
-temperature at 2 m, cloud cover) and 12 points in the Netherlands, Belgium,
-France, Denmark, Poland, the Alps, Norway, Sweden and Finland (wind,
-radiation, temperature, precipitation). From these come a wind-power index, a
-solar estimate (clear sky × cloud cover), neighbour aggregates and daily
-aggregates. Neighbour prices are not used: in the backtest they made the
-forecast worse.
+Every weather point has one set of variables, whatever zones use it. **DE-LU**
+reads 10 points in Germany (wind at 100 m, solar radiation, temperature at 2 m,
+cloud cover) and 12 points in the Netherlands, Belgium, France, Denmark,
+Poland, the Alps, Norway, Sweden and Finland (wind, radiation, temperature,
+precipitation). From these come a wind-power index, a solar estimate (clear
+sky × cloud cover), neighbour aggregates and daily aggregates. Neighbour prices
+are not used: in the backtest they made the forecast worse.
+
+**NL** uses the zone-generic layout of the multi-zone study
+(`research/zones/genfeat.py`), which differs from DE-LU's only in where the
+points are and which aggregates they feed:
+
+| Role | Points |
+|---|---|
+| Own | `nb_nl` (Noord-Holland coast), `nl_borssele` (offshore wind), `north_sea` (German Bight), `nl_flevoland`, `nl_groningen`, `nl_randstad`, `nl_brabant` |
+| Wind index | `nb_nl`, `nl_borssele`, `north_sea`, `nl_flevoland`, `nl_groningen` |
+| Solar estimate | `nl_flevoland`, `nl_groningen`, `nl_randstad`, `nl_brabant` |
+| Neighbours | `ostfriesland`, `nrw`, `nb_be`, `nb_fr_north`, `nb_dk_west`, `schleswig`, `nb_no_south` |
+| Neighbour wind | `ostfriesland`, `nb_be`, `nb_dk_west`, `schleswig` |
+| Neighbour hydro (precipitation) | `nb_no_south` |
+
+The five `nl_*` points have wind, temperature and cloud cover. The features are
+each own point's variables, the wind mean and wind-power index, the temperature
+and cloud mean, the solar estimate, the neighbours' wind-power index,
+temperature mean and hydro precipitation, and their daily values, plus the
+calendar (Dutch public holidays) and the same price features as DE-LU. There
+is no installed-capacity feature. The model file's feature list is checked
+against its zone's layout, so a model is never applied to another zone.
 
 ## Three tree models
 
@@ -56,8 +77,8 @@ changed nothing in the calm summer of 2025. The two price lags take the same
 local clock hour, also across a daylight-saving switch: 18:00 a week before
 stays 18:00, not 17:00 or 19:00.
 
-The trees are exported to a compact JSON file
-(`custom_components/spot_forecast/models/de_lu.json.gz`): the feature list and
+The trees are exported to a compact JSON file per zone
+(`custom_components/spot_forecast/models/de_lu.json.gz`, `nl.json.gz`): the feature list and
 order, the tree arrays, training period, version, backtest metrics, default
 calibration offsets, installed capacity and default peak threshold. On the
 device a small tree walker over numpy arrays evaluates them; it reproduces
@@ -91,12 +112,13 @@ market shifts, as with the gas price rise in 2026, it falls to the naive
 baseline within about two quarters. So the models are retrained every month,
 and they reach your install **separately from integration releases**:
 
-* A GitHub Actions workflow trains on all data through the end of the last
-  month on the 3rd of each month.
-* A **quality gate** compares it out of sample with the published model on
-  the last month. It is published only if its error is no more than 0.1 ct
-  worse and it beats the naive baseline; otherwise the workflow opens an issue
-  and publishes nothing.
+* A GitHub Actions workflow trains every zone, one after the other, on all
+  data through the end of the last month on the 3rd of each month.
+* A **quality gate** compares each zone's model out of sample with the zone's
+  published model on the last month. It is published only if its error is no
+  more than 0.1 ct worse and it beats the naive baseline; otherwise the
+  workflow opens an issue and publishes nothing for that zone. The other zones
+  are published all the same.
 * Published models go to the rolling
   [`models` release](https://github.com/cygnusb/ha-spot-forecast/releases/tag/models),
   with a manifest listing version, file, SHA-256, feature schema, training

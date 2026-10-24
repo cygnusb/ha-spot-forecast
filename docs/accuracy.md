@@ -12,7 +12,8 @@ than, what a live install uses, so the figures are on the conservative side. Pri
 The figures below are the report of the bundled model, `de_lu-2026-10`
 (training cutoff 1 October 2026), as its `metrics` hold them. Each model
 version carries its own report, shown in the `metrics` attribute of
-`sensor.spot_forecast_de_lu_model_version`.
+`sensor.spot_forecast_de_lu_model_version`. The NL model's figures are in
+[their own section](#netherlands-nl).
 
 ## Per horizon
 
@@ -95,6 +96,27 @@ research backtest a model frozen in April 2025 stayed close to the monthly
 refit for about a year, then fell to the naive baseline and below it during
 the 2026 gas price rise. That is why models are retrained monthly and
 [updated automatically](model.md#model-updates).
+
+## Netherlands (NL)
+
+The report of the bundled NL model, `nl-2026-10`, with the same cutoff, walk-forward window
+and monthly refit as DE-LU's (`sensor.spot_forecast_nl_model_version` shows it). MAE in
+ct/kWh, April 2025 to September 2026, and for the last three months (July to September
+2026):
+
+| Horizon | MAE | MAE last three months | Naive MAE | Skill | Above peak risk | P10 below 0 in negative hours |
+|---|---|---|---|---|---|---|
+| D+1 | 1.75 | 2.24 | 3.10 | 44% | 12% | 87% |
+| D+2 | 1.85 | 2.36 | 3.10 | 40% | 12% | 86% |
+| D+3 | 1.93 | 2.53 | 3.10 | 38% | 12% | 88% |
+| D+4 | 2.05 | 2.72 | 3.10 | 34% | 12% | 87% |
+| D+5 | 2.22 | 2.76 | 3.10 | 28% | 12% | 82% |
+| D+6 | 2.31 | 2.88 | 3.10 | 25% | 12% | 82% |
+
+The naive MAE is lower than DE-LU's (3.10 against 3.39 ct), and so is the skill, most of
+all at D+5 and D+6 (28 % and 25 % against 32 % and 28 %). Peaks come out too low as for
+DE-LU: in the hours above 20.8 ct/kWh (NL's peak threshold), on average 6.8 ct one day ahead
+and 8.4 ct six days ahead. The project website's look-back chart shows DE-LU only.
 
 ## On your install
 

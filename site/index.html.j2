@@ -68,6 +68,10 @@
   --btn: #1b5fb3;
   --on-btn: #ffffff;
   --focus: #1b5fb3;
+  --land: #e4eaf1;
+  --land-edge: #c2ccd8;
+  --zone: #2a78d6;
+  --zone-hi: #1b5fb3;
   --h1: #2a78d6; --h2: #eb6834; --h3: #1baf7a; --h4: #eda100; --h5: #e87ba4; --h6: #008300;
   --display: "Archivo", "Arial Narrow", system-ui, sans-serif;
   --body: "Atkinson Hyperlegible Next", "Segoe UI", system-ui, sans-serif;
@@ -89,6 +93,10 @@
     --btn: #4d93e6;
     --on-btn: #0d1520;
     --focus: #82b6f2;
+    --land: #1c2a3b;
+    --land-edge: #33465e;
+    --zone: #4d93e6;
+    --zone-hi: #82b6f2;
     color-scheme: dark;
   }
 }
@@ -225,6 +233,20 @@ table.acc td:first-child span { color: var(--ink-3); }
 .caveat h3 { font-size: 24px; line-height: 1.1; }
 .caveat p { color: var(--ink-2); font-size: 16px; }
 
+/* the zone map */
+.zones-grid { display: grid; grid-template-columns: minmax(0, 1fr); gap: 32px 56px; align-items: start; }
+@media (min-width: 960px) { .zones-grid { grid-template-columns: minmax(0, 1fr) minmax(0, 1.1fr); } }
+.zone-map { margin: 0; display: flex; flex-direction: column; gap: 10px; }
+.zone-map svg { display: block; width: 100%; height: auto; background: var(--board); border: 1px solid var(--rule); border-radius: 10px; }
+.zone-map .land { fill: var(--land); stroke: var(--land-edge); stroke-width: 0.8; stroke-linejoin: round; }
+.zone-map .zone path { fill: var(--zone); stroke: var(--board); stroke-width: 1.2; stroke-linejoin: round; transition: fill 0.15s; }
+.zone-map .zone:hover path, .zone-map .zone:focus-visible path { fill: var(--zone-hi); }
+.zone-map .zone:focus-visible { outline: none; }
+.zone-map figcaption { font-size: 13px; color: var(--ink-3); }
+table.acc.zones-acc thead tr:last-child th:nth-child(n + 2) { padding-left: 16px; }
+@media (max-width: 600px) { table.acc.zones-acc thead tr:last-child th:nth-child(n + 2) { padding-left: 10px; } }
+table.zones-acc tbody tr:target td { background: var(--grid); }
+
 /* five steps of one forecast run, in order */
 .route { margin: 0; padding: 0; list-style: none; counter-reset: stop; display: grid; grid-template-columns: minmax(0, 1fr); }
 .route li { counter-increment: stop; position: relative; padding: 0 0 26px 52px; display: flex; flex-direction: column; gap: 4px; }
@@ -284,6 +306,7 @@ footer.foot nav { display: flex; flex-wrap: wrap; gap: 6px 22px; }
 <a class="brand" href="#top"><img src="{{ root }}assets/icon.svg" alt="" width="30" height="30"><span>Spot Forecast</span></a>
 <div class="links">
 <a href="#accuracy">{{ t.nav.accuracy }}</a>
+<a href="#zones">{{ t.nav.zones }}</a>
 <a href="#how">{{ t.nav.how }}</a>
 <a href="#cards">{{ t.nav.cards }}</a>
 <a href="#install">{{ t.nav.install }}</a>
@@ -408,6 +431,39 @@ footer.foot nav { display: flex; flex-wrap: wrap; gap: 6px 22px; }
 </div>
 </section>
 
+<section id="zones" class="wrap sec">
+<div class="lede">
+<h2>{{ t.zones.title }}</h2>
+<p>{{ t.zones.lede }}</p>
+</div>
+<div class="zones-grid">
+<figure class="zone-map">
+<svg viewBox="0 0 {{ zone_map.width }} {{ zone_map.height }}" role="img" aria-labelledby="zone-map-title">
+<title id="zone-map-title">{{ t.zones.map_label }}</title>
+<path class="land" d="{{ zone_map.context }}"/>
+{%- for z in zone_map.zones %}
+<a class="zone" href="#zone-{{ z.slug }}" data-zone="{{ z.code }}"><path d="{{ z.path }}"><title>{{ z.code }} – {{ t.zones.names[z.code] }}: {{ z.mae[0] | num(2) }} ct/kWh {{ t.zones.d1 }}</title></path></a>
+{%- endfor %}
+</svg>
+<figcaption>{{ t.zones.map_caption }}{% if zone_map.zones | selectattr("approximate") | list %} {{ t.zones.approximate }}{% endif %}</figcaption>
+</figure>
+<div>
+<p class="table-cap" id="zones-cap">{{ t.zones.table_caption }}</p>
+<div class="table-wrap">
+<table class="acc zones-acc" aria-labelledby="zones-cap">
+<thead><tr><th scope="col">{{ t.zones.zone }}</th>{% for h in range(1, 7) %}<th scope="col">D+{{ h }}</th>{% endfor %}</tr></thead>
+<tbody>
+{%- for z in zone_map.zones %}
+<tr id="zone-{{ z.slug }}"><td style="--k:var(--zone)"><b>{{ z.code }}</b> <span>{{ t.zones.names[z.code] }}</span></td>{% for v in z.mae %}<td>{{ v | num(2) }}</td>{% endfor %}</tr>
+{%- endfor %}
+</tbody>
+</table>
+</div>
+<p class="note">{{ t.zones.table_note }}</p>
+</div>
+</div>
+</section>
+
 <section id="how" class="wrap sec">
 <div class="lede">
 <h2>{{ t.how.title }}</h2>
@@ -472,6 +528,7 @@ footer.foot nav { display: flex; flex-wrap: wrap; gap: 6px 22px; }
 <dl class="sources">
 <div><dt><a href="https://www.energy-charts.info/">{{ t.sources.prices_name }}</a></dt><dd>{{ t.sources.prices }}</dd></div>
 <div><dt><a href="https://open-meteo.com/">{{ t.sources.weather_name }}</a></dt><dd>{{ t.sources.weather }}</dd></div>
+<div><dt><a href="https://www.naturalearthdata.com/">{{ t.sources.map_name }}</a></dt><dd>{{ t.sources.map }}</dd></div>
 </dl>
 </section>
 </main>

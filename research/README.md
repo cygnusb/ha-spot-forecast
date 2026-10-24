@@ -196,6 +196,16 @@ measures the two together: MAE 2.10 → 2.02 ct (D+1 1.79 → 1.70, D+6 2.48 →
 months 2.79 → 2.48 ct, peak bias D+1 −8.4 → −7.5 ct; P90 exceedance (12 %) and the naive
 baseline (3.39 ct) unchanged. The research scripts are in `zones/` and `holidays_dst/`.
 
+**Adopted: NL as the second zone.** The zone-generic features of `zones/genfeat.py` (variant
+`rel`) are the `generic` layout of `core.features` (equal to `genfeat` bit for bit, apart
+from the lag columns near a DST change, which are wall-clock in schema 2), with NL's points
+and roles from `zones/zonecfg.py`. The bundled model `nl-2026-10` (cutoff 2026-10-01, issue
+days 2025-04-01 … 2026-09-30) has MAE 2.02 ct over all horizons (D+1 1.75 … D+6 2.31), skill
+0.35, bias −0.34. On the research's window (issue days from 2025-10-01, here targets up to
+2026-09-30 instead of 2026-10-21): 2.13 ct, skill 0.37, bias −0.51, against `bt.py NL rel
+600`'s 2.20 / 0.37 / −0.56. Besides the window and the lags, `bt.py` fits with sklearn's
+default early stopping (a held-out 10 % above 10 000 rows), `training.train.fit` without.
+
 ### Low-price chance (P10)
 
 A P10 quantile model (`--quantile 0.1 --target gq`) with the mirrored rolling conformal

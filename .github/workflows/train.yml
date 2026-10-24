@@ -225,6 +225,8 @@ jobs:
     # No checkout and no installs: only gh, jq and sha256sum from the runner image touch the
     # files with a token that can write.
     needs: train
+    # always(): the train job fails in its last step when a zone errored, and its outputs,
+    # set by the steps before, still hold the zones that passed.
     if: always() && needs.train.outputs.archived == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 30

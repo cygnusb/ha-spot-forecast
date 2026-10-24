@@ -1,13 +1,14 @@
 {
   "meta": {
     "title": "Spot Forecast – Strompreis-Prognose für sechs Tage in Home Assistant",
-    "description": "Eine kostenlose Home-Assistant-Integration, die den Day-Ahead-Strompreis für Deutschland und Luxemburg stündlich für die sechs Tage nach der veröffentlichten Auktion vorhersagt, mit einem Band für das Spitzenrisiko. Offene Daten, kein Konto, kein API-Schlüssel.",
+    "description": "Eine kostenlose Home-Assistant-Integration, die den Day-Ahead-Strompreis für Deutschland und Luxemburg oder die Niederlande stündlich für die sechs Tage nach der veröffentlichten Auktion vorhersagt, mit einem Band für das Spitzenrisiko. Offene Daten, kein Konto, kein API-Schlüssel.",
     "og_title": "Spot Forecast für Home Assistant",
-    "og_description": "Day-Ahead-Strompreise für DE-LU, sechs Tage weiter als die Auktion, mit einem ehrlichen Band für das Spitzenrisiko."
+    "og_description": "Day-Ahead-Strompreise für DE-LU und NL, sechs Tage weiter als die Auktion, mit einem ehrlichen Band für das Spitzenrisiko."
   },
   "nav": {
     "main_label": "Hauptnavigation",
     "accuracy": "Wie gut ist sie?",
+    "zones": "Zonen",
     "how": "So funktioniert’s",
     "cards": "Karten",
     "install": "Installation",
@@ -16,7 +17,7 @@
   },
   "hero": {
     "title": "Strompreise, sechs Tage im Voraus.",
-    "lede": "Die Day-Ahead-Auktion reicht nur bis morgen. Spot Forecast ergänzt die sechs Tage danach, Stunde für Stunde, für die Zone DE-LU, mit einem Band für das Spitzenrisiko, das zeigt, wie hoch ein Preis steigen kann. Alles läuft in Home Assistant, mit offenen Daten.",
+    "lede": "Die Day-Ahead-Auktion reicht nur bis morgen. Spot Forecast ergänzt die sechs Tage danach, Stunde für Stunde, für die Zone DE-LU oder NL, mit einem Band für das Spitzenrisiko, das zeigt, wie hoch ein Preis steigen kann. Alles läuft in Home Assistant, mit offenen Daten.",
     "cta_install": "Über HACS installieren",
     "cta_accuracy": "Wie genau ist sie?",
     "facts": {
@@ -89,6 +90,21 @@
       }
     }
   },
+  "zones": {
+    "title": "Unterstützte Zonen",
+    "lede": "Jede Gebotszone hat ihr eigenes Modell, trainiert auf ihren eigenen Preisen und auf dem Wetter dort, wo ihr Wind, ihre Sonne und ihr Verbrauch sind. Die Zone wählst du beim Hinzufügen der Integration; mehrere Zonen können nebeneinander laufen.",
+    "map_label": "Karte Nord- und Mitteleuropas, die unterstützten Gebotszonen hervorgehoben",
+    "d1": "einen Tag voraus",
+    "map_caption": "Hervorgehoben: die Zonen mit mitgeliefertem Modell. Karte: Natural Earth.",
+    "approximate": "Zonengrenzen, die dem Netz statt Regionen folgen, sind näherungsweise gezeichnet.",
+    "table_caption": "Mittlerer absoluter Fehler in ct/kWh je Horizont, mitgeliefertes Modell jeder Zone",
+    "zone": "Zone",
+    "names": {
+      "DE-LU": "Deutschland und Luxemburg",
+      "NL": "Niederlande"
+    },
+    "table_note": "Außerhalb der Stichprobe, über den Walk-forward-Zeitraum des jeweiligen Modells. Das Preisniveau unterscheidet sich zwischen den Zonen: Vergleiche die Fehler einer Zone besser mit ihrem naiven Fehler in der Dokumentation als mit einer anderen Zone."
+  },
   "how": {
     "title": "So funktioniert’s",
     "lede": "Ein Lauf braucht nur numpy: Auf einem Raspberry Pi 5 dauert er samt Downloads etwa 1,2 Sekunden. Er wiederholt sich nach jedem neuen Lauf des Wettermodells, viermal am Tag, und noch einmal, wenn das Auktionsergebnis für morgen erscheint.",
@@ -159,11 +175,13 @@
   },
   "sources": {
     "title": "Offene Daten, mit Quellenangabe",
-    "lede": "Beide Quellen sind frei und brauchen keinen Schlüssel. Die Integration nennt sie in der Attribution des Sensors.",
+    "lede": "Die Preis- und Wetterquellen sind frei und brauchen keinen Schlüssel. Die Integration nennt sie in der Attribution des Sensors.",
     "prices_name": "Energy-Charts",
-    "prices": "Day-Ahead-Preise DE-LU. Energy-Charts des Fraunhofer ISE, Preisdaten von Bundesnetzagentur | SMARD.de, Lizenz CC BY 4.0.",
+    "prices": "Day-Ahead-Preise DE-LU und NL. Energy-Charts des Fraunhofer ISE, Preisdaten von Bundesnetzagentur | SMARD.de, Lizenz CC BY 4.0.",
     "weather_name": "Open-Meteo",
-    "weather": "Wetterprognosen des ECMWF-Modells IFS mit 0,25°. Open-Meteo, Lizenz CC BY 4.0, frei für nicht-kommerzielle Nutzung."
+    "weather": "Wetterprognosen des ECMWF-Modells IFS mit 0,25°. Open-Meteo, Lizenz CC BY 4.0, frei für nicht-kommerzielle Nutzung.",
+    "map_name": "Natural Earth",
+    "map": "Länder- und Regionsgrenzen der Zonenkarte, 1:10m, gemeinfrei."
   },
   "footer": {
     "text": "Spot Forecast ist freie Software unter der MIT-Lizenz.",
