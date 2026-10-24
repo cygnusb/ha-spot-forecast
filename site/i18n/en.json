@@ -3,7 +3,7 @@
     "title": "Spot Forecast – six-day electricity price forecast for Home Assistant",
     "description": "A free Home Assistant integration that forecasts the day-ahead electricity price of Germany and Luxembourg or the Netherlands hour by hour for the six days after the published auction, with a peak-risk band. Open data, no account, no API key.",
     "og_title": "Spot Forecast for Home Assistant",
-    "og_description": "Day-ahead electricity prices for DE-LU, NL, DK1 and DK2, six days further than the auction, with an honest peak-risk band."
+    "og_description": "Day-ahead electricity prices for DE-LU, NL, DK1, DK2 and NO2, six days further than the auction, with an honest peak-risk band."
   },
   "nav": {
     "main_label": "Main",
@@ -17,7 +17,7 @@
   },
   "hero": {
     "title": "Electricity prices, six days ahead.",
-    "lede": "The day-ahead auction only covers today and tomorrow. Spot Forecast adds the six days after that, hour by hour, for the DE-LU, NL, DK1 or DK2 zone, with a peak-risk band that says how high a price could go. It runs inside Home Assistant on open data.",
+    "lede": "The day-ahead auction only covers today and tomorrow. Spot Forecast adds the six days after that, hour by hour, for the DE-LU, NL, DK1, DK2 or NO2 zone, with a peak-risk band that says how high a price could go. It runs inside Home Assistant on open data.",
     "cta_install": "Install from HACS",
     "cta_accuracy": "See how accurate it is",
     "facts": {
@@ -180,7 +180,7 @@
     "title": "Open data, credited",
     "lede": "The price and weather sources are free and need no key. The integration names them in the sensor’s attribution.",
     "prices_name": "Energy-Charts",
-    "prices": "Day-ahead prices DE-LU, NL, DK1 and DK2. Energy-Charts by Fraunhofer ISE, price data from Bundesnetzagentur | SMARD.de, licensed CC BY 4.0.",
+    "prices": "Day-ahead prices DE-LU, NL, DK1, DK2 and NO2. Energy-Charts by Fraunhofer ISE, price data from Bundesnetzagentur | SMARD.de, licensed CC BY 4.0.",
     "weather_name": "Open-Meteo",
     "weather": "Weather forecasts from the ECMWF IFS model at 0.25°. Open-Meteo, licensed CC BY 4.0, free for non-commercial use.",
     "map_name": "Natural Earth",

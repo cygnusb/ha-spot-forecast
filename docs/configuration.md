@@ -26,12 +26,16 @@ The setup has one step: the **bidding zone**:
 | NL | Netherlands | 21 % |
 | DK1 | Denmark West (Jutland, Funen) | 25 % |
 | DK2 | Denmark East (Zealand, Bornholm) | 25 % |
+| NO2 | Southern Norway | 25 % |
 
 Each zone can be set up once; several zones run side by side, each with its own
 model, entities (`sensor.spot_forecast_nl_price`, …) and statistics. A DK1 or
 DK2 entry also reads the DE-LU prices and blends its forecast with the DE-LU
 model inside its own model file (see [how the model works](model.md#dk1-and-dk2-blended-with-de-lu));
-it needs no DE-LU entry, and a DE-LU entry next to it does not change it.
+it needs no DE-LU entry, and a DE-LU entry next to it does not change it. An
+NO2 entry also fetches the recent precipitation and temperature of its hydro
+points (see [how the model works](model.md#no2-hydro-features)). Prices and
+forecasts are in EUR for every zone, NO2 included.
 
 The integration ships with a trained model and its backfill file, so it works
 right after setup and without access to GitHub.
@@ -43,7 +47,7 @@ right after setup and without access to GitHub.
 | Option | Default | Range | What it does |
 |---|---|---|---|
 | Grid fees and taxes | 0 | 0–1 EUR/kWh, to 0.0001 | Gross amount per kWh, VAT included, added for the [total-price sensor](entities.md#total-price) and the "mit Abgaben" view of the [forecast card](cards.md#forecast-card). 0 means no total-price sensor. |
-| VAT on the market price | the zone's (19 % DE-LU, 21 % NL, 25 % DK1 and DK2) | 0–30 %, in steps of 0.1 | Value-added tax charged on the exchange price for the total price. |
+| VAT on the market price | the zone's (19 % DE-LU, 21 % NL, 25 % DK1, DK2 and NO2) | 0–30 %, in steps of 0.1 | Value-added tax charged on the exchange price for the total price. |
 | Peak price threshold | the model's, 21.2 ct/kWh | 0–100 ct/kWh | Wholesale price at or above which an hour counts as a price peak, for the [peak-risk sensor](entities.md#peak-risk). |
 | Backfill window (days) | 60 | 0–180 | How many past days of forecasts are reconstructed on first start, so the look-back card and the calibration have history. 0 turns the backfill off. |
 | Update models automatically | on | | Check for a newer model for the zone after setup and once a day between 03:00 and 06:00, and download it if it passes its checks. Off stops further downloads; a model downloaded before stays in use (see [model updates](model.md#model-updates)). |
@@ -63,7 +67,7 @@ total price = exchange price × (1 + VAT / 100) + grid fees and taxes
 ```
 
 The default VAT is the zone's standard rate: Germany's 19 % for DE-LU, the
-Netherlands' 21 % for NL, Denmark's 25 % for DK1 and DK2. Luxembourg, the other half of DE-LU, charges a
+Netherlands' 21 % for NL, Denmark's 25 % for DK1 and DK2, Norway's 25 % for NO2. Luxembourg, the other half of DE-LU, charges a
 different rate on electricity: enter the one on your bill. An entry without the
 option set always uses its zone's default. A
 negative exchange price lowers the total by its amount plus VAT. The
