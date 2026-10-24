@@ -13,7 +13,7 @@ import zlib
 import numpy as np
 
 from .features import FEATURE_SCHEMA, HORIZONS, feature_names
-from .zones import zone_by_slug
+from .zones import ZONES, zone_by_slug
 
 FORMAT = 1
 _ROW_CHUNK = 4096
@@ -96,7 +96,13 @@ class Trees:
 
 @dataclass(frozen=True)
 class ModelFile:
-    """Everything the integration needs from one training run."""
+    """Everything the integration needs from one training run.
+
+    A zone with a parent zone (``Zone.parent``) has a composite model: ``parent`` is the
+    parent zone's complete model, and the forecast is ``blend`` x this model's + (1 -
+    ``blend``) x the parent's (``core.forecast.run_forecast``). The offsets and metrics are
+    those of the blend.
+    """
 
     format: int
     zone: str
@@ -113,6 +119,8 @@ class ModelFile:
     peak_threshold: float
     capacity: dict[str, float]
     metrics: dict
+    parent: ModelFile | None = None
+    blend: float = 1.0  # weight of this model against ``parent``
 
 
 _TREE_FIELDS = (
@@ -188,6 +196,10 @@ def _offsets(d: dict[str, Any], name: str) -> dict[int, float]:
 
 def dump_model(m: ModelFile) -> bytes:
     """Serialise to gzip JSON; strict JSON, so non-finite numbers raise ``ValueError``."""
+    return gzip.compress(json.dumps(_model_to_json(m), allow_nan=False).encode(), mtime=0)
+
+
+def _model_to_json(m: ModelFile) -> dict[str, Any]:
     doc = {
         "format": m.format,
         "zone": m.zone,
@@ -205,7 +217,10 @@ def dump_model(m: ModelFile) -> bytes:
         "capacity": m.capacity,
         "metrics": m.metrics,
     }
-    return gzip.compress(json.dumps(doc, allow_nan=False).encode(), mtime=0)
+    if m.parent is not None:  # only then: the files of zones without a parent stay as they were
+        doc["parent"] = _model_to_json(m.parent)
+        doc["blend"] = m.blend
+    return doc
 
 
 def load_model(data: bytes) -> ModelFile:
@@ -247,6 +262,25 @@ def _model_from_json(doc: Any) -> ModelFile:
     names = feature_names(zone)
     if tuple(doc.get("features", ())) != names:
         raise ModelMismatch(f"model feature list differs from the code's for zone {zone.code}")
+    parent, blend = None, 1.0
+    if zone.parent is None:
+        if "parent" in doc or "blend" in doc:
+            raise ModelMismatch(f"zone {zone.code} has no parent zone, the model file has one")
+    else:
+        if not isinstance(doc.get("parent"), dict):
+            raise ModelMismatch(f"the model of zone {zone.code} lacks its {zone.parent} model")
+        expected, got = ZONES[zone.parent].slug, doc["parent"].get("zone")
+        if got != expected:
+            raise ModelMismatch(
+                f"the parent model of zone {zone.code} is for {got!r}, not {expected!r}"
+            )
+        try:
+            parent = _model_from_json(doc["parent"])
+        except ModelMismatch as e:
+            raise type(e)(f"parent model: {e}") from e
+        blend = float(doc["blend"])
+        if not 0.0 <= blend <= 1.0:  # NaN fails too
+            raise ModelCorrupt(f"blend {blend} is not between 0 and 1")
     return ModelFile(
         format=doc["format"],
         zone=doc["zone"],
@@ -263,6 +297,8 @@ def _model_from_json(doc: Any) -> ModelFile:
         peak_threshold=float(doc["peak_threshold"]),
         capacity={k: float(v) for k, v in doc["capacity"].items()},
         metrics=doc["metrics"],
+        parent=parent,
+        blend=blend,
     )
 
 
@@ -278,9 +314,15 @@ def sample_check(model: ModelFile) -> None:
     """Raise ``ModelCorrupt`` unless the median, P90 and P10 predictions of a fixed sample
     are finite and below ``SAMPLE_LIMIT`` in absolute value.
 
-    For a model from ``load_model`` (whose trees are checked to be well-formed).
+    For a model from ``load_model`` (whose trees are checked to be well-formed). Checks the
+    parent model of a composite model too.
     """
     for name in ("median", "p90", "p10"):
         y = getattr(model, name).predict(_sample(len(model.features)))
         if not (np.isfinite(y).all() and (np.abs(y) < SAMPLE_LIMIT).all()):
             raise ModelCorrupt(f"{name}: sample predictions {y.tolist()} are not plausible")
+    if model.parent is not None:
+        try:
+            sample_check(model.parent)
+        except ModelCorrupt as e:
+            raise ModelCorrupt(f"parent model: {e}") from e
