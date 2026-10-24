@@ -392,7 +392,7 @@ def test_models_without_parent_have_no_parent_fields(tiny_model_file, tiny_nl_mo
         assert back.parent is None and back.blend == 1.0
 
 
-@pytest.mark.parametrize("slug", ["de_lu", "nl"])
+@pytest.mark.parametrize("slug", ["de_lu", "nl", "no2"])
 def test_bundled_models_dump_to_the_same_json(slug):
     """Loading and dumping a model file of a zone without parent gives its JSON back.
 
