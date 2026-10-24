@@ -17,8 +17,8 @@ right after them. The anchor is in the sensor's `anchor_day` attribute.
 
 | What | Source | When |
 |---|---|---|
-| Day-ahead prices of the zone, the last 40 days | [Energy-Charts](https://www.energy-charts.info/) `/price?bzn=DE-LU` (or `NL`) | every run, one request |
-| Weather forecast, hourly, 8 days, ECMWF IFS 0.25° | [Open-Meteo](https://open-meteo.com/), one multi-location request per set of points with the same variables (DE-LU: German points, neighbour points; NL: three) | every run |
+| Day-ahead prices of the zone, the last 40 days | [Energy-Charts](https://www.energy-charts.info/) `/price?bzn=DE-LU` (or `NL`, `DK1`, `DK2`; DK1 and DK2 also read DE-LU's) | every run, one request (DK: two, one after the other) |
+| Weather forecast, hourly, 8 days, ECMWF IFS 0.25° | [Open-Meteo](https://open-meteo.com/), one multi-location request per set of points with the same variables (DE-LU: German points, neighbour points; NL: three; DK1, DK2: four) | every run |
 | Installed wind and solar capacity (DE-LU) | the model file (last training value) | |
 | Public holidays of the zone's country | computed in the integration | |
 
@@ -51,6 +51,48 @@ calendar (Dutch public holidays) and the same price features as DE-LU. There
 is no installed-capacity feature. The model file's feature list is checked
 against its zone's layout, so a model is never applied to another zone.
 
+## DK1 and DK2: blended with DE-LU
+
+Denmark's two zones are tightly coupled to Germany, and in the research
+backtest neither an own model nor the DE-LU forecast used as is was best for
+them: the 50/50 blend of both was (`research/zones/README.md`, section "DK1
+and DK2"). So a DK forecast is the average of two models:
+
+* the zone's **own model**: the zone-generic layout with the zone's points
+  (below), plus inputs from DE-LU: the raw series of the ten German points,
+  the German wind-power index, solar estimate and temperature mean with their
+  daily values, and six DE-LU price features (the anchor day's DE-LU price at
+  the target hour and a week before, DE-LU's daily mean, 7-day mean, maximum
+  and evening level). The DE-LU prices are given relative to the DK zone's own
+  7-day mean in its own evening-level units, like the zone's own price
+  features;
+* the **DE-LU model** itself, run on DE-LU's prices and points as for a DE-LU
+  entry.
+
+The median, P90 and P10 are each `0.5 × own + 0.5 × DE-LU`, hour by hour; an
+hour is valid only when both sides are. The DK model file carries the complete
+DE-LU model it blends with (a *composite* model), so a DK install always
+blends with the DE-LU model it was trained and calibrated with, whatever model
+a DE-LU entry next to it runs. The calibration offsets and the backtest
+figures in the file are those of the blend. A DK model file without its DE-LU
+model, with one of another zone or of another feature schema does not load.
+
+| Role | DK1 (West Denmark) | DK2 (East Denmark) |
+|---|---|---|
+| Own | `nb_dk_west`, `dk1_horns_rev` (offshore), `dk1_north_jutland`, `dk1_aarhus`, `dk1_south_jutland` | `dk2_copenhagen`, `dk2_kriegers_flak` (offshore), `dk2_lolland`, `dk2_bornholm` |
+| Wind index | all own points | all own points |
+| Solar estimate | `dk1_north_jutland`, `dk1_aarhus`, `dk1_south_jutland` | `dk2_copenhagen`, `dk2_lolland` |
+| Neighbours | `schleswig`, `north_sea`, `ostfriesland`, `nb_nl`, `nb_no_south`, `no2_sirdal`, `se3_gothenburg`, `dk2_copenhagen` | `baltic`, `nb_se_south`, `se4_malmo`, `dk1_aarhus`, `se3_gothenburg`, `nb_no_south`, `nb_se_north` |
+| Neighbour wind | `schleswig`, `north_sea`, `ostfriesland`, `nb_nl`, `dk2_copenhagen` | `baltic`, `nb_se_south`, `se4_malmo`, `dk1_aarhus` |
+| Neighbour hydro (precipitation) | `nb_no_south`, `no2_sirdal` | `nb_no_south`, `nb_se_north` |
+
+The `dk*` points and `se4_malmo` have wind, temperature and cloud cover,
+`no2_sirdal` and `se3_gothenburg` wind, temperature and precipitation. A DK run
+fetches the weather of all its own and neighbour points and of every DE-LU
+point (the DE-LU model needs them all). The calendar is the Danish one plus
+Christmas Eve and New Year's Eve, which are days off in practice; Store
+bededag counts up to 2023, when it was abolished.
+
 ## Three tree models
 
 Per zone, three gradient-boosted tree models, trained with scikit-learn's
@@ -78,7 +120,8 @@ local clock hour, also across a daylight-saving switch: 18:00 a week before
 stays 18:00, not 17:00 or 19:00.
 
 The trees are exported to a compact JSON file per zone
-(`custom_components/spot_forecast/models/de_lu.json.gz`, `nl.json.gz`): the feature list and
+(`custom_components/spot_forecast/models/de_lu.json.gz`, `nl.json.gz`, `dk1.json.gz`,
+`dk2.json.gz`): the feature list and
 order, the tree arrays, training period, version, backtest metrics, default
 calibration offsets, installed capacity and default peak threshold. On the
 device a small tree walker over numpy arrays evaluates them; it reproduces
@@ -113,7 +156,10 @@ baseline within about two quarters. So the models are retrained every month,
 and they reach your install **separately from integration releases**:
 
 * A GitHub Actions workflow trains every zone, one after the other, on all
-  data through the end of the last month on the 3rd of each month.
+  data through the end of the last month on the 3rd of each month. DE-LU
+  comes first: DK1 and DK2 embed the DE-LU model of the same run (also when
+  DE-LU's own gate fails) and are skipped that month if DE-LU's training
+  errors.
 * A **quality gate** compares each zone's model out of sample with the zone's
   published model on the last month. It is published only if its error is no
   more than 0.1 ct worse and it beats the naive baseline; otherwise the

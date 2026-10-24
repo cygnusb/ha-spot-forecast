@@ -1,7 +1,7 @@
 # Spot Forecast documentation
 
 Spot Forecast is a Home Assistant integration that forecasts the day-ahead
-electricity price of the DE-LU or NL bidding zone, hour by hour, for the six days
+electricity price of the DE-LU, NL, DK1 or DK2 bidding zone, hour by hour, for the six days
 after the last published auction result. Per hour it gives an expected price,
 a peak-risk value (P90) and a low-price value (P10). It runs on open data from
 Energy-Charts and Open-Meteo, without an account or API key.

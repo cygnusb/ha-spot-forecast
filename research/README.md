@@ -206,6 +206,19 @@ days 2025-04-01 … 2026-09-30) has MAE 2.02 ct over all horizons (D+1 1.75 … 
 600`'s 2.20 / 0.37 / −0.56. Besides the window and the lags, `bt.py` fits with sklearn's
 default early stopping (a held-out 10 % above 10 000 rows), `training.train.fit` without.
 
+**Adopted: DK1 and DK2 as composite zones.** Each forecast is the 50/50 blend of the zone's
+own model and the DE-LU model, as in `zones/dk_options.py`. The own model is `bt.py` variant
+`desetprel`: the `generic` layout plus the raw series of the ten DE-LU points, the DE-LU
+aggregates of `genfeat`'s `de_extra` and the six DE-LU price features relative to the zone's
+7-day mean (`DE_REL`), equal to `genfeat` bit for bit apart from the four lag columns near a
+DST change (wall-clock in schema 2). The DE-LU half is `de_lu-2026-10`, embedded in the DK
+model file. Bundled `dk1-2026-10` / `dk2-2026-10` (cutoff 2026-10-01, issue days 2025-04-01
+… 2026-09-30): blend 2.05 / 2.18 ct over all horizons (own model 2.17 / 2.29, DE-LU model
+2.17 / 2.28), skill 0.44 / 0.43, P90 exceedance 12 %. On the rows of `dk_options.py`
+(issue days from 2025-10-01) with targets up to 2026-09-30: blend 2.14 / 2.33 ct, against
+2.14 / 2.32 for the research predictions on the same rows (2.18 / 2.35 on the research's
+full window to 2026-10-21).
+
 ### Low-price chance (P10)
 
 A P10 quantile model (`--quantile 0.1 --target gq`) with the mirrored rolling conformal

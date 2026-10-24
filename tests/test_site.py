@@ -217,7 +217,7 @@ def test_a_bundled_zone_without_a_map_shape_fails_the_build(tmp_path, monkeypatc
 
 def test_zone_tables_match_the_bundled_models():
     """README's zone table: per bundled model its MAE D+1 … D+6 and skill over all horizons.
-    The NL section of docs/accuracy.md: NL's report per horizon."""
+    The NL, DK1 and DK2 sections of docs/accuracy.md: their reports per horizon."""
     readme = (REPO / "README.md").read_text(encoding="utf-8")
     section = readme.split("## Supported zones")[1].split("\n## ")[0]
     rows = {
@@ -235,16 +235,21 @@ def test_zone_tables_match_the_bundled_models():
         ]
 
     docs = (REPO / "docs" / "accuracy.md").read_text(encoding="utf-8")
-    nl = docs.split("## Netherlands (NL)")[1].split("\n## ")[0]
-    horizons = models["nl"]["metrics"]["horizons"]
-    assert _table_rows(nl) == {
-        h: [
-            _ct(m["mae"] / 10),
-            _ct(m["mae_3m"] / 10),
-            _ct(m["naive_mae"] / 10),
-            _pct(m["skill"]),
-            _pct(m["p90_exceedance"]),
-            _pct(m["neg_p10_below_zero"]),
-        ]
-        for h, m in horizons.items()
+    sections = {
+        "nl": docs.split("## Netherlands (NL)")[1].split("\n## ")[0],
+        "dk1": docs.split("### DK1")[1].split("\n### ")[0],
+        "dk2": docs.split("### DK2")[1].split("\n## ")[0],
     }
+    for slug, text in sections.items():
+        horizons = models[slug]["metrics"]["horizons"]
+        assert _table_rows(text) == {
+            h: [
+                _ct(m["mae"] / 10),
+                _ct(m["mae_3m"] / 10),
+                _ct(m["naive_mae"] / 10),
+                _pct(m["skill"]),
+                _pct(m["p90_exceedance"]),
+                _pct(m["neg_p10_below_zero"]),
+            ]
+            for h, m in horizons.items()
+        }, slug

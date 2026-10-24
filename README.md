@@ -13,7 +13,7 @@
 [![Validate][validate-badge]][validate-url]
 [![GitHub Stars][stars-badge]][stars-url]
 
-**Day-ahead electricity prices for Germany, Luxembourg and the Netherlands, six days further than the auction.**
+**Day-ahead electricity prices for Germany, Luxembourg, the Netherlands and Denmark, six days further than the auction.**
 
 [Project website](https://cygnusb.github.io/ha-spot-forecast/) · [Documentation](https://cygnusb.github.io/ha-spot-forecast/docs/) · [Releases](https://github.com/cygnusb/ha-spot-forecast/releases)
 
@@ -21,7 +21,7 @@ The day-ahead auction publishes prices for today and, from about 13:00, for
 tomorrow. Anyone who plans a home battery, an electric car or a heat pump
 further ahead has to guess. Spot Forecast is a Home Assistant integration that
 fills the six days after the last published price with an hourly forecast for
-the DE-LU or NL bidding zone (see [Supported zones](#supported-zones)), and says how far to
+the DE-LU, NL, DK1 or DK2 bidding zone (see [Supported zones](#supported-zones)), and says how far to
 trust it: an expected price per
 hour, a **peak-risk** value that the price exceeded in 12–13 % of the hours of
 the backtest (the target is one in ten), and a
@@ -45,10 +45,11 @@ month on GitHub and only evaluated on your device, with numpy.
 ## How it works
 
 1. **Known prices.** The last 40 days of the zone's day-ahead prices from
-   Energy-Charts, in one request.
+   Energy-Charts, in one request (DK1 and DK2: also DE-LU's, in a second one).
 2. **Weather forecast.** ECMWF IFS (0.25°) from Open-Meteo for the zone's own
    points and its neighbours' (DE-LU: 10 points in Germany and 12 in neighbouring
-   countries; NL: 7 in and off the Netherlands and 7 around it): wind at 100 m,
+   countries; NL: 7 in and off the Netherlands and 7 around it; DK1 and DK2: 4–5 in
+   Denmark, 7–8 around it and the 22 DE-LU points): wind at 100 m,
    solar radiation, temperature, cloud cover and precipitation. Weather carries most of the
    skill: without it the error stays close to the naive baseline's.
 3. **Three tree models.** Gradient-boosted trees predict, per hour, the
@@ -133,6 +134,13 @@ in the neighbouring countries, with the zone-generic feature layout and no capac
 25 % six days ahead, against 50 % and 28 % for DE-LU. Per horizon and for the last three
 months: [accuracy](docs/accuracy.md#netherlands-nl).
 
+DK1 (Jutland and Funen) and DK2 (Zealand and Bornholm) are tightly coupled to Germany. Their
+forecast is the average of the zone's own model, which also reads the German weather points
+and DE-LU prices, and of the DE-LU model, which each DK model file carries inside it
+([how](docs/model.md#dk1-and-dk2-blended-with-de-lu)). The average is better than either half
+alone: 2.05 against 2.17 ct for DK1, 2.18 against 2.28 ct for DK2 over all horizons
+([accuracy](docs/accuracy.md#denmark-west-dk1-and-denmark-east-dk2)).
+
 ## Installation (HACS)
 
 Spot Forecast is a HACS **custom repository** for now:
@@ -153,13 +161,13 @@ without access to GitHub.
 
 ## Configuration
 
-Setup asks for one thing: the bidding zone (DE-LU or NL; one entry per zone, several can
-run side by side). The options (*Configure* on the integration):
+Setup asks for one thing: the bidding zone (DE-LU, NL, DK1 or DK2; one entry per zone,
+several can run side by side). The options (*Configure* on the integration):
 
 | Option | Default | What it does |
 |---|---|---|
 | Grid fees and taxes | 0 | Gross per-kWh surcharge (EUR/kWh, VAT included) for a total-price sensor and the forecast card's "mit Abgaben" view; 0 = none. |
-| VAT on the market price | 19 % (DE-LU), 21 % (NL) | VAT charged on the exchange price for the total price: price × (1 + VAT/100) + surcharge. Set your own rate, e.g. in Luxembourg. |
+| VAT on the market price | 19 % (DE-LU), 21 % (NL), 25 % (DK1, DK2) | VAT charged on the exchange price for the total price: price × (1 + VAT/100) + surcharge. Set your own rate, e.g. in Luxembourg. |
 | Peak price threshold | from the model, 21.2 ct/kWh | Wholesale price at or above which an hour counts as a peak, for the peak-risk sensor. |
 | Backfill window (days) | 60 | Past days of forecasts reconstructed on first start, so the look-back and the calibration have history (0–180, 0 = off). |
 | Update models automatically | on | Check for a newer model after setup and once a day, and download it if it passes its checks. Off stops further downloads; a model downloaded before stays in use. |
@@ -233,7 +241,7 @@ other. See [docs/smart-battery-pilot.md](docs/smart-battery-pilot.md).
 
 | Data | Source | Licence |
 |---|---|---|
-| Day-ahead prices DE-LU and NL | [Energy-Charts](https://www.energy-charts.info/) (Fraunhofer ISE), price data from Bundesnetzagentur \| SMARD.de | CC BY 4.0 |
+| Day-ahead prices DE-LU, NL, DK1 and DK2 | [Energy-Charts](https://www.energy-charts.info/) (Fraunhofer ISE), price data from Bundesnetzagentur \| SMARD.de | CC BY 4.0 |
 | Weather forecasts (ECMWF IFS 0.25°, and its previous runs for the backfill) | [Open-Meteo](https://open-meteo.com/) | CC BY 4.0, free for non-commercial use |
 
 No keys, no accounts. The price sensor names both sources in its

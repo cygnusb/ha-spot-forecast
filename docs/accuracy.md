@@ -118,6 +118,44 @@ all at D+5 and D+6 (28 % and 25 % against 32 % and 28 %). Peaks come out too low
 DE-LU: in the hours above 20.8 ct/kWh (NL's peak threshold), on average 6.8 ct one day ahead
 and 8.4 ct six days ahead. The project website's look-back chart shows DE-LU only.
 
+## Denmark West (DK1) and Denmark East (DK2)
+
+The reports of the bundled DK models, `dk1-2026-10` and `dk2-2026-10`, with the same cutoff,
+walk-forward window and monthly refit as DE-LU's. Each is the [blend of its own model and
+the DE-LU model](model.md#dk1-and-dk2-blended-with-de-lu), and every figure is the blend's.
+MAE in ct/kWh, April 2025 to September 2026, and for the last three months (July to
+September 2026).
+
+### DK1
+
+| Horizon | MAE | MAE last three months | Naive MAE | Skill | Above peak risk | P10 below 0 in negative hours |
+|---|---|---|---|---|---|---|
+| D+1 | 1.67 | 2.01 | 3.68 | 55% | 12% | 90% |
+| D+2 | 1.75 | 2.18 | 3.68 | 52% | 12% | 90% |
+| D+3 | 1.89 | 2.39 | 3.68 | 49% | 12% | 93% |
+| D+4 | 2.08 | 2.62 | 3.68 | 43% | 12% | 90% |
+| D+5 | 2.38 | 2.97 | 3.68 | 35% | 12% | 88% |
+| D+6 | 2.51 | 3.19 | 3.68 | 32% | 13% | 88% |
+
+### DK2
+
+| Horizon | MAE | MAE last three months | Naive MAE | Skill | Above peak risk | P10 below 0 in negative hours |
+|---|---|---|---|---|---|---|
+| D+1 | 1.82 | 2.02 | 3.80 | 52% | 12% | 89% |
+| D+2 | 1.92 | 2.22 | 3.80 | 50% | 12% | 88% |
+| D+3 | 2.02 | 2.38 | 3.80 | 47% | 12% | 89% |
+| D+4 | 2.21 | 2.55 | 3.80 | 42% | 12% | 88% |
+| D+5 | 2.50 | 2.95 | 3.80 | 34% | 12% | 86% |
+| D+6 | 2.62 | 3.16 | 3.80 | 31% | 12% | 88% |
+
+Over all horizons the blend has an MAE of 2.05 ct for DK1 and 2.18 ct for DK2. Its two halves
+alone would have 2.17 (own model) and 2.17 (DE-LU model) for DK1, 2.29 and 2.28 for DK2:
+they err in different hours, so their average is better than either. The own models come
+out about 0.7 ct too low on average, the DE-LU model hardly at all, so the blend is about
+0.3 ct too low. Peaks come out too low as for DE-LU: in the hours above DK1's peak threshold
+of 20.9 ct/kWh on average 7.6 ct one day ahead and 9.9 ct six days ahead, above DK2's 21.7
+ct/kWh 8.8 and 11.3 ct.
+
 ## On your install
 
 `sensor.spot_forecast_de_lu_forecast_error` shows the mean absolute error of
