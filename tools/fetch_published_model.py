@@ -38,7 +38,7 @@ sys.path.insert(0, str(REPO / "custom_components" / "spot_forecast"))  # as card
 
 from core.ledger import runs_from_backfill_file  # noqa: E402
 from core.model import ModelFile, ModelMismatch, load_model, sample_check  # noqa: E402
-from core.zones import ZONES  # noqa: E402
+from core.zones import zone_by_slug  # noqa: E402
 
 MANIFEST_URL = "https://github.com/cygnusb/ha-spot-forecast/releases/download/models/manifest.json"
 MANIFEST_FORMAT = 1
@@ -89,7 +89,7 @@ def _checked_model(data: bytes, slug: str, entry: dict) -> ModelFile:
 
 
 def _check_backfill(data: bytes, slug: str, version: str) -> None:
-    tz = next(z.tz for z in ZONES.values() if z.slug == slug)
+    tz = zone_by_slug(slug).tz
     try:
         runs = runs_from_backfill_file(data, version, tz)
     except (OSError, EOFError, zlib.error, ValueError, KeyError, TypeError) as e:

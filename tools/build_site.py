@@ -3,9 +3,11 @@
 
 site/index.html.j2 is the page, site/i18n/<lang>.json its text. English goes to the
 root of the output directory, German to de/. Each page links its translation
-(hreflang). The accuracy table is read from the bundled model's ``metrics``, so the page
-always states the figures of the model a fresh install runs; the look-back chart loads
-site/data/backtest_<zone>.json (tools/site_data.py) from assets/. A sitemap index at
+(hreflang). The accuracy table is read from the bundled DE-LU model's ``metrics``, so the
+page always states the figures of the model a fresh install runs; the look-back chart loads
+site/data/backtest_<zone>.json (tools/site_data.py) from assets/. The zone map draws
+site/data/zone_map.json (tools/zone_map.py) and highlights every zone with a bundled
+model, listed with that model's errors. A sitemap index at
 the root lists these pages and the one MkDocs writes for /docs/.
 
 The texts are trusted HTML from this repository, so they are not escaped. A key
@@ -32,8 +34,10 @@ from markupsafe import Markup
 REPO = Path(__file__).resolve().parent.parent
 SITE = REPO / "site"
 ASSETS = REPO / "assets"
-MODEL = REPO / "custom_components" / "spot_forecast" / "models" / "de_lu.json.gz"
+MODELS = REPO / "custom_components" / "spot_forecast" / "models"
+MODEL = MODELS / "de_lu.json.gz"  # the accuracy section and the look-back chart are DE-LU's
 BACKTEST = SITE / "data" / "backtest_de_lu.json"
+ZONE_MAP = SITE / "data" / "zone_map.json"
 BASE_URL = "https://cygnusb.github.io/ha-spot-forecast/"
 REPO_URL = "https://github.com/cygnusb/ha-spot-forecast"
 DEFAULT = "en"
@@ -121,6 +125,45 @@ def model_figures() -> dict:
     }
 
 
+def bundled_models() -> list[dict]:
+    """The bundled model files (without their trees), in file-name order."""
+    return [
+        json.loads(gzip.decompress(path.read_bytes()))
+        for path in sorted(MODELS.glob("*.json.gz"))
+        if not path.name.endswith(".backfill.json.gz")
+    ]
+
+
+def zone_figures() -> dict:
+    """The map and, per zone with a bundled model, its path, version and MAE D+1 … D+6 in
+    ct/kWh. Zones are matched by slug (``DE-LU`` -> ``de_lu``); a bundled model whose zone
+    the map does not have fails the build."""
+    zone_map = json.loads(ZONE_MAP.read_text(encoding="utf-8"))
+    by_slug = {code.lower().replace("-", "_"): code for code in zone_map["zones"]}
+    zones = []
+    for model in bundled_models():
+        code = by_slug.get(model["zone"])
+        if code is None:
+            raise SystemExit(f"zone_map.json has no shape for the bundled zone {model['zone']}")
+        horizons = model["metrics"]["horizons"]
+        zones.append(
+            {
+                "code": code,
+                "slug": model["zone"],
+                "version": model["version"],
+                "path": zone_map["zones"][code]["path"],
+                "approximate": zone_map["zones"][code]["approximate"],
+                "mae": [horizons[str(h)]["mae"] / 10 for h in range(1, 7)],
+            }
+        )
+    return {
+        "width": zone_map["width"],
+        "height": zone_map["height"],
+        "context": zone_map["context"],
+        "zones": sorted(zones, key=lambda z: list(zone_map["zones"]).index(z["code"])),
+    }
+
+
 def build(out: Path) -> None:
     texts = load_texts()
     env = Environment(
@@ -135,6 +178,7 @@ def build(out: Path) -> None:
     env.filters["mon"] = _mon
     template = env.get_template("index.html.j2")
     figures = model_figures()
+    zone_map = zone_figures()
     languages = [
         {
             "code": code,
@@ -159,6 +203,7 @@ def build(out: Path) -> None:
             og_image=BASE_URL + "assets/screenshots/forecast_light.png",
             json_ld=_json_ld(t, lang),
             m=figures,
+            zone_map=zone_map,
             chart_text=Markup(
                 json.dumps(t["chart"]["js"], ensure_ascii=False).replace("</", "<\\/")
             ),

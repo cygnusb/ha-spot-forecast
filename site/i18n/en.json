@@ -1,13 +1,14 @@
 {
   "meta": {
     "title": "Spot Forecast – six-day electricity price forecast for Home Assistant",
-    "description": "A free Home Assistant integration that forecasts the German-Luxembourg day-ahead electricity price hour by hour for the six days after the published auction, with a peak-risk band. Open data, no account, no API key.",
+    "description": "A free Home Assistant integration that forecasts the day-ahead electricity price of Germany and Luxembourg or the Netherlands hour by hour for the six days after the published auction, with a peak-risk band. Open data, no account, no API key.",
     "og_title": "Spot Forecast for Home Assistant",
-    "og_description": "Day-ahead electricity prices for DE-LU, six days further than the auction, with an honest peak-risk band."
+    "og_description": "Day-ahead electricity prices for DE-LU and NL, six days further than the auction, with an honest peak-risk band."
   },
   "nav": {
     "main_label": "Main",
     "accuracy": "How good is it?",
+    "zones": "Zones",
     "how": "How it works",
     "cards": "Cards",
     "install": "Install",
@@ -16,7 +17,7 @@
   },
   "hero": {
     "title": "Electricity prices, six days ahead.",
-    "lede": "The day-ahead auction only covers today and tomorrow. Spot Forecast adds the six days after that, hour by hour, for the DE-LU zone, with a peak-risk band that says how high a price could go. It runs inside Home Assistant on open data.",
+    "lede": "The day-ahead auction only covers today and tomorrow. Spot Forecast adds the six days after that, hour by hour, for the DE-LU or NL zone, with a peak-risk band that says how high a price could go. It runs inside Home Assistant on open data.",
     "cta_install": "Install from HACS",
     "cta_accuracy": "See how accurate it is",
     "facts": {
@@ -89,6 +90,21 @@
       }
     }
   },
+  "zones": {
+    "title": "Supported zones",
+    "lede": "Each bidding zone has its own model, trained on its own prices and on the weather where its wind, sun and demand are. Pick the zone when you add the integration; several zones can run side by side.",
+    "map_label": "Map of northern and central Europe with the supported bidding zones highlighted",
+    "d1": "one day ahead",
+    "map_caption": "Highlighted: the zones with a bundled model. Map: Natural Earth.",
+    "approximate": "Zone borders that follow the grid rather than regions are drawn approximately.",
+    "table_caption": "Mean absolute error in ct/kWh per horizon, bundled model of each zone",
+    "zone": "Zone",
+    "names": {
+      "DE-LU": "Germany and Luxembourg",
+      "NL": "Netherlands"
+    },
+    "table_note": "Out of sample, over each model’s own walk-forward period. Price levels differ between zones, so compare a zone’s errors with its naive error in the documentation rather than with another zone."
+  },
   "how": {
     "title": "How it works",
     "lede": "A run needs nothing but numpy: on a Raspberry Pi 5 it takes about 1.2 seconds, downloads included. It repeats after each new weather model run, four times a day, and again when the auction result for tomorrow appears.",
@@ -159,11 +175,13 @@
   },
   "sources": {
     "title": "Open data, credited",
-    "lede": "Both sources are free and need no key. The integration names them in the sensor’s attribution.",
+    "lede": "The price and weather sources are free and need no key. The integration names them in the sensor’s attribution.",
     "prices_name": "Energy-Charts",
-    "prices": "Day-ahead prices DE-LU. Energy-Charts by Fraunhofer ISE, price data from Bundesnetzagentur | SMARD.de, licensed CC BY 4.0.",
+    "prices": "Day-ahead prices DE-LU and NL. Energy-Charts by Fraunhofer ISE, price data from Bundesnetzagentur | SMARD.de, licensed CC BY 4.0.",
     "weather_name": "Open-Meteo",
-    "weather": "Weather forecasts from the ECMWF IFS model at 0.25°. Open-Meteo, licensed CC BY 4.0, free for non-commercial use."
+    "weather": "Weather forecasts from the ECMWF IFS model at 0.25°. Open-Meteo, licensed CC BY 4.0, free for non-commercial use.",
+    "map_name": "Natural Earth",
+    "map": "Country and region borders of the zone map, 1:10m, public domain."
   },
   "footer": {
     "text": "Spot Forecast is free software under the MIT licence.",

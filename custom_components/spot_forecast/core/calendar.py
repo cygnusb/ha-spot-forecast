@@ -1,4 +1,4 @@
-"""German nationwide public holidays (no regional ones)."""
+"""Nationwide public holidays of the zones' countries (no regional ones)."""
 
 from __future__ import annotations
 
@@ -36,3 +36,34 @@ def de_holidays(year: int) -> frozenset[date]:
             date(year, 12, 26),
         }
     )
+
+
+def nl_holidays(year: int) -> frozenset[date]:
+    """Dutch national holidays of ``year`` (as the ``holidays`` package lists them)."""
+    easter = _easter(year)
+    kings_day = date(year, 4, 27)
+    if kings_day.weekday() == 6:  # moved to Saturday when the 27th is a Sunday
+        kings_day = date(year, 4, 26)
+    days = {
+        date(year, 1, 1),  # Nieuwjaarsdag
+        easter - timedelta(days=2),  # Goede vrijdag
+        easter,  # Eerste paasdag
+        easter + timedelta(days=1),  # Tweede paasdag
+        kings_day,  # Koningsdag
+        easter + timedelta(days=39),  # Hemelvaartsdag
+        easter + timedelta(days=49),  # Eerste pinksterdag
+        easter + timedelta(days=50),  # Tweede pinksterdag
+        date(year, 12, 25),
+        date(year, 12, 26),
+    }
+    if year % 5 == 0:
+        days.add(date(year, 5, 5))  # Bevrijdingsdag, a day off in lustrum years only
+    return frozenset(days)
+
+
+_CALENDARS = {"DE": de_holidays, "NL": nl_holidays}
+
+
+def holidays(country: str, year: int) -> frozenset[date]:
+    """National holidays of ``country`` (a ``Zone.country``) in ``year``."""
+    return _CALENDARS[country](year)

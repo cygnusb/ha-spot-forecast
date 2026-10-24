@@ -69,8 +69,9 @@ def test_ci_exits_2_on_data_lag(monkeypatch, tmp_path, capsys):
     assert ci.run(argv) == 2
     assert "installed_power has no value for 2025-09" in capsys.readouterr().err
     assert calls == [
-        ["--raw", "raw", "--out", str(out), "--cutoff", CUTOFF, "--capacity-month", "2025-08"]
-    ]
+        ["--raw", "raw", "--out", str(out), "--cutoff", CUTOFF, "--zone", "DE-LU",
+         "--capacity-month", "2025-08"]
+    ]  # fmt: skip
     assert not (out / "gate.json").exists()
 
 
@@ -89,7 +90,7 @@ def run_ci(trained, monkeypatch, tmp_path):
     expected_argv = ["--raw", str(RESEARCH_RAW), "--out", str(out), "--cutoff", CUTOFF]
 
     def cached(argv, max_iter=600):
-        assert argv == expected_argv
+        assert argv == [*expected_argv, "--zone", "DE-LU"]
         return trained
 
     monkeypatch.setattr(train, "run", cached)
@@ -196,13 +197,14 @@ def _manifest(path: Path, **zones: str) -> Path:
     return path
 
 
-def _previous_file(kind: str, trained, path: Path) -> None:
+def _previous_file(kind: str, trained, path: Path, tiny_nl_model=None) -> None:
     """A previous model file for de_lu-2025-09 that cannot be compared, of ``kind``."""
     sept = replace(trained.model, version="de_lu-2025-09", train_cutoff=date(2025, 9, 1))
     if kind == "trained":  # trained up to 2025-10-01, after the gate month start
         path.write_bytes(dump_model(replace(sept, train_cutoff=date(2025, 10, 1))))
     elif kind == "other zone":
-        path.write_bytes(dump_model(replace(sept, zone="at")))
+        nl = replace(tiny_nl_model, version="nl-2025-09", train_cutoff=date(2025, 9, 1))
+        path.write_bytes(dump_model(nl))
     elif kind == "corrupt":
         path.write_bytes(b"not a model")
     elif kind == "schema":
@@ -218,7 +220,7 @@ def _previous_file(kind: str, trained, path: Path) -> None:
     ("previous", "why"),
     [
         ("trained", "not out of sample"),
-        ("other zone", "is for zone at, not de_lu"),
+        ("other zone", "is for zone nl, not de_lu"),
         ("corrupt", "cannot be used"),
         ("schema", "feature schema"),
         ("missing", "not found"),
@@ -228,11 +230,11 @@ def _previous_file(kind: str, trained, path: Path) -> None:
     ],
 )
 def test_ci_fails_when_the_published_model_cannot_be_compared(
-    run_ci, trained, monkeypatch, tmp_path, previous, why
+    run_ci, trained, tiny_nl_model_file, monkeypatch, tmp_path, previous, why
 ):
     # Fail closed: the manifest lists a model for the zone, so skill alone is not enough.
     path = tmp_path / "de_lu-2025-09.json.gz"
-    _previous_file(previous, trained, path)
+    _previous_file(previous, trained, path, tiny_nl_model_file)
     if previous in ("rows", "nan"):
         real = ci.previous_model_predictions
 
@@ -342,10 +344,10 @@ def _flipped(data: bytes) -> bytes:
         ("backfill version", "names another model version"),
     ],
 )
-def test_check_outputs_rejects(tiny_model_file, case, why):
+def test_check_outputs_rejects(tiny_model_file, tiny_nl_model_file, case, why):
     model, backfill, today = tiny_model_file, _backfill(), date(2026, 11, 3)
     if case == "other zone":
-        model = replace(model, zone="at")
+        model = replace(tiny_nl_model_file, version="de_lu-2026-11")
     elif case == "other version":
         model = replace(model, version="de_lu-2026-10")
     elif case == "implausible":

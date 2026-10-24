@@ -16,6 +16,7 @@ from homeassistant.helpers.selector import (
     NumberSelector,
     NumberSelectorConfig,
     NumberSelectorMode,
+    SelectOptionDict,
     SelectSelector,
     SelectSelectorConfig,
     SelectSelectorMode,
@@ -33,13 +34,24 @@ from .const import (
     DEFAULT_BACKFILL_DAYS,
     DEFAULT_PEAK_THRESHOLD,
     DEFAULT_SURCHARGE,
-    DEFAULT_VAT,
     DOMAIN,
     MAX_BACKFILL_DAYS,
     MAX_SURCHARGE,
     MAX_VAT,
 )
 from .core.zones import ZONES
+
+
+def _zone_options() -> list[SelectOptionDict]:
+    """The zones as "DE-LU – Germany and Luxembourg"; the value stays the zone code.
+
+    Not translated: translation keys of selector options must be lower case, the stored
+    zone is its code.
+    """
+    return [
+        SelectOptionDict(value=code, label=f"{code} \u2013 {zone.name}")
+        for code, zone in ZONES.items()
+    ]
 
 
 class SpotForecastConfigFlow(ConfigFlow, domain=DOMAIN):
@@ -60,7 +72,9 @@ class SpotForecastConfigFlow(ConfigFlow, domain=DOMAIN):
             data_schema=vol.Schema(
                 {
                     vol.Required(CONF_ZONE, default=next(iter(ZONES))): SelectSelector(
-                        SelectSelectorConfig(options=list(ZONES), mode=SelectSelectorMode.DROPDOWN)
+                        SelectSelectorConfig(
+                            options=_zone_options(), mode=SelectSelectorMode.DROPDOWN
+                        )
                     ),
                 }
             ),
@@ -116,7 +130,7 @@ class SpotForecastOptionsFlow(OptionsFlow):
                     ),
                     vol.Required(
                         CONF_VAT,
-                        default=options.get(CONF_VAT, DEFAULT_VAT),
+                        default=options.get(CONF_VAT, self._zone_vat()),
                     ): NumberSelector(
                         NumberSelectorConfig(
                             min=0,
@@ -153,6 +167,11 @@ class SpotForecastOptionsFlow(OptionsFlow):
                 }
             ),
         )
+
+    def _zone_vat(self) -> float:
+        """The VAT default of the entry's zone (19 % for DE-LU, 21 % for NL)."""
+        zone = ZONES.get(self._entry.data.get(CONF_ZONE, ""))
+        return zone.default_vat if zone is not None else 0.0
 
     def _model_peak_threshold(self) -> float:
         """The active model's threshold in ct/kWh; never reads the model file itself."""

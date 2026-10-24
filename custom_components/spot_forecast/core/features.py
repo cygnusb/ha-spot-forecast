@@ -1,9 +1,14 @@
 """Model features: a numpy port of ``build_samples`` in research/backtest.py.
 
 Feature schema 2 changes two things against research ``build_samples``, both ported from
-the later research scripts: the price lags read the same local wall-clock hour across a DST
-switch (research/holidays_dst/build.py ``dst_lags``), and the price levels are relative to
-the 7-day mean in units of the target scale (research/zones/bt.py ``relative``).
+the later research scripts, for every zone: the price lags read the same local wall-clock
+hour across a DST switch (research/holidays_dst/build.py ``dst_lags``), and the price levels
+are relative to the 7-day mean in units of the target scale (research/zones/bt.py
+``relative``).
+
+DE-LU has the layout of ``build_samples`` (``FEATURE_NAMES``); the other zones have the
+zone-generic one of research/zones/genfeat.py (``feature_names``, ``_weather_features``),
+without its research-only options (``hydro_extra``, ``de_extra``, ``de_price``).
 
 Any change here that alters a feature value breaks parity with the research backtest
 and with every shipped model; ``tests/core/test_features.py`` pins the golden values.
@@ -14,12 +19,13 @@ from __future__ import annotations
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, time, timedelta
+from functools import cache
 from zoneinfo import ZoneInfo
 
 import numpy as np
 
-from .calendar import de_holidays
-from .zones import DE_LU, Zone
+from .calendar import holidays
+from .zones import DE_LU, Zone, point_vars
 
 FEATURE_SCHEMA = 2
 HORIZONS = range(1, 7)
@@ -45,10 +51,59 @@ FEATURE_NAMES: tuple[str, ...] = (
     *(f"{n}_day" for n in _DAY_MEANS), "nb_precip_hydro_day",
     *CAPACITY_NAMES,
 )  # fmt: skip
+"""The DE-LU features (layout ``"de_lu"``), in model column order."""
 
 
-_RELATIVE = [FEATURE_NAMES.index(n) for n in RELATIVE_NAMES]
-_SPREAD = [FEATURE_NAMES.index(n) for n in SPREAD_NAMES]
+@cache
+def feature_names(zone: Zone) -> tuple[str, ...]:
+    """The model features of ``zone`` in column order; ``FEATURE_NAMES`` for DE-LU."""
+    if zone.layout == "de_lu":
+        return FEATURE_NAMES
+    if zone.layout != "generic":
+        raise ValueError(f"unknown feature layout {zone.layout!r}")
+    # research/zones/genfeat.py ``feature_names``
+    agg = ["wind_mean", "wind_power_idx", "temp_mean"]
+    day = ["wind_power_idx", "temp_mean"]
+    if zone.solar:
+        agg += ["solar_est_mean", "cloud_mean"]
+        day += ["solar_est_mean"]
+    if _radiation_points(zone):
+        agg += ["solar_mean"]
+        day += ["solar_mean"]
+    if zone.hydro:
+        agg += ["precip_hydro"]
+    agg += ["nb_wind_power_idx", "nb_temp_mean"]
+    day += ["nb_wind_power_idx", "nb_temp_mean"]
+    if zone.nb_hydro:
+        agg += ["nb_precip_hydro"]
+    names = [
+        "h", "hour", "dow", "doy", "holiday", "offday", "issue_dow", "p_lastday", "p_lastweek",
+        *(f"D_{n}" for n in _DAILY_NAMES),
+        *(f"{p}__{v}" for p in zone.own for v in point_vars(p)),
+        *agg,
+        *(f"{c}_day" for c in day),
+    ]  # fmt: skip
+    if zone.hydro:
+        names.append("precip_hydro_day")
+    if zone.nb_hydro:
+        names.append("nb_precip_hydro_day")
+    return tuple(names)
+
+
+def uses_capacity(zone: Zone) -> bool:
+    """Whether the zone's features include the installed capacity (DE-LU only)."""
+    return bool(set(CAPACITY_NAMES) & set(feature_names(zone)))
+
+
+def _radiation_points(zone: Zone) -> tuple[str, ...]:
+    return tuple(p for p in zone.solar if "shortwave_radiation" in point_vars(p))
+
+
+@cache
+def _relative_columns(zone: Zone) -> tuple[list[int], list[int]]:
+    """Column indices of the relative price levels and of the spreads."""
+    names = feature_names(zone)
+    return [names.index(n) for n in RELATIVE_NAMES], [names.index(n) for n in SPREAD_NAMES]
 
 
 class InsufficientHistory(ValueError):
@@ -215,7 +270,7 @@ def _day_mean(x: np.ndarray) -> float:
 
 
 def _weather_features(w: Callable[[str], np.ndarray], times: list[datetime], zone: Zone) -> dict:
-    """research ``weather_features`` for the hours of one local target day."""
+    """research ``weather_features`` for the hours of one local target day (DE-LU)."""
     f = {f"{p}__{v}": w(f"{p}__{v}") for p in zone.points for v in zone.weather_vars}
 
     def est(p: str) -> np.ndarray:
@@ -227,10 +282,10 @@ def _weather_features(w: Callable[[str], np.ndarray], times: list[datetime], zon
         # sum() then divide, in the research order, so values match to the last bit
         return sum(fn(p) for p in points) / len(points)
 
-    f["solar_est_mean"] = avg(est, zone.solar_points)
-    f["wind_mean"] = avg(lambda p: w(f"{p}__wind_speed_100m") / 3.6, zone.wind_points)
-    f["wind_power_idx"] = avg(lambda p: _wind_power(w(f"{p}__wind_speed_100m")), zone.wind_points)
-    f["solar_mean"] = avg(lambda p: w(f"{p}__shortwave_radiation"), zone.solar_points)
+    f["solar_est_mean"] = avg(est, zone.solar)
+    f["wind_mean"] = avg(lambda p: w(f"{p}__wind_speed_100m") / 3.6, zone.wind)
+    f["wind_power_idx"] = avg(lambda p: _wind_power(w(f"{p}__wind_speed_100m")), zone.wind)
+    f["solar_mean"] = avg(lambda p: w(f"{p}__shortwave_radiation"), zone.solar)
     f["temp_mean"] = avg(lambda p: w(f"{p}__temperature_2m"), zone.points)
     f["cloud_mean"] = avg(lambda p: w(f"{p}__cloud_cover"), zone.points)
     f["nb_wind_power_idx"] = avg(lambda p: _wind_power(w(f"{p}__wind_speed_100m")), zone.nb_wind)
@@ -245,6 +300,46 @@ def _weather_features(w: Callable[[str], np.ndarray], times: list[datetime], zon
         f[f"{c}_day"] = np.full(n, _day_mean(f[c]))
     # pandas groupby sum skips NaN hours, so an all-NaN day sums to 0 (as in research)
     f["nb_precip_hydro_day"] = np.full(n, np.nansum(f["nb_precip_hydro"]))
+    return f
+
+
+def _generic_weather_features(
+    w: Callable[[str], np.ndarray], times: list[datetime], zone: Zone
+) -> dict:
+    """research/zones/genfeat.py ``_weather_features`` for the hours of one local target day."""
+    f = {f"{p}__{v}": w(f"{p}__{v}") for p in zone.own for v in point_vars(p)}
+
+    def avg(fn: Callable[[str], np.ndarray], points: tuple[str, ...] | list[str]) -> np.ndarray:
+        return sum(fn(p) for p in points) / len(points)
+
+    def est(p: str) -> np.ndarray:
+        return _clear_sky_ghi(times, *zone.points[p]) * (
+            1 - 0.75 * (w(f"{p}__cloud_cover") / 100) ** 3.4
+        )
+
+    f["wind_mean"] = avg(lambda p: w(f"{p}__wind_speed_100m") / 3.6, zone.wind)
+    f["wind_power_idx"] = avg(lambda p: _wind_power(w(f"{p}__wind_speed_100m")), zone.wind)
+    f["temp_mean"] = avg(lambda p: w(f"{p}__temperature_2m"), zone.own)
+    if zone.solar:
+        f["solar_est_mean"] = avg(est, zone.solar)
+        cloudy = [p for p in zone.own if "cloud_cover" in point_vars(p)]
+        f["cloud_mean"] = avg(lambda p: w(f"{p}__cloud_cover"), cloudy)
+        if rad := _radiation_points(zone):
+            f["solar_mean"] = avg(lambda p: w(f"{p}__shortwave_radiation"), rad)
+    if zone.hydro:
+        f["precip_hydro"] = sum(w(f"{p}__precipitation") for p in zone.hydro)
+    f["nb_wind_power_idx"] = avg(lambda p: _wind_power(w(f"{p}__wind_speed_100m")), zone.nb_wind)
+    f["nb_temp_mean"] = avg(lambda p: w(f"{p}__temperature_2m"), zone.nb)
+    if zone.nb_hydro:
+        f["nb_precip_hydro"] = sum(w(f"{p}__precipitation") for p in zone.nb_hydro)
+    n = len(times)
+    for c in ("wind_power_idx", "solar_mean", "solar_est_mean", "temp_mean", "nb_wind_power_idx",
+              "nb_temp_mean"):  # fmt: skip
+        if c in f:
+            f[f"{c}_day"] = np.full(n, _day_mean(f[c]))
+    for c in ("precip_hydro", "nb_precip_hydro"):
+        if c in f:
+            f[f"{c}_day"] = np.full(n, np.nansum(f[c]))
     return f
 
 
@@ -278,8 +373,12 @@ def build_features(
     are not published at issue time (the price lags read NaN there instead). The lags take
     the same local wall-clock hour on the anchor day (``p_lastday``) and a week before the
     target day (``p_lastweek``). ``weather[h]`` holds the ``"{point}__{var}"`` series for
-    target day anchor+h. Missing inputs give NaN features.
+    target day anchor+h. Missing inputs give NaN features. ``capacity`` is read only by
+    layouts with capacity features (DE-LU). The columns are ``feature_names(zone)``.
     """
+    names = feature_names(zone)
+    relative, spread = _relative_columns(zone)
+    weather_features = _weather_features if zone.layout == "de_lu" else _generic_weather_features
     a = daily.index(anchor)
     if a is None or np.isnan(daily.mean30[a]) or np.isnan(daily.gq_evening14[a]):
         raise InsufficientHistory(f"less than 30 days of prices before the end of {anchor}")
@@ -307,7 +406,7 @@ def build_features(
             s = series.get(key)
             return np.full(n, np.nan) if s is None else s.window(first, n)
 
-        holiday = target in de_holidays(target.year)
+        holiday = target in holidays(zone.country, target.year)
         dow = target.weekday()
         hour = np.array([t.astimezone(tz).hour for t in day_times], dtype=float)
         cols = {
@@ -321,21 +420,19 @@ def build_features(
             "p_lastday": lag(target - h * _DAY, hour),
             "p_lastweek": lag(target - 7 * _DAY, hour),
             **d_features,
-            **_weather_features(w, day_times, zone),
+            **weather_features(w, day_times, zone),
             **{c: capacity.get(c, np.nan) for c in CAPACITY_NAMES},
         }
         blocks.append(
-            np.column_stack(
-                [np.broadcast_to(np.asarray(cols[c], dtype=float), n) for c in FEATURE_NAMES]
-            )
+            np.column_stack([np.broadcast_to(np.asarray(cols[c], dtype=float), n) for c in names])
         )
         times += day_times
         hs.append(np.full(n, h))
 
     X = np.vstack(blocks)
     # in the order of research ``relative``: subtract, then divide
-    X[:, _RELATIVE] = (X[:, _RELATIVE] - d_features["D_mean7"]) / scale
-    X[:, _SPREAD] = X[:, _SPREAD] / scale
+    X[:, relative] = (X[:, relative] - d_features["D_mean7"]) / scale
+    X[:, spread] = X[:, spread] / scale
     return FeatureMatrix(
         X=X,
         times=times,

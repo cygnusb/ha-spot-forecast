@@ -10,19 +10,16 @@ from zoneinfo import ZoneInfo
 import numpy as np
 
 from .features import (
-    FEATURE_NAMES,
     Hourly,
     IncompleteAnchorDay,
     build_features,
     daily_stats,
     decode,
 )
-from .model import ModelFile
+from .model import ModelFile, ModelMismatch
 from .zones import Zone
 
 __all__ = ["IncompleteAnchorDay"]  # re-exported: raised by run_forecast
-
-_WIND_MEAN = FEATURE_NAMES.index("wind_mean")
 
 
 @dataclass(frozen=True)
@@ -48,9 +45,12 @@ def run_forecast(
     """Median, raw P90 and raw P10 for every hour of anchor+1 … anchor+6.
 
     A slot is ``valid`` only when its ``wind_mean`` feature exists (weather present).
-    Raises ``InsufficientHistory`` when ``prices`` is too short and ``IncompleteAnchorDay``
-    (a subclass) when any hourly price of the anchor day is missing.
+    Raises ``InsufficientHistory`` when ``prices`` is too short, ``IncompleteAnchorDay``
+    (a subclass) when any hourly price of the anchor day is missing and ``ModelMismatch``
+    when ``model`` is for another zone.
     """
+    if model.zone != zone.slug:
+        raise ModelMismatch(f"model {model.version} is for zone {model.zone!r}, not {zone.slug!r}")
     tz = ZoneInfo(zone.tz)
     day_start = datetime.combine(anchor, time(), tz).astimezone(UTC)
     day_end = datetime.combine(anchor + timedelta(days=1), time(), tz).astimezone(UTC)
@@ -64,14 +64,13 @@ def run_forecast(
         model.capacity if capacity is None else capacity,
         zone,
     )
+    wind_mean = fm.X[:, model.features.index("wind_mean")]
     median = decode(model.median.predict(fm.X), fm)
     p90 = decode(model.p90.predict(fm.X), fm)
     p10 = decode(model.p10.predict(fm.X), fm)
     return [
         Slot(t, int(h), float(m), float(hi), float(lo), not bool(np.isnan(wind)))
-        for t, h, m, hi, lo, wind in zip(
-            fm.times, fm.h, median, p90, p10, fm.X[:, _WIND_MEAN], strict=True
-        )
+        for t, h, m, hi, lo, wind in zip(fm.times, fm.h, median, p90, p10, wind_mean, strict=True)
     ]
 
 

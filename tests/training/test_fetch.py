@@ -6,6 +6,7 @@ import json
 import pytest
 
 pytest.importorskip("requests")
+from core.zones import DE_LU, NL
 from training import fetch
 from training.fetch import _is_complete, month_chunks
 
@@ -93,12 +94,12 @@ def test_chunk_fetched_while_open_is_refetched_later(tmp_path, monkeypatch):
 
     monkeypatch.setattr(fetch, "_get", fake_get)
     monkeypatch.setattr(fetch.time, "sleep", lambda s: None)
-    fetch.fetch_prices(tmp_path, today["end"], start=date(2026, 3, 1))
+    fetch.fetch_prices(tmp_path, today["end"], DE_LU, start=date(2026, 3, 1))
     assert "2026-07-01" in requested
 
     requested.clear()
     today["end"] = date(2027, 1, 5)
-    fetch.fetch_prices(tmp_path, today["end"], start=date(2026, 3, 1))
+    fetch.fetch_prices(tmp_path, today["end"], DE_LU, start=date(2026, 3, 1))
     assert requested == ["2026-07-01", "2027-01-01"]  # the 2026-01 half-year stays cached
     doc = json.loads((tmp_path / "prices" / "DE-LU" / "2026-07_6m.json").read_text())
     assert datetime.fromtimestamp(doc["unix_seconds"][-1], UTC) == datetime(2027, 1, 1, tzinfo=UTC)
@@ -135,3 +136,45 @@ def test_get_gives_up_after_the_last_timeout(monkeypatch: pytest.MonkeyPatch) ->
     monkeypatch.setattr(fetch.time, "sleep", lambda _s: None)
     with pytest.raises(fetch.requests.ConnectionError):
         fetch._get("https://example.org", {}, retries=3)
+
+
+def test_weather_sets_fetch_every_point_once():
+    """DE-LU's two requests as before, then only the five NL points it does not share."""
+    sets = fetch.weather_sets([DE_LU, NL])
+    assert sets[:2] == DE_LU.point_sets()
+    assert len(sets) == 3
+    assert list(sets[2][0]) == ["nl_borssele", "nl_flevoland", "nl_groningen", "nl_randstad",
+                                "nl_brabant"]  # fmt: skip
+    assert sets[2][1] == ("wind_speed_100m", "temperature_2m", "cloud_cover")
+    names = [p for points, _ in fetch.weather_sets([NL, DE_LU]) for p in points]
+    assert len(names) == len(set(names)) == 27
+
+
+def test_fetch_all_by_zone(tmp_path, monkeypatch):
+    """Prices per zone into prices/<code>, installed capacity only for a zone that uses it."""
+    calls: list[tuple[str, dict]] = []
+
+    def fake_get(url, params, retries=5):
+        calls.append((url.rsplit("/", 1)[-1], params))
+        if url.endswith("/price"):
+            return _price_doc(date(2026, 9, 1), datetime(2026, 9, 2, tzinfo=UTC))
+        return {"time": [], "production_types": []}
+
+    monkeypatch.setattr(fetch, "_get", fake_get)
+    monkeypatch.setattr(fetch.time, "sleep", lambda s: None)
+    monkeypatch.setattr(fetch, "fetch_weather", lambda *a, **k: None)
+    fetch.fetch_all(tmp_path, date(2026, 9, 30), [NL])
+    assert {c[0] for c in calls} == {"price"} and {c[1]["bzn"] for c in calls} == {"NL"}
+    assert (tmp_path / "prices" / "NL").is_dir() and not (
+        tmp_path / "installed_power.json"
+    ).exists()
+    calls.clear()
+    fetch.fetch_all(tmp_path, date(2026, 9, 30), [DE_LU, NL])
+    assert calls[0][0] == "installed_power"
+    assert [c[1]["bzn"] for c in calls if c[0] == "price"][-1] == "NL"
+
+
+def test_zones_option():
+    assert fetch._zones("NL,DE-LU,NL") == [NL, DE_LU]
+    with pytest.raises(Exception, match="unknown zones"):
+        fetch._zones("NL,AT")

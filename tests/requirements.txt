@@ -2,3 +2,4 @@ pytest
 numpy
 pyyaml
 jinja2
+holidays==0.107  # tests/core/test_calendar.py only

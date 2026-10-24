@@ -13,7 +13,7 @@
 [![Validate][validate-badge]][validate-url]
 [![GitHub Stars][stars-badge]][stars-url]
 
-**Day-ahead electricity prices for Germany and Luxembourg, six days further than the auction.**
+**Day-ahead electricity prices for Germany, Luxembourg and the Netherlands, six days further than the auction.**
 
 [Project website](https://cygnusb.github.io/ha-spot-forecast/) · [Documentation](https://cygnusb.github.io/ha-spot-forecast/docs/) · [Releases](https://github.com/cygnusb/ha-spot-forecast/releases)
 
@@ -21,7 +21,8 @@ The day-ahead auction publishes prices for today and, from about 13:00, for
 tomorrow. Anyone who plans a home battery, an electric car or a heat pump
 further ahead has to guess. Spot Forecast is a Home Assistant integration that
 fills the six days after the last published price with an hourly forecast for
-the DE-LU bidding zone, and says how far to trust it: an expected price per
+the DE-LU or NL bidding zone (see [Supported zones](#supported-zones)), and says how far to
+trust it: an expected price per
 hour, a **peak-risk** value that the price exceeded in 12–13 % of the hours of
 the backtest (the target is one in ten), and a
 **low-price** value for likely negative prices.
@@ -43,11 +44,12 @@ month on GitHub and only evaluated on your device, with numpy.
 
 ## How it works
 
-1. **Known prices.** The last 40 days of DE-LU day-ahead prices from
+1. **Known prices.** The last 40 days of the zone's day-ahead prices from
    Energy-Charts, in one request.
-2. **Weather forecast.** ECMWF IFS (0.25°) from Open-Meteo for 10 points in
-   Germany and 12 in neighbouring countries: wind at 100 m, solar radiation,
-   temperature, cloud cover and precipitation. Weather carries most of the
+2. **Weather forecast.** ECMWF IFS (0.25°) from Open-Meteo for the zone's own
+   points and its neighbours' (DE-LU: 10 points in Germany and 12 in neighbouring
+   countries; NL: 7 in and off the Netherlands and 7 around it): wind at 100 m,
+   solar radiation, temperature, cloud cover and precipitation. Weather carries most of the
    skill: without it the error stays close to the naive baseline's.
 3. **Three tree models.** Gradient-boosted trees predict, per hour, the
    expected price (median), a peak-risk value (P90) and a low-price value
@@ -71,8 +73,8 @@ always come first and the forecast follows without a gap. Details:
 Out of sample, walk-forward: the models were refit month by month on past data
 only and forecast days they had never seen, with weather forecasts never
 fresher than, and up to a day older than, what a live install uses. Mean
-absolute error (MAE) in ct/kWh, from the shipped model's own report
-(`de_lu-2026-10`):
+absolute error (MAE) in ct/kWh for DE-LU, from the shipped model's own report
+(`de_lu-2026-10`; NL in [Supported zones](#supported-zones)):
 
 | Horizon | MAE Apr 2025 – Sep 2026 | Naive MAE, same period | Skill, same period | MAE Jul – Sep 2026 | Naive MAE, Jul – Sep 2026 | Skill, Jul – Sep 2026 | Above peak risk |
 |---|---|---|---|---|---|---|---|
@@ -111,6 +113,24 @@ turned out negative (depending on the horizon), P10 was below zero. More in
 has the forecast against the actual price, per horizon, as an interactive
 chart.
 
+## Supported zones
+
+One entry per bidding zone, each with its own model, trained every month on its own prices
+and weather points. MAE of the expected price in ct/kWh per horizon, April 2025 to
+September 2026, and the skill over all horizons, from each shipped model's report:
+
+| Zone | Area | D+1 | D+2 | D+3 | D+4 | D+5 | D+6 | Skill |
+|---|---|---|---|---|---|---|---|---|
+| DE-LU | Germany and Luxembourg | 1.70 | 1.78 | 1.89 | 2.04 | 2.31 | 2.43 | 40% |
+| NL | Netherlands | 1.75 | 1.85 | 1.93 | 2.05 | 2.22 | 2.31 | 35% |
+
+DE-LU uses ten weather points in Germany, twelve in the neighbouring countries and the
+installed wind and solar capacity. NL uses seven points in and off the Netherlands and seven
+in the neighbouring countries, with the zone-generic feature layout and no capacity data
+(see [how the model works](docs/model.md)). NL's skill falls from 44 % one day ahead to
+25 % six days ahead, against 50 % and 28 % for DE-LU. Per horizon and for the last three
+months: [accuracy](docs/accuracy.md#netherlands-nl).
+
 ## Installation (HACS)
 
 Spot Forecast is a HACS **custom repository** for now:
@@ -131,13 +151,13 @@ without access to GitHub.
 
 ## Configuration
 
-Setup asks for one thing: the bidding zone (DE-LU in this version). The
-options (*Configure* on the integration):
+Setup asks for one thing: the bidding zone (DE-LU or NL; one entry per zone, several can
+run side by side). The options (*Configure* on the integration):
 
 | Option | Default | What it does |
 |---|---|---|
 | Grid fees and taxes | 0 | Gross per-kWh surcharge (EUR/kWh, VAT included) for a total-price sensor and the forecast card's "mit Abgaben" view; 0 = none. |
-| VAT on the market price | 19 % | VAT charged on the exchange price for the total price: price × (1 + VAT/100) + surcharge. Set your own rate, e.g. in Luxembourg. |
+| VAT on the market price | 19 % (DE-LU), 21 % (NL) | VAT charged on the exchange price for the total price: price × (1 + VAT/100) + surcharge. Set your own rate, e.g. in Luxembourg. |
 | Peak price threshold | from the model, 21.2 ct/kWh | Wholesale price at or above which an hour counts as a peak, for the peak-risk sensor. |
 | Backfill window (days) | 60 | Past days of forecasts reconstructed on first start, so the look-back and the calibration have history (0–180, 0 = off). |
 | Update models automatically | on | Check for a newer model after setup and once a day, and download it if it passes its checks. Off stops further downloads; a model downloaded before stays in use. |
@@ -211,7 +231,7 @@ other. See [docs/smart-battery-pilot.md](docs/smart-battery-pilot.md).
 
 | Data | Source | Licence |
 |---|---|---|
-| Day-ahead prices DE-LU | [Energy-Charts](https://www.energy-charts.info/) (Fraunhofer ISE), price data from Bundesnetzagentur \| SMARD.de | CC BY 4.0 |
+| Day-ahead prices DE-LU and NL | [Energy-Charts](https://www.energy-charts.info/) (Fraunhofer ISE), price data from Bundesnetzagentur \| SMARD.de | CC BY 4.0 |
 | Weather forecasts (ECMWF IFS 0.25°, and its previous runs for the backfill) | [Open-Meteo](https://open-meteo.com/) | CC BY 4.0, free for non-commercial use |
 
 No keys, no accounts. The price sensor names both sources in its

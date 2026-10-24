@@ -81,7 +81,7 @@ def test_missing_weather_hours_are_invalid(golden, tiny_model_file):
     assert all(s.valid for s in ok)
     target = ok[5]
     weather = {h: dict(series) for h, series in case.weather.items()}
-    for p in DE_LU.wind_points:  # blank that hour at every wind point
+    for p in DE_LU.wind:  # blank that hour at every wind point
         key = f"{p}__wind_speed_100m"
         s = weather[target.h][key]
         values = s.values.copy()
@@ -101,3 +101,12 @@ def test_incomplete_anchor_day_raises(golden, tiny_model_file):
     with pytest.raises(IncompleteAnchorDay) as e:
         run_forecast(tiny_model_file, case.anchor, prices, case.weather, DE_LU, case.capacity)
     assert isinstance(e.value, InsufficientHistory)
+
+
+def test_model_of_another_zone_raises(golden, tiny_model_file):
+    from core.model import ModelMismatch
+    from core.zones import NL
+
+    case = golden[date(2025, 6, 15)]
+    with pytest.raises(ModelMismatch, match="is for zone 'de_lu', not 'nl'"):
+        run_forecast(tiny_model_file, case.anchor, case.prices, case.weather, NL)

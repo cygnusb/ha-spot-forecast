@@ -30,7 +30,6 @@ from .const import (
     CONF_ZONE,
     DEFAULT_BACKFILL_DAYS,
     DEFAULT_SURCHARGE,
-    DEFAULT_VAT,
     DOMAIN,
     PRICE_HISTORY_DAYS,
 )
@@ -165,8 +164,9 @@ class SpotForecastCoordinator(DataUpdateCoordinator[SpotData]):
 
     @property
     def vat(self) -> float:
-        """VAT in percent, charged on the exchange part of the total price."""
-        return float(self.config_entry.options.get(CONF_VAT, DEFAULT_VAT))
+        """VAT in percent, charged on the exchange part of the total price; without the
+        option the zone's default."""
+        return float(self.config_entry.options.get(CONF_VAT, self.zone.default_vat))
 
     async def async_apply_options(self, options: Mapping[str, Any]) -> None:
         """Take over options that only change what is shown, without a reload.

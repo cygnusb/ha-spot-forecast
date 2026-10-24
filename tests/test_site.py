@@ -161,3 +161,90 @@ def test_trailing_errors_without_rows_fail_clearly():
         site_data.trailing_errors(3, actual, [None] * n, list(range(n)))
     got = site_data.trailing_errors(1, actual, [11.0] * n, list(range(n)))
     assert got["mae"] == 1.0 and got["naive_mae"] == 0.0 and got["skill"] is None
+
+
+def _bundled_zones() -> list[dict]:
+    return [
+        json.loads(gzip.decompress(p.read_bytes()))
+        for p in sorted(build_site.MODELS.glob("*.json.gz"))
+        if not p.name.endswith(".backfill.json.gz")
+    ]
+
+
+def test_zone_map_highlights_every_bundled_model(tmp_path):
+    build_site.build(tmp_path)
+    models = _bundled_zones()
+    assert models  # DE-LU at least
+    for code, _, _ in build_site.LANGUAGES:
+        html = (tmp_path / build_site.page_path(code) / "index.html").read_text(encoding="utf-8")
+        section = html.split('<section id="zones"')[1].split("</section>")[0]
+        highlighted = re.findall(
+            r'<a class="zone" href="#zone-([a-z_]+)" data-zone="([A-Z0-9-]+)">', section
+        )
+        assert sorted(slug for slug, _ in highlighted) == sorted(m["zone"] for m in models)
+        assert section.count('<path class="land"') == 1
+        for m in models:
+            row = section.split(f'<tr id="zone-{m["zone"]}">')[1].split("</tr>")[0]
+            cells = re.findall(r"<td>([0-9.,]+)</td>", row)
+            assert len(cells) == 6
+            if code == "en":
+                expected = [
+                    f"{m['metrics']['horizons'][str(h)]['mae'] / 10:.2f}" for h in range(1, 7)
+                ]
+                assert cells == expected
+
+
+def test_zone_map_data_is_small_and_has_the_zones():
+    doc = json.loads(build_site.ZONE_MAP.read_text(encoding="utf-8"))
+    assert build_site.ZONE_MAP.stat().st_size < 64 * 1024
+    assert set(doc["zones"]) == {"DE-LU", "NL", "DK1", "DK2", "NO2"}
+    assert doc["zones"]["NO2"]["approximate"] is True
+    assert not any(z["approximate"] for code, z in doc["zones"].items() if code != "NO2")
+    assert "Natural Earth" in doc["source"] and "v5.1.2" in doc["source"]
+    for zone in doc["zones"].values():
+        assert re.fullmatch(r"(M[-0-9. ]+l[-0-9. ]+z)+", zone["path"])
+
+
+def test_a_bundled_zone_without_a_map_shape_fails_the_build(tmp_path, monkeypatch):
+    models = tmp_path / "models"
+    models.mkdir()
+    doc = {"zone": "at", "version": "at-2026-10", "metrics": {"horizons": {}}}
+    (models / "at.json.gz").write_bytes(gzip.compress(json.dumps(doc).encode()))
+    monkeypatch.setattr(build_site, "MODELS", models)
+    with pytest.raises(SystemExit, match="no shape for the bundled zone at"):
+        build_site.zone_figures()
+
+
+def test_zone_tables_match_the_bundled_models():
+    """README's zone table: per bundled model its MAE D+1 … D+6 and skill over all horizons.
+    The NL section of docs/accuracy.md: NL's report per horizon."""
+    readme = (REPO / "README.md").read_text(encoding="utf-8")
+    section = readme.split("## Supported zones")[1].split("\n## ")[0]
+    rows = {
+        m.group(1): [c.strip() for c in m.group(2).split("|")]
+        for m in re.finditer(r"^\| ([A-Z][A-Z0-9-]*) \|(.*)\|$", section, re.MULTILINE)
+    }
+    models = {m["zone"]: m for m in _bundled_zones()}
+    assert sorted(rows) == sorted(code.upper().replace("_", "-") for code in models)
+    for slug, model in models.items():
+        metrics = model["metrics"]
+        expected = [_ct(metrics["horizons"][str(h)]["mae"] / 10) for h in range(1, 7)]
+        assert rows[slug.upper().replace("_", "-")][1:] == [
+            *expected,
+            _pct(metrics["all"]["skill"]),
+        ]
+
+    docs = (REPO / "docs" / "accuracy.md").read_text(encoding="utf-8")
+    nl = docs.split("## Netherlands (NL)")[1].split("\n## ")[0]
+    horizons = models["nl"]["metrics"]["horizons"]
+    assert _table_rows(nl) == {
+        h: [
+            _ct(m["mae"] / 10),
+            _ct(m["mae_3m"] / 10),
+            _ct(m["naive_mae"] / 10),
+            _pct(m["skill"]),
+            _pct(m["p90_exceedance"]),
+            _pct(m["neg_p10_below_zero"]),
+        ]
+        for h, m in horizons.items()
+    }

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import date, datetime
+from functools import cache
 import gzip
 import json
 from typing import Any
@@ -11,7 +12,8 @@ import zlib
 
 import numpy as np
 
-from .features import FEATURE_NAMES, FEATURE_SCHEMA, HORIZONS
+from .features import FEATURE_SCHEMA, HORIZONS, feature_names
+from .zones import zone_by_slug
 
 FORMAT = 1
 _ROW_CHUNK = 4096
@@ -133,16 +135,16 @@ def _trees_to_json(t: Trees) -> dict[str, Any]:
     return d
 
 
-def _trees_from_json(d: dict[str, Any], name: str) -> Trees:
+def _trees_from_json(d: dict[str, Any], name: str, n_features: int) -> Trees:
     t = Trees(
         baseline=float(d["baseline"]),
         **{field: np.asarray(d[field], dtype=dtype) for field, dtype in _TREE_FIELDS},
     )
-    _check_trees(t, name)
+    _check_trees(t, name, n_features)
     return t
 
 
-def _check_trees(t: Trees, name: str) -> None:
+def _check_trees(t: Trees, name: str, n_features: int) -> None:
     """Structural checks that make ``predict`` safe: in bounds, finite, and terminating."""
     n = len(t.feature)
     if n > MAX_NODES:
@@ -161,7 +163,7 @@ def _check_trees(t: Trees, name: str) -> None:
         if ((child <= inner) | (child >= n)).any():
             raise ModelCorrupt(f"{name}: child index out of bounds or not after its parent")
     # leaves too: ``_predict_chunk`` looks up the feature of every current node
-    if ((t.feature < 0) | (t.feature >= len(FEATURE_NAMES))).any():
+    if ((t.feature < 0) | (t.feature >= n_features)).any():
         raise ModelCorrupt(f"{name}: feature index out of range")
     if not np.isfinite(t.threshold[inner]).all():
         raise ModelCorrupt(f"{name}: non-finite split threshold")
@@ -238,8 +240,13 @@ def _model_from_json(doc: Any) -> ModelFile:
         raise ModelMismatch(f"unsupported model format {doc.get('format')!r}")
     if doc.get("feature_schema") != FEATURE_SCHEMA:
         raise ModelMismatch(f"feature schema {doc.get('feature_schema')!r} != {FEATURE_SCHEMA}")
-    if tuple(doc.get("features", ())) != tuple(FEATURE_NAMES):
-        raise ModelMismatch("model feature list differs from the code")
+    try:
+        zone = zone_by_slug(doc.get("zone"))
+    except KeyError:
+        raise ModelMismatch(f"unsupported zone {doc.get('zone')!r}") from None
+    names = feature_names(zone)
+    if tuple(doc.get("features", ())) != names:
+        raise ModelMismatch(f"model feature list differs from the code's for zone {zone.code}")
     return ModelFile(
         format=doc["format"],
         zone=doc["zone"],
@@ -248,9 +255,9 @@ def _model_from_json(doc: Any) -> ModelFile:
         features=tuple(doc["features"]),
         train_cutoff=date.fromisoformat(doc["train_cutoff"]),
         created=datetime.fromisoformat(doc["created"]),
-        median=_trees_from_json(doc["median"], "median"),
-        p90=_trees_from_json(doc["p90"], "p90"),
-        p10=_trees_from_json(doc["p10"], "p10"),
+        median=_trees_from_json(doc["median"], "median", len(names)),
+        p90=_trees_from_json(doc["p90"], "p90", len(names)),
+        p10=_trees_from_json(doc["p10"], "p10", len(names)),
         p90_offsets=_offsets(doc["p90_offsets"], "p90_offsets"),
         p10_offsets=_offsets(doc["p10_offsets"], "p10_offsets"),
         peak_threshold=float(doc["peak_threshold"]),
@@ -259,14 +266,12 @@ def _model_from_json(doc: Any) -> ModelFile:
     )
 
 
-def _sample() -> np.ndarray:
+@cache
+def _sample(n_features: int) -> np.ndarray:
     """Two rows: every feature missing, and every feature 0.0."""
-    sample = np.vstack([np.full(len(FEATURE_NAMES), np.nan), np.zeros(len(FEATURE_NAMES))])
+    sample = np.vstack([np.full(n_features, np.nan), np.zeros(n_features)])
     sample.flags.writeable = False
     return sample
-
-
-_SAMPLE = _sample()
 
 
 def sample_check(model: ModelFile) -> None:
@@ -276,6 +281,6 @@ def sample_check(model: ModelFile) -> None:
     For a model from ``load_model`` (whose trees are checked to be well-formed).
     """
     for name in ("median", "p90", "p10"):
-        y = getattr(model, name).predict(_SAMPLE)
+        y = getattr(model, name).predict(_sample(len(model.features)))
         if not (np.isfinite(y).all() and (np.abs(y) < SAMPLE_LIMIT).all()):
             raise ModelCorrupt(f"{name}: sample predictions {y.tolist()} are not plausible")
