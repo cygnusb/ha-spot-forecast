@@ -8,10 +8,12 @@ are relative to the 7-day mean in units of the target scale (research/zones/bt.p
 
 DE-LU has the layout of ``build_samples`` (``FEATURE_NAMES``); the other zones have the
 zone-generic one of research/zones/genfeat.py (``feature_names``, ``_weather_features``,
-``build_features``), with its options ``raw_extra``, ``de_extra`` and ``de_price`` where the
-zone sets them (``Zone.raw_extra``, ``Zone.de_extra``, ``Zone.price_inputs``), not
-``hydro_extra``. The DE-LU price features are relative to the zone's own 7-day mean and scale
-(research/zones/bt.py ``DE_REL``) and their lags read the wall-clock hour as every lag does.
+``build_features``), with its options ``raw_extra``, ``de_extra``, ``de_price`` and
+``hydro_extra`` where the zone sets them (``Zone.raw_extra``, ``Zone.de_extra``,
+``Zone.price_inputs``, ``Zone.hydro_extra``), and without ``doy`` where the zone drops it
+(``Zone.doy``, research/zones/bt.py variant ``hydnd``). The DE-LU price features are relative
+to the zone's own 7-day mean and scale (research/zones/bt.py ``DE_REL``) and their lags read
+the wall-clock hour as every lag does. The hydro features stay absolute, as in bt ``relative``.
 
 Any change here that alters a feature value breaks parity with the research backtest
 and with every shipped model; ``tests/core/test_features.py`` pins the golden values.
@@ -51,6 +53,11 @@ DE_EXTRA_NAMES = ("de_wind_power_idx", "de_solar_est_mean", "de_temp_mean",
 # of them price levels, relative to the zone's own D_mean7 and scale (bt.py ``DE_REL``)
 DE_PRICE_NAMES = ("de_p_lastday", "de_p_lastweek", "de_D_mean", "de_D_mean7",
                   "de_D_gq_evening14", "de_D_max")  # fmt: skip
+# generic layout, ``Zone.hydro_extra``: genfeat ``_hydro_extra``, absolute (not in ``relative``)
+HYDRO_EXTRA_NAMES = ("hyd_precip_past14", "hyd_precip_past30", "hyd_precip_past90",
+                     "hyd_temp_past14", "hyd_temp_past30", "hyd_precip_fc6")  # fmt: skip
+HYDRO_VARS = ("precipitation", "temperature_2m")  # the series ``hydro_history`` holds per point
+HYDRO_DAYS = 90  # the longest trailing window: ``hydro_history`` must cover it
 
 FEATURE_NAMES: tuple[str, ...] = (
     "h", "hour", "dow", "doy", "holiday", "offday", "issue_dow", "p_lastday", "p_lastweek",
@@ -93,10 +100,14 @@ def feature_names(zone: Zone) -> tuple[str, ...]:
         *agg,
         *(f"{c}_day" for c in day),
     ]  # fmt: skip
+    if not zone.doy:
+        names.remove("doy")
     if zone.hydro:
         names.append("precip_hydro_day")
     if zone.nb_hydro:
         names.append("nb_precip_hydro_day")
+    if zone.hydro_extra:
+        names += HYDRO_EXTRA_NAMES
     if zone.de_extra:
         names += DE_EXTRA_NAMES
     if zone.price_inputs:
@@ -370,6 +381,54 @@ def _generic_weather_features(
     return f
 
 
+def _known_until(anchor: date, zone: Zone) -> datetime:
+    """End of the anchor day (UTC): what is published at issue time ends there."""
+    return datetime.combine(anchor + _DAY, time(), ZoneInfo(zone.tz)).astimezone(UTC)
+
+
+def _window(history: Mapping[str, Hourly], key: str, first: datetime, n: int) -> np.ndarray:
+    s = history.get(key)
+    return np.full(n, np.nan) if s is None else s.window(first, n)
+
+
+def _hydro_features(
+    history: Mapping[str, Hourly], known_until: datetime, zone: Zone, fc_sum: float
+) -> dict:
+    """research/zones/genfeat.py ``_hydro_extra``: trailing precipitation (summed over the
+    points) and temperature (mean of the points' means) of the ``days`` x 24 real hours
+    before ``known_until``, from the offset-2 series of ``history``.
+
+    NaN hours are skipped (``nansum``, ``nanmean``) as in research, which keeps the earliest
+    training anchors, whose 90-day windows start before the data does. A live forecast
+    checks the history for holes first (``hydro_history_gaps``).
+    """
+    points = zone.hydro_points
+    out = {}
+    for days in (14, 30, 90):
+        first = known_until - days * _DAY
+        out[f"hyd_precip_past{days}"] = sum(
+            np.nansum(_window(history, f"{p}__precipitation", first, days * 24)) for p in points
+        )
+    for days in (14, 30):
+        first = known_until - days * _DAY
+        means = []
+        for p in points:
+            x = _window(history, f"{p}__temperature_2m", first, days * 24)
+            means.append(np.nan if np.isnan(x).all() else np.nanmean(x))
+        out[f"hyd_temp_past{days}"] = float(np.mean(means))
+    out["hyd_precip_fc6"] = fc_sum
+    return out
+
+
+def hydro_history_gaps(history: Mapping[str, Hourly], anchor: date, zone: Zone) -> list[str]:
+    """The ``"{point}__{var}"`` series of ``zone.hydro_points`` that miss an hour of the
+    ``HYDRO_DAYS`` x 24 hours before the end of ``anchor`` (all of them if absent)."""
+    known_until = _known_until(anchor, zone)
+    first, n = known_until - HYDRO_DAYS * _DAY, HYDRO_DAYS * 24
+    keys = [f"{p}__{v}" for p in zone.hydro_points for v in HYDRO_VARS]
+    return [k for k in keys if np.isnan(_window(history, k, first, n)).any()]
+
+
 def _wall_clock_index(lag_day: date, hours: np.ndarray, tz: ZoneInfo) -> tuple[datetime, int, list]:
     """Where each local ``hours`` value falls on ``lag_day``: the day's first hour (UTC), its
     length in hours and, per value, the index of that wall-clock hour in the day.
@@ -394,6 +453,7 @@ def build_features(
     capacity: Mapping[str, float],
     zone: Zone,
     extra_prices: Mapping[str, tuple[Hourly, DailyStats]] | None = None,
+    hydro_history: Mapping[str, Hourly] | None = None,
 ) -> FeatureMatrix:
     """Feature rows for every hour of the local days anchor+1 … anchor+6.
 
@@ -404,11 +464,15 @@ def build_features(
     target day anchor+h. Missing inputs give NaN features. ``capacity`` is read only by
     layouts with capacity features (DE-LU). ``extra_prices`` holds, per zone code of
     ``zone.price_inputs``, that zone's prices and ``daily_stats``; they are read the same
-    way (lags in the local hours of ``zone``, statistics of the anchor day). The columns
-    are ``feature_names(zone)``.
+    way (lags in the local hours of ``zone``, statistics of the anchor day).
+    ``hydro_history`` holds the ``"{point}__{var}"`` offset-2 series (``HYDRO_VARS`` of
+    ``zone.hydro_points``) for the ``HYDRO_DAYS`` before the end of the anchor day; it is
+    required for a zone with ``hydro_extra`` and ignored otherwise (training passes
+    ``weather[1]``, which holds them). The columns are ``feature_names(zone)``.
 
     Raises ``InsufficientHistory`` without 30 days of prices to the anchor day, or when
-    ``extra_prices`` lacks one of ``zone.price_inputs``.
+    ``extra_prices`` lacks one of ``zone.price_inputs``; ``ValueError`` when a zone with
+    ``hydro_extra`` gets no ``hydro_history``.
     """
     names = feature_names(zone)
     relative, spread = _relative_columns(zone)
@@ -416,6 +480,8 @@ def build_features(
     a = daily.index(anchor)
     if a is None or np.isnan(daily.mean30[a]) or np.isnan(daily.gq_evening14[a]):
         raise InsufficientHistory(f"less than 30 days of prices before the end of {anchor}")
+    if zone.hydro_extra and hydro_history is None:
+        raise ValueError(f"zone {zone.code} needs the hydro history")
     missing = [c for c in zone.price_inputs if c not in (extra_prices or {})]
     if missing:
         raise InsufficientHistory(f"no prices of {', '.join(missing)} for zone {zone.code}")
@@ -427,7 +493,7 @@ def build_features(
             d_features[f"de_D_{n}"] = np.nan if i is None else getattr(de_daily, n)[i]
     scale = max(daily.gq_evening14[a], zone.scale_floor) / zone.scale_divisor
     tz = ZoneInfo(zone.tz)
-    known_until = datetime.combine(anchor + _DAY, time(), tz).astimezone(UTC)
+    known_until = _known_until(anchor, zone)
 
     def lag(day: date, hours: np.ndarray, series: Hourly = prices) -> np.ndarray:
         """``series`` at the local ``hours`` of ``day``; hours after the anchor day read NaN."""
@@ -436,7 +502,8 @@ def build_features(
         out[max((known_until - first) // _HOUR, 0) :] = np.nan
         return out[index]
 
-    blocks, times, hs = [], [], []
+    per_h, times, hs = [], [], []
+    fc_sum = 0.0  # genfeat ``fc_sum``: the hydro points' precipitation over the six days
     for h in HORIZONS:
         target = anchor + timedelta(days=h)
         first = datetime.combine(target, time(), tz).astimezone(UTC)
@@ -468,13 +535,23 @@ def build_features(
         if zone.price_inputs:
             cols["de_p_lastday"] = lag(target - h * _DAY, hour, de_prices)
             cols["de_p_lastweek"] = lag(target - 7 * _DAY, hour, de_prices)
-        blocks.append(
-            np.column_stack([np.broadcast_to(np.asarray(cols[c], dtype=float), n) for c in names])
-        )
+        if zone.hydro_extra:
+            # summed over the points first (a NaN hour of one point drops the hour), as research
+            fc_sum += float(np.nansum(sum(w(f"{p}__precipitation") for p in zone.hydro_points)))
+        per_h.append((cols, n))
         times += day_times
         hs.append(np.full(n, h))
 
-    X = np.vstack(blocks)
+    if zone.hydro_extra:
+        hydro = _hydro_features(hydro_history, known_until, zone, fc_sum)
+        for cols, _ in per_h:
+            cols.update(hydro)
+    X = np.vstack(
+        [
+            np.column_stack([np.broadcast_to(np.asarray(cols[c], dtype=float), n) for c in names])
+            for cols, n in per_h
+        ]
+    )
     # in the order of research ``relative``: subtract, then divide
     X[:, relative] = (X[:, relative] - d_features["D_mean7"]) / scale
     X[:, spread] = X[:, spread] / scale
