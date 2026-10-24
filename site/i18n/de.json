@@ -103,7 +103,8 @@
       "DE-LU": "Deutschland und Luxemburg",
       "NL": "Niederlande",
       "DK1": "Dänemark West",
-      "DK2": "Dänemark Ost"
+      "DK2": "Dänemark Ost",
+      "NO2": "Südnorwegen"
     },
     "table_note": "Außerhalb der Stichprobe, über den Walk-forward-Zeitraum des jeweiligen Modells. Das Preisniveau unterscheidet sich zwischen den Zonen: Vergleiche die Fehler einer Zone besser mit ihrem naiven Fehler in der Dokumentation als mit einer anderen Zone."
   },
