@@ -184,7 +184,7 @@ def test_options_reach_every_zone(tmp_path, fake_ci):
 def test_zones_train_in_order_parent_first(tmp_path, fake_ci):
     _, seen = fake_ci
     _go(tmp_path)
-    assert list(seen) == ["DE-LU", "NL", "DK1", "DK2"]
+    assert list(seen) == ["DE-LU", "NL", "DK1", "DK2", "NO2"]
 
 
 @pytest.mark.parametrize("de_lu", ["pass", "fail", "published"])
