@@ -115,6 +115,39 @@ NL, the forecasts were recorded later with an explicit `start_date=2026-10-22`, 
 reads are DE-LU's recording. The only edit to the files is the removal of 2026-10-23 from
 `energy_charts_price_dk{1,2}.json`.
 
+## NO2
+
+Recorded with one live call each on 2026-10-24 at about 10:30 CEST (08:29–08:34 UTC), for the
+NO2 tests (`test_no2.py`), which freeze to the same 2026-10-22 10:00. NO2 has three Open-Meteo
+point sets (`core.zones.NO2.point_sets()`): one of neighbour variables (`nb_no_south`,
+`nb_dk_west`, `nb_nl`), one of DE-LU variables (`north_sea`, `schleswig`), both DE-LU points
+only, and one of `wind_speed_100m,temperature_2m,precipitation` (`n`: the `no2_*`, `no5_*` and
+`no1_*` points). Its hydro history is one more previous-runs request for the six hydro points
+(`NO2.hydro_points`: `nb_no_south`, `no2_sirdal`, `no2_stavanger`, `no5_sogn`,
+`no1_hallingdal`, `no5_bergen`) with the two columns
+`precipitation_previous_day2,temperature_2m_previous_day2`.
+
+| File | Request | Content |
+|---|---|---|
+| `energy_charts_price_no2_tomorrow.json` | `GET https://api.energy-charts.info/price?bzn=NO2&start=2026-10-19&end=2026-10-23` | unchanged response: 480 quarter-hour slots, 2026-10-19 00:00 to 2026-10-23 23:45 Europe/Oslo; `license_info` "CC BY 4.0 (creativecommons.org/licenses/by/4.0) from Bundesnetzagentur \| SMARD.de", `unit` "EUR / MWh" |
+| `energy_charts_price_no2.json` | same | the response above without the 96 slots of 2026-10-23 (local): 384 slots, the state before tomorrow's auction |
+| `open_meteo_no2_n.json` | `GET https://api.open-meteo.com/v1/forecast` with the `n` points and variables, `start_date=2026-10-22`, `end_date=2026-10-29` | unchanged response: 7 location documents, 2026-10-22T00:00 to 2026-10-29T23:00 GMT |
+| `open_meteo_prev_no2_n.json` | `GET https://previous-runs-api.open-meteo.com/v1/forecast` with the `n` points, `start_date=2026-10-01`, `end_date=2026-10-22` | unchanged response, 2026-10-01T00:00 to 2026-10-22T23:00 GMT, all `{var}_previous_day{2..7}` columns |
+| `open_meteo_hydro_no2.json` | `GET https://previous-runs-api.open-meteo.com/v1/forecast` with the hydro points and columns, `past_days=92`, `forecast_days=2`: the live request of a run | unchanged response: 6 location documents, 2026-07-24T00:00 to 2026-10-25T23:00 GMT, no missing value |
+| `open_meteo_prev_hydro_no2.json` | same URL, points and columns with `start_date=2026-06-26`, `end_date=2026-10-23`: the span of the backfill test's requests | unchanged response: 6 location documents, 2026-06-26T00:00 to 2026-10-23T23:00 GMT, no missing value |
+
+**Synthesized in code, not in these files:** as for DK, the two point sets of DE-LU points are
+served from the DE-LU recordings, reordered (`conftest.dk_weather`), and the forecast was
+recorded later with an explicit `start_date=2026-10-22`. `conftest.Sources` serves the live
+hydro body for the request with `past_days=92` and the range recording, whole, for every
+request with a date range (the backfill's months). Recorded two days after the date the tests
+freeze to, the live body starts 2026-07-24 00:00 GMT: it still covers the 90 days the anchors
+2026-10-22 and 2026-10-23 read (from 2026-07-24 22:00 and 2026-07-25 22:00 UTC). The hole
+tests set single values of copies to `null` in code. The only edit to the files is the removal
+of 2026-10-23 from `energy_charts_price_no2.json`. The pure tests (`tests/core/test_ingest.py`)
+read the live hydro body too: on the hours it shares with `open_meteo_prev_no2_n.json`,
+`open_meteo_prev_nb.json` and the training data it equals their `_previous_day2` columns.
+
 ## Model
 
 `model/de_lu.json.gz` and `model/de_lu.backfill.json.gz` are copies of the bundled model
@@ -141,3 +174,13 @@ and their backfill files (target days 2026-04-04 … 2026-09-30, Europe/Copenhag
 DE-LU, DK1 and DK2 prices, the installed capacity and the 33 weather points of the two zones
 and of DE-LU, and the predictions file came from retraining `de_lu-2026-10` the same way as
 above (its model file came out the same as the committed one, apart from `created`).
+
+`model/no2.json.gz` and `model/no2.backfill.json.gz` are copies of the bundled model
+`no2-2026-10` (training cutoff 2026-10-01, feature schema 2, the `generic` layout with the
+hydro features and without `doy`) and its backfill file (target days 2026-04-04 …
+2026-09-30, Europe/Oslo), trained on 2026-10-24 with `python -m training.train --zone NO2
+--raw <raw> --out dist --cutoff 2026-10-01 --walk-forward-from 2025-04-01`, where `<raw>` held
+the NO2 prices of `research/data/raw/prices/NO2` and the 12 NO2 weather points: the five
+DE-LU-catalogue ones (`nb_no_south`, `nb_dk_west`, `nb_nl`, `north_sea`, `schleswig`) from
+`research/data/raw/weather`, the seven others from `research/data/zones/weather`, the same
+files the research run `pred_NO2_hydrel_600.pkl` read.

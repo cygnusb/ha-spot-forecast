@@ -29,7 +29,7 @@
         },
         "data_description": {
           "surcharge": "Gross amount per kWh for the total-price sensor and the forecast card's view with fees, in EUR/kWh (grid fees, levies, taxes, VAT included; enter it as you pay it). The total price is the market price plus VAT (next option) plus this amount. 0 removes the total-price sensor. The price sensor, the statistics and the peak and negative-price sensors stay on the market price.",
-          "vat": "VAT in percent charged on the market price for the total price: market price × (1 + VAT/100) + grid fees and taxes. The default is the zone's standard rate: 19 in Germany, 21 in the Netherlands, 25 in Denmark. Luxembourg charges a different rate on electricity: enter the one on your bill.",
+          "vat": "VAT in percent charged on the market price for the total price: market price × (1 + VAT/100) + grid fees and taxes. The default is the zone's standard rate: 19 in Germany, 21 in the Netherlands, 25 in Denmark and Norway. Luxembourg charges a different rate on electricity: enter the one on your bill.",
           "peak_threshold": "Wholesale price at or above which an hour counts as a price peak, in ct/kWh without taxes or grid fees. The default comes from the model's training data.",
           "backfill_days": "How many past days of forecasts are reconstructed on first start so accuracy statistics have history. 0 turns backfill off.",
           "auto_update": "Once a day, download a newer forecast model for this zone when one is published. It is used only if it fits this version of the integration and passes its checks."

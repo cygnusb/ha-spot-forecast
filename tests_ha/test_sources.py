@@ -16,7 +16,8 @@ from pytest_homeassistant_custom_component.test_util.aiohttp import (
 )
 from yarl import URL
 
-from custom_components.spot_forecast.core.zones import DE_LU
+from custom_components.spot_forecast.core.ingest import parse_open_meteo
+from custom_components.spot_forecast.core.zones import DE_LU, NO2
 from custom_components.spot_forecast.model_loader import load_bundled
 from custom_components.spot_forecast.sources import energy_charts, http, open_meteo
 from custom_components.spot_forecast.sources.energy_charts import fetch_prices
@@ -26,7 +27,9 @@ from custom_components.spot_forecast.sources.http import (
     get_body,
 )
 from custom_components.spot_forecast.sources.open_meteo import (
+    check_hydro_history,
     fetch_forecast,
+    fetch_hydro_history,
     fetch_previous_runs,
 )
 
@@ -242,7 +245,7 @@ async def test_client_error_without_a_reason_keeps_the_plain_message(
     assert str(err.value) == f"{TEST_URL}: HTTP 403"
 
 
-@pytest.mark.parametrize("source", ["prices", "forecast", "previous_runs"])
+@pytest.mark.parametrize("source", ["prices", "forecast", "previous_runs", "hydro"])
 async def test_sources_limit_the_body(
     hass: HomeAssistant,
     aioclient_mock: AiohttpClientMocker,
@@ -259,13 +262,14 @@ async def test_sources_limit_the_body(
         )
     else:
         monkeypatch.setattr(open_meteo, "MAX_WEATHER_BYTES", 1000)
-        fetch = (
-            fetch_forecast(session, DE_LU, run_blocking=run_blocking)
-            if source == "forecast"
-            else fetch_previous_runs(
+        if source == "forecast":
+            fetch = fetch_forecast(session, DE_LU, run_blocking=run_blocking)
+        elif source == "hydro":
+            fetch = fetch_hydro_history(session, NO2, run_blocking=run_blocking)
+        else:
+            fetch = fetch_previous_runs(
                 session, DE_LU, date(2026, 10, 1), date(2026, 10, 2), run_blocking=run_blocking
             )
-        )
 
     with pytest.raises(SourceError, match="limit"):
         await fetch
@@ -351,3 +355,72 @@ def test_bundled_model_loads() -> None:
     assert model.peak_threshold > 0
     assert model.train_cutoff <= date(2026, 10, 22)
     assert gzip.decompress(backfill)
+
+
+async def test_fetch_hydro_history_live_is_the_recorded_past_days_body(
+    hass: HomeAssistant, aioclient_mock: AiohttpClientMocker, pauses: list[float], recorded
+) -> None:
+    """One request; the ``_previous_day2`` columns of the six hydro points, in their order."""
+    body = recorded("open_meteo_hydro_no2.json")
+    aioclient_mock.get(PREVIOUS_URL, json=body)
+
+    history = await fetch_hydro_history(
+        async_get_clientsession(hass), NO2, run_blocking=hass.async_add_executor_job
+    )
+
+    assert aioclient_mock.call_count == 1 and pauses == []
+    variables = ("precipitation", "temperature_2m")
+    expected = parse_open_meteo(body, list(NO2.hydro_points), variables, "_previous_day2")
+    assert list(history) == [f"{p}__{v}" for p in NO2.hydro_points for v in variables]
+    for key, series in history.items():
+        assert series.start == expected[key].start == datetime(2026, 7, 24, tzinfo=UTC)
+        assert (series.values == expected[key].values).all()
+    check_hydro_history(history, date(2026, 10, 24), NO2)  # recorded on 2026-10-24: complete
+
+
+async def test_fetch_hydro_history_range_chunks_per_month(
+    hass: HomeAssistant, aioclient_mock: AiohttpClientMocker, pauses: list[float]
+) -> None:
+    async def respond(method, url, data):
+        q = url.query
+        first = datetime.fromisoformat(q["start_date"])
+        hours = ((datetime.fromisoformat(q["end_date"]) - first).days + 1) * 24
+        hourly = {"time": [(first + timedelta(hours=i)).isoformat() for i in range(hours)]}
+        hourly |= {column: [2.0] * hours for column in q["hourly"].split(",")}
+        return AiohttpClientMockResponse(
+            method, url, json=[{"hourly": hourly} for _ in q["latitude"].split(",")]
+        )
+
+    aioclient_mock.get(re.compile(re.escape(PREVIOUS_URL)), side_effect=respond)
+
+    history = await fetch_hydro_history(
+        async_get_clientsession(hass),
+        NO2,
+        date(2026, 7, 30),
+        date(2026, 9, 2),
+        run_blocking=hass.async_add_executor_job,
+    )
+
+    queries = [URL(str(url)).query for _, url, _, _ in aioclient_mock.mock_calls]
+    assert [(q["start_date"], q["end_date"]) for q in queries] == [
+        ("2026-07-30", "2026-07-31"), ("2026-08-01", "2026-08-31"), ("2026-09-01", "2026-09-02"),
+    ]  # fmt: skip
+    assert all("past_days" not in q and "forecast_days" not in q for q in queries)
+    assert queries[0]["hourly"] == "precipitation_previous_day2,temperature_2m_previous_day2"
+    assert pauses == [3, 3]
+    series = history["no5_bergen__temperature_2m"]
+    assert series.start == datetime(2026, 7, 30, tzinfo=UTC)
+    assert len(series.values) == 35 * 24 and (series.values == 2.0).all()
+
+
+def test_check_hydro_history_names_the_zone_and_the_series(recorded) -> None:
+    body = recorded("open_meteo_hydro_no2.json")
+    variables = ("precipitation", "temperature_2m")
+    history = parse_open_meteo(body, list(NO2.hydro_points), variables, "_previous_day2")
+    check_hydro_history(history, date(2026, 10, 22), NO2)
+    s = history["no2_stavanger__temperature_2m"]
+    s.values[(datetime(2026, 9, 1, tzinfo=UTC) - s.start) // timedelta(hours=1)] = float("nan")
+    with pytest.raises(SourceError, match=r"^NO2: .*no2_stavanger__temperature_2m$"):
+        check_hydro_history(history, date(2026, 10, 22), NO2)
+    with pytest.raises(SourceError, match="before the end of 2026-10-26"):
+        check_hydro_history(history, date(2026, 10, 26), NO2)  # after the recording

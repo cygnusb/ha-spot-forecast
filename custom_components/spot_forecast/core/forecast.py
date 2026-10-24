@@ -43,11 +43,14 @@ def run_forecast(
     zone: Zone,
     capacity: Mapping[str, float] | None = None,
     extra_prices: Mapping[str, Hourly] | None = None,
+    hydro_history: Mapping[str, Hourly] | None = None,
 ) -> list[Slot]:
     """Median, raw P90 and raw P10 for every hour of anchor+1 … anchor+6.
 
     ``extra_prices`` holds the prices of the zones in ``zone.price_inputs``, by zone code;
-    ``weather`` must hold the series of every point in ``zone.point_sets()``. A composite
+    ``weather`` must hold the series of every point in ``zone.point_sets()``, and
+    ``hydro_history`` those of ``zone.hydro_points`` for a zone with ``hydro_extra`` (see
+    ``build_features``; a caller checks it for holes first). A composite
     model (``model.parent``) also runs its parent model on the parent zone, with that zone's
     prices from ``extra_prices`` and the parent's capacity, and every slot is the blend of
     the two: ``blend`` x own + (1 - ``blend``) x parent, for the median and both quantiles.
@@ -74,6 +77,7 @@ def run_forecast(
         model.capacity if capacity is None else capacity,
         zone,
         {c: (extra[c], daily_stats(extra[c], ZONES[c])) for c in zone.price_inputs},
+        hydro_history,
     )
     wind_mean = fm.X[:, model.features.index("wind_mean")]
     median = decode(model.median.predict(fm.X), fm)

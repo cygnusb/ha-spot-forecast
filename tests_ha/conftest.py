@@ -46,7 +46,16 @@ from custom_components.spot_forecast.const import (
     DOMAIN,
     MANIFEST_URL,
 )
-from custom_components.spot_forecast.core.zones import DE_LU, DK1, DK2, N_VARS, NL, S_VARS
+from custom_components.spot_forecast.core.zones import (
+    DE_LU,
+    DK1,
+    DK2,
+    N_VARS,
+    NL,
+    NO2,
+    POINTS,
+    S_VARS,
+)
 from custom_components.spot_forecast.sources import http
 
 pytest_plugins = "pytest_homeassistant_custom_component"
@@ -153,11 +162,20 @@ _DE_LU_RECORDINGS = (
 )
 
 
+# NO2's recordings (see fixtures/README.md): prices, its point set of N_VARS points (its other
+# two hold DE-LU points only) and the hydro history, live (``past_days``) and as a date range
+NO2_PRICES = "energy_charts_price_no2.json"
+NO2_HYDRO = "open_meteo_hydro_no2.json"
+NO2_HYDRO_RANGE = "open_meteo_prev_hydro_no2.json"
+NO2_HYDRO_LATITUDES = ",".join(str(POINTS[p][0][0]) for p in NO2.hydro_points)
+
+
 def dk_weather(recorded: Callable[[str], Any], zone, previous: bool) -> list[tuple[str, Any]]:
-    """Per point set of ``zone`` (DK1 or DK2): its latitudes and the recorded response.
+    """Per point set of ``zone`` (DK1, DK2 or NO2): its latitudes and the recorded response.
 
     A point set of DE-LU points is DE-LU's recording, its location documents reordered to
-    the set's point order (Open-Meteo answers in request order); the others are DK's own.
+    the set's point order (Open-Meteo answers in request order); the others are the zone's
+    own.
     """
     by_point: dict[str, Any] = {}
     for points, forecast, prev in _DE_LU_RECORDINGS:
@@ -179,7 +197,8 @@ class Sources:
     """Serves the recorded payloads, or errors, for Energy-Charts and Open-Meteo.
 
     Open-Meteo previous runs answer every request with the whole recording (target hours
-    2026-10-01 … 2026-10-22 GMT), whatever ``start_date``/``end_date`` asks for.
+    2026-10-01 … 2026-10-22 GMT; NO2's hydro history: its own spans, see ``serve``), whatever
+    ``start_date``/``end_date`` asks for.
 
     The ``models`` release serves ``release`` (URL -> body), read at request time; every
     other file of it, the manifest included while ``release`` is empty, is HTTP 404.
@@ -200,6 +219,9 @@ class Sources:
         *,
         nl_prices: str = NL_PRICES,
         dk_prices: dict[str, str] | None = None,
+        no2_prices: str = NO2_PRICES,
+        hydro: Any = None,
+        hydro_range: Any = None,
         zone_prices_status: dict[str, int] | None = None,
         prices_until: dict[str, datetime] | None = None,
         prices_status: int = 200,
@@ -210,8 +232,11 @@ class Sources:
     ) -> None:
         """Replace all registered responses (and the call log).
 
-        ``prices`` are DE-LU's, ``nl_prices`` NL's, ``dk_prices`` DK1's and DK2's (by the
-        request's ``bzn``); the NL and DK weather is served for their own point sets.
+        ``prices`` are DE-LU's, ``nl_prices`` NL's, ``dk_prices`` DK1's and DK2's,
+        ``no2_prices`` NO2's (by the request's ``bzn``); the NL, DK and NO2 weather is served
+        for their own point sets. NO2's live hydro history request (``past_days``) gets
+        ``hydro`` if given, else its recording; its backfill requests (date ranges) get
+        ``hydro_range`` if given, else the range recording, whole.
         ``zone_prices_status`` answers a zone's price requests with that HTTP status, and
         ``prices_until`` serves a zone's prices only before that instant.
         ``price_overrides`` sets the price (EUR/MWh) of the quarter hours starting at the
@@ -224,7 +249,12 @@ class Sources:
             self._mock.get(EC_URL, status=prices_status)
         else:
             docs = {}
-            served = (("DE-LU", prices), ("NL", nl_prices), *(dk_prices or DK_PRICES).items())
+            served = (
+                ("DE-LU", prices),
+                ("NL", nl_prices),
+                *(dk_prices or DK_PRICES).items(),
+                ("NO2", no2_prices),
+            )
             for zone, name in served:
                 doc = docs[zone] = _with_history(self._recorded(name))
                 if through is not None:
@@ -268,7 +298,7 @@ class Sources:
                 self._mock.get(
                     FORECAST_URL, params={"latitude": latitudes}, json=self._recorded(name)
                 )
-            for zone in (DK1, DK2):
+            for zone in (DK1, DK2, NO2):
                 for latitudes, body in dk_weather(self._recorded, zone, previous=False):
                     self._mock.get(FORECAST_URL, params={"latitude": latitudes}, json=body)
         if previous_runs_status != 200:
@@ -287,9 +317,19 @@ class Sources:
                 self._mock.get(
                     PREVIOUS_RUNS_URL, params={"latitude": latitudes}, json=self._recorded(name)
                 )
-            for zone in (DK1, DK2):
+            for zone in (DK1, DK2, NO2):
                 for latitudes, body in dk_weather(self._recorded, zone, previous=True):
                     self._mock.get(PREVIOUS_RUNS_URL, params={"latitude": latitudes}, json=body)
+            self._mock.get(
+                PREVIOUS_RUNS_URL,
+                params={"latitude": NO2_HYDRO_LATITUDES, "past_days": "92"},
+                json=self._recorded(NO2_HYDRO) if hydro is None else hydro,
+            )
+            self._mock.get(
+                PREVIOUS_RUNS_URL,
+                params={"latitude": NO2_HYDRO_LATITUDES},
+                json=self._recorded(NO2_HYDRO_RANGE) if hydro_range is None else hydro_range,
+            )
 
         async def release(method, url, data):
             body = self.release.get(str(url))
