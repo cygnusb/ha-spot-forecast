@@ -2,7 +2,8 @@
 
 Runs the research ``build_samples`` on the raw data and stores, per golden anchor,
 the inputs ``core.features.build_features`` needs and the feature rows research
-produced. ``tests/core/test_features.py`` checks parity against this file.
+produced, with feature schema 2 applied on top (``schema2``). ``tests/core/test_features.py``
+checks parity against this file.
 
 Usage: python training/make_golden.py   (env SPOT_RESEARCH_DIR, default <repo>/research)
 """
@@ -50,6 +51,10 @@ FEATURE_NAMES = [
     "nb_wind_power_idx_day", "nb_temp_fr_day", "nb_temp_nordic_day", "nb_precip_hydro_day",
     "cap_solar", "cap_wind_on", "cap_wind_off",
 ]  # fmt: skip
+# Feature schema 2 (research/zones/bt.py ``REL`` / ``SPREAD``), written independently too.
+RELATIVE = ["p_lastday", "p_lastweek", "D_mean", "D_min", "D_max", "D_mean30", "D_min7", "D_max7",
+            "D_gq_evening14", "D_gq_q90_14"]  # fmt: skip
+SPREAD = ["D_std", "D_std7"]
 WEATHER_KEYS = [f"{p}__{v}" for p in POINTS for v in WEATHER_VARS] + [
     f"{p}__{v}" for p in NEIGHBOR_POINTS for v in NEIGHBOR_VARS
 ]
@@ -57,6 +62,40 @@ WEATHER_KEYS = [f"{p}__{v}" for p in POINTS for v in WEATHER_VARS] + [
 
 def local_midnight_utc(d: date) -> pd.Timestamp:
     return pd.Timestamp(datetime.combine(d, time(), TZ).astimezone(UTC))
+
+
+def wall_clock_lag(t: pd.Timestamp, back_from: date, back: int, issue: date, prices) -> float:
+    """As research/holidays_dst/build.py ``dst_lags``, for one row: the price at the local
+    wall-clock hour of ``t`` on ``back_from - back`` days; fold=0 for an hour the day has
+    twice, the hour before for one it does not have, NaN after the issue day."""
+    hour = t.tz_convert(TZ).hour
+    d = back_from - timedelta(days=back)
+    cand = datetime(d.year, d.month, d.day, hour, tzinfo=TZ)
+    u = cand.astimezone(UTC)
+    if u.astimezone(TZ).replace(tzinfo=None) != cand.replace(tzinfo=None):  # nonexistent
+        u = datetime(d.year, d.month, d.day, hour - 1, tzinfo=TZ).astimezone(UTC)
+    if u >= datetime.combine(issue + timedelta(days=1), time(), TZ).astimezone(UTC):
+        return math.nan
+    return float(prices.get(pd.Timestamp(u), math.nan))
+
+
+def schema2(rows: pd.DataFrame, prices: pd.Series) -> pd.DataFrame:
+    """Research rows with feature schema 2: wall-clock price lags (research
+    holidays_dst/build.py ``dst_lags``), then the price levels relative to the 7-day mean
+    (research zones/bt.py ``relative``)."""
+    out = rows.copy()
+    meta = list(zip(rows.index, rows["target_date"], rows["issue_date"], rows["h"], strict=True))
+    for name, back in (("p_lastday", None), ("p_lastweek", 7)):
+        out[name] = [
+            wall_clock_lag(t, td.date(), int(h) if back is None else back, issue.date(), prices)
+            for t, td, issue, h in meta
+        ]
+    scale = rows["D_gq_evening14"].clip(lower=50) / 100
+    for name in RELATIVE:
+        out[name] = (out[name] - rows["D_mean7"]) / scale
+    for name in SPREAD:
+        out[name] = out[name] / scale
+    return out
 
 
 def floats(values) -> list[float | None]:
@@ -99,7 +138,7 @@ def case(
         "weather": weather_out,
         "capacity": {c: floats([cap_row[c]])[0] for c in cap.columns},
         "times": [t.isoformat() for t in rows.index],
-        "X": [floats(r) for r in rows[FEATURE_NAMES].astype(float).to_numpy()],
+        "X": [floats(r) for r in schema2(rows, prices)[FEATURE_NAMES].astype(float).to_numpy()],
         "mean7": floats(rows["D_mean7"].to_numpy()),
         "scale": floats(scale.to_numpy()),
     }

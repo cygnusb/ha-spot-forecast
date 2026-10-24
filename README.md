@@ -76,12 +76,12 @@ absolute error (MAE) in ct/kWh, from the shipped model's own report
 
 | Horizon | MAE Apr 2025 – Sep 2026 | Naive MAE, same period | Skill, same period | MAE Jul – Sep 2026 | Naive MAE, Jul – Sep 2026 | Skill, Jul – Sep 2026 | Above peak risk |
 |---|---|---|---|---|---|---|---|
-| D+1 | 1.79 | 3.39 | 47% | 2.36 | 4.29 | 45% | 12% |
-| D+2 | 1.88 | 3.39 | 45% | 2.49 | 4.29 | 42% | 12% |
-| D+3 | 1.96 | 3.39 | 42% | 2.64 | 4.29 | 38% | 12% |
-| D+4 | 2.12 | 3.39 | 38% | 2.86 | 4.29 | 33% | 12% |
-| D+5 | 2.36 | 3.39 | 30% | 3.18 | 4.29 | 26% | 13% |
-| D+6 | 2.48 | 3.39 | 27% | 3.20 | 4.29 | 26% | 12% |
+| D+1 | 1.70 | 3.39 | 50% | 1.99 | 4.29 | 54% | 12% |
+| D+2 | 1.78 | 3.39 | 48% | 2.14 | 4.29 | 50% | 12% |
+| D+3 | 1.89 | 3.39 | 44% | 2.29 | 4.29 | 47% | 12% |
+| D+4 | 2.04 | 3.39 | 40% | 2.50 | 4.29 | 42% | 12% |
+| D+5 | 2.31 | 3.39 | 32% | 2.92 | 4.29 | 32% | 12% |
+| D+6 | 2.43 | 3.39 | 28% | 3.03 | 4.29 | 29% | 12% |
 
 *Naive* repeats the price of the same hour a week before. *Skill* is
 1 − MAE ÷ naive MAE, which depends far less on how volatile the market was.
@@ -93,19 +93,19 @@ exceeded the calibrated P90; the target is about 10 %.
 
 > **Peaks come out too low.** The forecast gets the timing of price peaks
 > right, not their height. In hours above 21.2 ct/kWh it is on average
-> 8.4 ct too low one day ahead and 10.3 ct six days ahead. For peaks, use the
+> 7.5 ct too low one day ahead and 9.7 ct six days ahead. For peaks, use the
 > peak-risk band (P90) and the peak-risk sensor that switches on it, not the
 > expected price.
 
 > **The error depends on the market.** From July 2026 gas and electricity
-> prices were higher and more volatile, and the MAE rose to 2.36 ct (D+1) …
-> 3.20 ct (D+6). The naive forecast got worse too (4.29 ct against 3.39 ct),
-> so the skill held at 45 % … 26 %. A frozen model degrades within months when
+> prices were higher and more volatile, and the MAE rose to 1.99 ct (D+1) …
+> 3.03 ct (D+6). The naive forecast got worse too (4.29 ct against 3.39 ct),
+> so the skill held at 54 % … 29 %. A frozen model degrades within months when
 > the market shifts, so new models are trained every month and can reach your
 > install without an integration update (see
 > [model updates](docs/model.md#model-updates)).
 
-The low-price value catches negative prices: in 78–85 % of the hours that
+The low-price value catches negative prices: in 79–85 % of the hours that
 turned out negative (depending on the horizon), P10 was below zero. More in
 [accuracy](docs/accuracy.md); the [website](https://cygnusb.github.io/ha-spot-forecast/#accuracy)
 has the forecast against the actual price, per horizon, as an interactive

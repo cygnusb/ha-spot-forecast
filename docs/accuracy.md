@@ -21,12 +21,12 @@ backtest, April 2025 to September 2026:
 
 | Horizon | MAE | Naive MAE | Skill | Above peak risk | P10 below 0 in negative hours |
 |---|---|---|---|---|---|
-| D+1 | 1.79 | 3.39 | 47% | 12% | 85% |
-| D+2 | 1.88 | 3.39 | 45% | 12% | 82% |
-| D+3 | 1.96 | 3.39 | 42% | 12% | 82% |
-| D+4 | 2.12 | 3.39 | 38% | 12% | 81% |
-| D+5 | 2.36 | 3.39 | 30% | 13% | 78% |
-| D+6 | 2.48 | 3.39 | 27% | 12% | 81% |
+| D+1 | 1.70 | 3.39 | 50% | 12% | 85% |
+| D+2 | 1.78 | 3.39 | 48% | 12% | 83% |
+| D+3 | 1.89 | 3.39 | 44% | 12% | 85% |
+| D+4 | 2.04 | 3.39 | 40% | 12% | 83% |
+| D+5 | 2.31 | 3.39 | 32% | 12% | 79% |
+| D+6 | 2.43 | 3.39 | 28% | 12% | 81% |
 
 * **Naive** is "same as last week": the price of the same hour seven days
   earlier, the usual baseline for day-ahead prices.
@@ -45,12 +45,12 @@ July to September 2026, the trailing three months of the report:
 
 | Horizon | MAE | Naive MAE | Skill |
 |---|---|---|---|
-| D+1 | 2.36 | 4.29 | 45% |
-| D+2 | 2.49 | 4.29 | 42% |
-| D+3 | 2.64 | 4.29 | 38% |
-| D+4 | 2.86 | 4.29 | 33% |
-| D+5 | 3.18 | 4.29 | 26% |
-| D+6 | 3.20 | 4.29 | 26% |
+| D+1 | 1.99 | 4.29 | 54% |
+| D+2 | 2.14 | 4.29 | 50% |
+| D+3 | 2.29 | 4.29 | 47% |
+| D+4 | 2.50 | 4.29 | 42% |
+| D+5 | 2.92 | 4.29 | 32% |
+| D+6 | 3.03 | 4.29 | 29% |
 
 The MAE is the model report's (`mae_3m`). The report has the naive MAE for the
 full period only, so here it and the skill are computed from the bundled
@@ -66,9 +66,9 @@ the last training year):
 
 | Horizon | Error in peak hours | Mean bias in peak hours |
 |---|---|---|
-| D+1 | 8.6 ct | −8.4 ct |
-| D+3 | 9.2 ct | −9.0 ct |
-| D+6 | 10.5 ct | −10.3 ct |
+| D+1 | 7.7 ct | −7.5 ct |
+| D+3 | 8.4 ct | −8.0 ct |
+| D+6 | 9.9 ct | −9.7 ct |
 
 Nearly all of that error is the forecast being too low. Even a model given the
 actual load, wind and solar of the target hour left peaks about 4 ct too low
@@ -85,9 +85,9 @@ comes as a surprise.
 
 The error is strongly regime-dependent. From July 2026, with high gas prices,
 electricity prices were higher and more volatile, and the error rose from
-1.79–2.48 ct over the full period to 2.36–3.20 ct. The naive forecast got
-worse as well, from 3.39 to 4.29 ct, so the skill changed much less: 45–26 %
-against 47–27 % over the full period. Expect the error on your install to move
+1.70–2.43 ct over the full period to 1.99–3.03 ct. The naive forecast got
+worse as well, from 3.39 to 4.29 ct, so the skill changed much less: 54–29 %
+against 50–28 % over the full period. Expect the error on your install to move
 with the market in the same way, and the skill to stay steadier.
 
 A model that is not retrained loses its edge when the market shifts: in the

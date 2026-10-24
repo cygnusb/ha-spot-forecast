@@ -48,7 +48,7 @@ def replace_series(weather, h, key, values):
 def test_feature_names_match_research(golden_feature_names):
     assert len(FEATURE_NAMES) == 82
     assert golden_feature_names == FEATURE_NAMES
-    assert FEATURE_SCHEMA == 1
+    assert FEATURE_SCHEMA == 2
 
 
 @pytest.mark.parametrize("anchor", GOLDEN_ANCHORS, ids=str)
@@ -56,16 +56,7 @@ def test_golden_parity(golden, anchor):
     case = golden[anchor]
     fm = build(case)
     assert [t.isoformat() for t in fm.times] == case.times
-    # Known research look-ahead: when the clocks fall back between anchor and target day, the
-    # target day's last hour minus h days is 00:00 local of anchor+1. Research reads that price
-    # from its full series although it is not published at issue time; the price window here
-    # ends with the anchor day, so the lag is NaN. Exactly these cells are exempt from parity.
-    end = case.prices.start + len(case.prices.values) * timedelta(hours=1)
-    lookahead = [i for i, t in enumerate(fm.times) if t - timedelta(days=int(fm.h[i])) >= end]
-    assert len(lookahead) == (6 if anchor == date(2025, 10, 25) else 0)
-    expected = case.X.copy()
-    expected[lookahead, col("p_lastday")] = np.nan
-    np.testing.assert_allclose(fm.X, expected, rtol=1e-9, atol=1e-9, equal_nan=True)
+    np.testing.assert_allclose(fm.X, case.X, rtol=1e-9, atol=1e-9, equal_nan=True)
     np.testing.assert_allclose(fm.scale, case.scale, rtol=1e-12)
     np.testing.assert_allclose(fm.mean7, case.mean7, rtol=1e-12)
     np.testing.assert_array_equal(fm.h, fm.X[:, col("h")])
@@ -77,13 +68,7 @@ def test_prices_after_anchor_day_are_ignored(golden):
     extra = np.arange(48, dtype=float) + 1000.0  # two more days of (synthetic) prices
     longer = Hourly(case.prices.start, np.concatenate([case.prices.values, extra]))
     fm = build(case, prices=longer)
-    end = case.prices.start + len(case.prices.values) * timedelta(hours=1)
-    lookahead = [i for i, t in enumerate(fm.times) if t - timedelta(days=int(fm.h[i])) >= end]
-    assert len(lookahead) == 6
-    assert np.isnan(fm.X[lookahead, col("p_lastday")]).all()
-    expected = case.X.copy()
-    expected[lookahead, col("p_lastday")] = np.nan
-    np.testing.assert_allclose(fm.X, expected, rtol=1e-9, atol=1e-9, equal_nan=True)
+    np.testing.assert_allclose(fm.X, case.X, rtol=1e-9, atol=1e-9, equal_nan=True)
 
 
 def test_dst_end_target_day_has_25_rows(golden):
@@ -135,6 +120,11 @@ def _synthetic_prices(anchor: date, days: int, evening: float, other: float) -> 
     return Hourly(start, values)
 
 
+RELATIVE = ("p_lastday", "p_lastweek", "D_mean", "D_min", "D_max", "D_mean30", "D_min7", "D_max7",
+            "D_gq_evening14", "D_gq_q90_14")  # fmt: skip
+SPREADS = ("D_std", "D_std7")
+
+
 def test_scale_floor():
     anchor = date(2025, 5, 10)
     prices = _synthetic_prices(anchor, days=45, evening=12.0, other=80.0)
@@ -143,6 +133,97 @@ def test_scale_floor():
     fm = build_features(anchor, prices, daily, {}, {}, DE_LU)
     assert fm.scale.min() == pytest.approx(0.5)
     assert fm.scale.max() == pytest.approx(0.5)
+    # the relative price levels stay finite with the scale at its floor
+    assert np.isfinite(fm.X[:, [col(n) for n in RELATIVE + SPREADS]]).all()
+    a = daily.dates.index(anchor)
+    assert fm.X[:, col("D_gq_evening14")] == pytest.approx((12.0 - daily.mean7[a]) / 0.5)
+
+
+def _hour_index_prices(anchor: date, days: int) -> Hourly:
+    """Prices that name their hour: the value is the hour's index in the series."""
+    start = datetime.combine(anchor - timedelta(days=days), datetime.min.time(), BERLIN)
+    start = start.astimezone(UTC)
+    end = datetime.combine(anchor + timedelta(days=1), datetime.min.time(), BERLIN).astimezone(UTC)
+    return Hourly(start, np.arange((end - start) // timedelta(hours=1), dtype=float))
+
+
+def test_price_levels_are_relative_to_the_7_day_mean():
+    """Schema 2: price levels as (x - D_mean7) / scale, spreads as x / scale."""
+    anchor = date(2026, 6, 10)
+    prices = _hour_index_prices(anchor, days=45)
+    daily = daily_stats(prices, DE_LU)
+    fm = build_features(anchor, prices, daily, {}, {}, DE_LU)
+    a = daily.dates.index(anchor)
+    mean7, scale = daily.mean7[a], max(daily.gq_evening14[a], 50.0) / 100.0
+    assert (fm.mean7 == mean7).all() and (fm.scale == scale).all()
+    for name in RELATIVE[2:]:
+        expected = (getattr(daily, name.removeprefix("D_"))[a] - mean7) / scale
+        assert (fm.X[:, col(name)] == expected).all(), name
+    for name in SPREADS:
+        assert (fm.X[:, col(name)] == getattr(daily, name.removeprefix("D_"))[a] / scale).all()
+    assert (fm.X[:, col("D_mean7")] == mean7).all()  # the reference level stays absolute
+    # the lags are prices: the same hour on the anchor day / a week before the target day
+    for lag, back in (("p_lastday", lambda h: h), ("p_lastweek", lambda h: 7)):
+        expected = [
+            prices.at(t - timedelta(days=back(int(h)))) for t, h in zip(fm.times, fm.h, strict=True)
+        ]
+        np.testing.assert_allclose(decode(fm.X[:, col(lag)], fm), expected, rtol=1e-12)
+
+
+def _lag_hours(fm, prices: Hourly, lag: str, h: int) -> list[str]:
+    """The local wall-clock time of the hour each row's price lag was read from."""
+    index = decode(fm.X[:, col(lag)], fm)[fm.h == h]
+    return [
+        (prices.start + timedelta(hours=round(float(i)))).astimezone(BERLIN).strftime("%d %H:%M%z")
+        for i in index
+    ]
+
+
+def test_lags_keep_the_wall_clock_hour_when_the_clocks_go_back():
+    # target 2026-10-25 has 25 hours (02:00 twice); the anchor day 10-24 has 24
+    prices = _hour_index_prices(date(2026, 10, 24), days=45)
+    fm = build_features(date(2026, 10, 24), prices, daily_stats(prices, DE_LU), {}, {}, DE_LU)
+    assert (fm.h == 1).sum() == 25
+    lastday = _lag_hours(fm, prices, "p_lastday", 1)
+    assert lastday[:5] == [
+        "24 00:00+0200", "24 01:00+0200", "24 02:00+0200", "24 02:00+0200", "24 03:00+0200"
+    ]  # fmt: skip
+    assert lastday[-1] == "24 23:00+0200"  # the day's last hour has a lag (no NaN)
+    assert not np.isnan(fm.X[:, col("p_lastday")]).any()
+    assert _lag_hours(fm, prices, "p_lastweek", 1)[-1] == "18 23:00+0200"
+
+    # the lag day itself has 25 hours: 02:00 reads its first 02:00 (CEST)
+    prices = _hour_index_prices(date(2026, 10, 25), days=45)
+    fm = build_features(date(2026, 10, 25), prices, daily_stats(prices, DE_LU), {}, {}, DE_LU)
+    lastday = _lag_hours(fm, prices, "p_lastday", 1)
+    assert len(lastday) == 24
+    assert lastday[1:4] == ["25 01:00+0200", "25 02:00+0200", "25 03:00+0100"]
+    assert lastday[-1] == "25 23:00+0100"
+    prices = _hour_index_prices(date(2026, 10, 26), days=45)
+    fm = build_features(date(2026, 10, 26), prices, daily_stats(prices, DE_LU), {}, {}, DE_LU)
+    week = _lag_hours(fm, prices, "p_lastweek", 6)  # target 11-01, lag day 10-25
+    assert week[1:4] == ["25 01:00+0200", "25 02:00+0200", "25 03:00+0100"]
+
+
+def test_lags_keep_the_wall_clock_hour_when_the_clocks_go_forward():
+    # target 2027-03-28 has 23 hours (no 02:00)
+    prices = _hour_index_prices(date(2027, 3, 27), days=45)
+    fm = build_features(date(2027, 3, 27), prices, daily_stats(prices, DE_LU), {}, {}, DE_LU)
+    lastday = _lag_hours(fm, prices, "p_lastday", 1)
+    assert len(lastday) == 23
+    assert lastday[:3] == ["27 00:00+0100", "27 01:00+0100", "27 03:00+0100"]
+    assert lastday[-1] == "27 23:00+0100"
+
+    # the lag day has no 02:00: the target's 02:00 reads the hour before
+    prices = _hour_index_prices(date(2027, 3, 28), days=45)
+    fm = build_features(date(2027, 3, 28), prices, daily_stats(prices, DE_LU), {}, {}, DE_LU)
+    lastday = _lag_hours(fm, prices, "p_lastday", 1)
+    assert lastday[1:4] == ["28 01:00+0100", "28 01:00+0100", "28 03:00+0200"]
+    assert lastday[-1] == "28 23:00+0200"
+    prices = _hour_index_prices(date(2027, 3, 29), days=45)
+    fm = build_features(date(2027, 3, 29), prices, daily_stats(prices, DE_LU), {}, {}, DE_LU)
+    week = _lag_hours(fm, prices, "p_lastweek", 6)  # target 04-04, lag day 03-28
+    assert week[1:4] == ["28 01:00+0100", "28 01:00+0100", "28 03:00+0200"]
 
 
 def test_missing_weather_gives_nan_not_error(golden):

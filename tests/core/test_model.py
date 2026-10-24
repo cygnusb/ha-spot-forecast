@@ -8,7 +8,7 @@ import numpy as np
 import pytest
 
 from core import ledger, model
-from core.features import FEATURE_NAMES
+from core.features import FEATURE_NAMES, FEATURE_SCHEMA
 from core.model import (
     MAX_DEPTH,
     ModelCorrupt,
@@ -42,7 +42,7 @@ def test_roundtrip(tiny_model_file):
 
 def test_rejects_wrong_schema(tiny_model_file):
     with pytest.raises(ModelMismatch):
-        load_model(dump_model(replace(tiny_model_file, feature_schema=2)))
+        load_model(dump_model(replace(tiny_model_file, feature_schema=FEATURE_SCHEMA + 1)))
 
 
 def test_rejects_wrong_format(tiny_model_file):
