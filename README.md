@@ -123,6 +123,8 @@ September 2026, and the skill over all horizons, from each shipped model's repor
 |---|---|---|---|---|---|---|---|---|
 | DE-LU | Germany and Luxembourg | 1.70 | 1.78 | 1.89 | 2.04 | 2.31 | 2.43 | 40% |
 | NL | Netherlands | 1.75 | 1.85 | 1.93 | 2.05 | 2.22 | 2.31 | 35% |
+| DK1 | Denmark West | 1.67 | 1.75 | 1.89 | 2.08 | 2.38 | 2.51 | 44% |
+| DK2 | Denmark East | 1.82 | 1.92 | 2.02 | 2.21 | 2.50 | 2.62 | 43% |
 
 DE-LU uses ten weather points in Germany, twelve in the neighbouring countries and the
 installed wind and solar capacity. NL uses seven points in and off the Netherlands and seven

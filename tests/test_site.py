@@ -179,7 +179,7 @@ def test_zone_map_highlights_every_bundled_model(tmp_path):
         html = (tmp_path / build_site.page_path(code) / "index.html").read_text(encoding="utf-8")
         section = html.split('<section id="zones"')[1].split("</section>")[0]
         highlighted = re.findall(
-            r'<a class="zone" href="#zone-([a-z_]+)" data-zone="([A-Z0-9-]+)">', section
+            r'<a class="zone" href="#zone-([a-z0-9_]+)" data-zone="([A-Z0-9-]+)">', section
         )
         assert sorted(slug for slug, _ in highlighted) == sorted(m["zone"] for m in models)
         assert section.count('<path class="land"') == 1

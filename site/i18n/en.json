@@ -101,7 +101,9 @@
     "zone": "Zone",
     "names": {
       "DE-LU": "Germany and Luxembourg",
-      "NL": "Netherlands"
+      "NL": "Netherlands",
+      "DK1": "Denmark West",
+      "DK2": "Denmark East"
     },
     "table_note": "Out of sample, over each model’s own walk-forward period. Price levels differ between zones, so compare a zone’s errors with its naive error in the documentation rather than with another zone."
   },
