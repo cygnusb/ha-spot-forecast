@@ -156,6 +156,33 @@ out about 0.7 ct too low on average, the DE-LU model hardly at all, so the blend
 of 20.9 ct/kWh on average 7.6 ct one day ahead and 9.9 ct six days ahead, above DK2's 21.7
 ct/kWh 8.8 and 11.3 ct.
 
+## Southern Norway (NO2)
+
+The report of the bundled NO2 model, `no2-2026-10`, with the same cutoff, walk-forward window
+and monthly refit as DE-LU's. NO2 has its own model with the [hydro
+features](model.md#no2-hydro-features). MAE in ct/kWh, April 2025 to September 2026, and
+for the last three months (July to September 2026):
+
+| Horizon | MAE | MAE last three months | Naive MAE | Skill | Above peak risk | P10 below 0 in negative hours |
+|---|---|---|---|---|---|---|
+| D+1 | 1.50 | 1.85 | 2.25 | 33% | 12% | 63% |
+| D+2 | 1.58 | 1.98 | 2.25 | 30% | 12% | 68% |
+| D+3 | 1.66 | 2.19 | 2.25 | 26% | 12% | 71% |
+| D+4 | 1.73 | 2.27 | 2.25 | 23% | 13% | 67% |
+| D+5 | 1.79 | 2.32 | 2.26 | 20% | 13% | 69% |
+| D+6 | 1.85 | 2.49 | 2.26 | 18% | 13% | 67% |
+
+NO2's prices move less from one week to the next than the other zones' (naive MAE 2.25 ct
+against 3.10–3.80), so the same error is a smaller skill: 1.69 ct over all horizons is 25 %
+better than the naive forecast, 33 % one day ahead and 18 % six days ahead. From October 2025,
+the window of the research backtest, the model has an MAE of 1.77 ct over all horizons and a
+skill of 28 %; the research predictions have 1.75 ct on the same rows. The forecast is
+about 0.6 ct too low on average, and peaks come out too low as elsewhere: in the hours above
+NO2's peak threshold of 16.9 ct/kWh on average 4.7 ct one day ahead and 5.8 ct six days
+ahead. Fewer negative hours are covered by a P10 below zero (67 %) than in the other zones:
+since October 2025 fewer than 1 % of NO2's hours were negative, at −0.3 ct/kWh on average
+(NL: 5 %, at −1.6 ct/kWh).
+
 ## On your install
 
 `sensor.spot_forecast_de_lu_forecast_error` shows the mean absolute error of

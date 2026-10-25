@@ -18,8 +18,9 @@ from core.features import (
     daily_stats,
     decode,
     feature_names,
+    hydro_history_gaps,
 )
-from core.zones import DE_LU, DK1, DK2, NL, point_vars
+from core.zones import DE_LU, DK1, DK2, NL, NO2, point_vars
 
 GOLDEN_ANCHORS = [
     date(2025, 6, 15),
@@ -611,3 +612,216 @@ def test_dk_feature_values_match_research(research_dk, anchor):
     np.testing.assert_array_equal(fm.X[:, cols], expected[:, cols])
     assert np.isfinite(fm.X[:, names.index("wind_mean")]).all()
     assert np.isfinite(fm.X[:, names.index("de_D_mean")]).all()
+
+
+# ---------------------------------------------------------------- NO2 (generic + hydro features)
+
+OSLO = ZoneInfo("Europe/Oslo")
+_HYDRO_EXTRA = ("hyd_precip_past14", "hyd_precip_past30", "hyd_precip_past90", "hyd_temp_past14",
+                "hyd_temp_past30", "hyd_precip_fc6")  # fmt: skip
+
+
+def test_no2_feature_names():
+    """research ``meta["names"]`` of pred_NO2_hydrel_600.pkl, written out: no ``doy``, no solar
+    columns, the own hydro sums, and the six hydro features last."""
+    n = ("wind_speed_100m", "temperature_2m", "precipitation")
+    assert feature_names(NO2) == (
+        "h", "hour", "dow", "holiday", "offday", "issue_dow", "p_lastday", "p_lastweek",
+        *(f"D_{n}" for n in ("mean", "min", "max", "std", "mean7", "std7", "mean30", "min7",
+                             "max7", "gq_evening14", "gq_q90_14")),
+        "nb_no_south__wind_speed_100m", "nb_no_south__shortwave_radiation",
+        "nb_no_south__temperature_2m", "nb_no_south__precipitation",
+        *(f"{p}__{v}" for p in ("no2_kristiansand", "no2_stavanger", "no2_sirdal") for v in n),
+        "wind_mean", "wind_power_idx", "temp_mean", "precip_hydro", "nb_wind_power_idx",
+        "nb_temp_mean", "nb_precip_hydro",
+        "wind_power_idx_day", "temp_mean_day", "nb_wind_power_idx_day", "nb_temp_mean_day",
+        "precip_hydro_day", "nb_precip_hydro_day",
+        *_HYDRO_EXTRA,
+    )  # fmt: skip
+    assert len(feature_names(NO2)) == 51
+
+
+def _no2_inputs(anchor: date, precip: float = 0.5):
+    """45 days of NO2 prices to the end of the anchor day; constant weather for every key, the
+    hydro history with precipitation ``precip`` and temperature 4.0 from 100 days before."""
+    start = datetime.combine(anchor - timedelta(days=44), datetime.min.time(), OSLO)
+    start = start.astimezone(UTC)
+    end = datetime.combine(anchor + timedelta(days=1), datetime.min.time(), OSLO)
+    n = (end.astimezone(UTC) - start) // timedelta(hours=1)
+    prices = Hourly(start, 60 + 20 * np.sin(np.arange(n) / 24 * 2 * np.pi))
+    keys = [f"{p}__{v}" for points, vs in NO2.point_sets() for p in points for v in vs]
+    series = Hourly(start, np.full(n + 24 * 8, 10.0))
+    weather = {h: dict.fromkeys(keys, series) for h in range(1, 7)}
+    hstart = start - timedelta(days=60)
+    hn = n + 24 * 62
+    history = {}
+    for p in NO2.hydro_points:
+        history[f"{p}__precipitation"] = Hourly(hstart, np.full(hn, precip))
+        history[f"{p}__temperature_2m"] = Hourly(hstart, np.full(hn, 4.0))
+    return prices, weather, history
+
+
+def _c(name):
+    return feature_names(NO2).index(name)
+
+
+def test_no2_features_on_synthetic_inputs():
+    anchor = date(2026, 5, 15)  # D+2 is Grunnlovsdag (Sunday 17 May)
+    prices, weather, history = _no2_inputs(anchor)
+    fm = build_features(anchor, prices, daily_stats(prices, NO2), weather, {}, NO2,
+                        hydro_history=history)  # fmt: skip
+    assert fm.X.shape == (6 * 24, 51)
+    hol = {int(h): fm.X[fm.h == h, _c("holiday")][0] for h in range(1, 7)}
+    assert hol == {1: 0.0, 2: 1.0, 3: 0.0, 4: 0.0, 5: 0.0, 6: 0.0}
+    assert list(fm.X[fm.h == 1, _c("hour")]) == list(range(24))  # local Oslo hours
+    # own hydro: the hourly sum over the three hydro points, the day's sum of it
+    assert (fm.X[:, _c("precip_hydro")] == 30.0).all()
+    assert (fm.X[:, _c("precip_hydro_day")] == 720.0).all()
+    assert (fm.X[:, _c("nb_precip_hydro")] == 30.0).all()
+    assert (fm.X[:, _c("temp_mean")] == 10.0).all()
+    # the six points' trailing sums of 0.5 per hour, real hours back from the anchor's end
+    np.testing.assert_allclose(fm.X[:, _c("hyd_precip_past14")], 6 * 14 * 24 * 0.5)
+    np.testing.assert_allclose(fm.X[:, _c("hyd_precip_past30")], 6 * 30 * 24 * 0.5)
+    np.testing.assert_allclose(fm.X[:, _c("hyd_precip_past90")], 6 * 90 * 24 * 0.5)
+    assert (fm.X[:, _c("hyd_temp_past14")] == 4.0).all()
+    assert (fm.X[:, _c("hyd_temp_past30")] == 4.0).all()
+    # the forecast's precipitation of the six points over all six target days, on every row
+    assert (fm.X[:, _c("hyd_precip_fc6")] == 6 * 6 * 24 * 10.0).all()
+
+
+def test_no2_hydro_windows_count_real_hours_across_the_fall_back():
+    """Anchor 2026-10-25 (Europe/Oslo falls back that night): the windows end at the end of the
+    anchor day, 23:00 UTC, and reach back 336 / 720 / 2160 real hours, not local days."""
+    anchor = date(2026, 10, 25)
+    prices, weather, _ = _no2_inputs(anchor)
+    known_until = datetime(2026, 10, 25, 23, tzinfo=UTC)
+    start = known_until - timedelta(days=100)
+    hours = [start + i * timedelta(hours=1) for i in range(100 * 24)]  # up to known_until
+    back = np.array([(known_until - t) / timedelta(hours=1) for t in hours])  # 2400 … 1
+    history = {}
+    for k, p in enumerate(NO2.hydro_points):
+        # 1 inside the 14 days, 10 up to 30 days, 100 up to 90, NaN before
+        precip = np.select([back <= 336, back <= 720, back <= 2160], [1, 10, 100], np.nan)
+        temp = np.select([back <= 336, back <= 720], [k, 2 * k], -50.0)
+        history[f"{p}__precipitation"] = Hourly(start, precip)
+        history[f"{p}__temperature_2m"] = Hourly(start, temp)
+    fm = build_features(anchor, prices, daily_stats(prices, NO2), weather, {}, NO2,
+                        hydro_history=history)  # fmt: skip
+    assert len(fm.times) == 6 * 24  # the fall-back day is the anchor, not a target
+    assert fm.X[0, _c("hyd_precip_past14")] == 6 * 336
+    assert fm.X[0, _c("hyd_precip_past30")] == 6 * (336 + 10 * 384)
+    assert fm.X[0, _c("hyd_precip_past90")] == 6 * (336 + 10 * 384 + 100 * 1440)
+    # 14 days: each point's mean is k; 30 days: (336 k + 384 * 2k) / 720
+    assert fm.X[0, _c("hyd_temp_past14")] == pytest.approx(np.mean(range(6)))
+    assert fm.X[0, _c("hyd_temp_past30")] == pytest.approx(np.mean(range(6)) * (336 + 768) / 720)
+    assert hydro_history_gaps(history, anchor, NO2) == []
+    assert hydro_history_gaps(history, anchor + timedelta(days=1), NO2) == [
+        f"{p}__{v}" for p in NO2.hydro_points for v in ("precipitation", "temperature_2m")
+    ]  # the history ends at 23:00 UTC: the next anchor's window misses its last day
+
+
+def test_no2_hydro_history_gaps_name_the_series_with_a_hole():
+    anchor = date(2026, 5, 15)
+    _, _, history = _no2_inputs(anchor)
+    assert hydro_history_gaps(history, anchor, NO2) == []
+    s = history["no5_sogn__precipitation"]
+    values = s.values.copy()
+    values[len(values) - 24 * 50] = np.nan  # an hour 48 days before the anchor's end
+    history["no5_sogn__precipitation"] = Hourly(s.start, values)
+    del history["no2_sirdal__temperature_2m"]
+    assert hydro_history_gaps(history, anchor, NO2) == [
+        "no2_sirdal__temperature_2m",
+        "no5_sogn__precipitation",
+    ]
+
+
+def test_no2_hydro_features_skip_missing_hours_like_research():
+    """``nansum`` and ``nanmean`` as research: a hole lowers the sum (which is why a live run
+    checks ``hydro_history_gaps`` first); a point without any temperature makes the mean NaN."""
+    anchor = date(2026, 5, 15)
+    prices, weather, history = _no2_inputs(anchor)
+    s = history["no5_sogn__precipitation"]
+    values = s.values.copy()
+    values[-24 * 3] = np.nan  # inside every window
+    history["no5_sogn__precipitation"] = Hourly(s.start, values)
+    del history["no5_bergen__temperature_2m"]
+    fm = build_features(anchor, prices, daily_stats(prices, NO2), weather, {}, NO2,
+                        hydro_history=history)  # fmt: skip
+    assert fm.X[0, _c("hyd_precip_past14")] == 6 * 14 * 24 * 0.5 - 0.5
+    assert np.isnan(fm.X[0, _c("hyd_temp_past14")])
+
+
+def test_no2_needs_the_hydro_history():
+    anchor = date(2026, 5, 15)
+    prices, weather, _ = _no2_inputs(anchor)
+    with pytest.raises(ValueError, match="NO2 needs the hydro history"):
+        build_features(anchor, prices, daily_stats(prices, NO2), weather, {}, NO2)
+
+
+def test_other_zones_ignore_the_hydro_history(golden):
+    case = golden[date(2025, 6, 15)]
+    plain = build(case)
+    with_history = build_features(
+        case.anchor, case.prices, daily_stats(case.prices, DE_LU), case.weather, case.capacity,
+        DE_LU, hydro_history={},
+    )  # fmt: skip
+    np.testing.assert_array_equal(plain.X, with_history.X)
+
+
+@pytest.fixture(scope="module")
+def research_no2():
+    """research/zones genfeat and bt with variant "hydnd" of NO2, and its real inputs."""
+    if not (RESEARCH / "data" / "zones" / "weather").exists():
+        pytest.skip("research zone data missing")
+    pytest.importorskip("holidays")
+    pytest.importorskip("sklearn")
+    saved = list(sys.path)
+    sys.path.insert(0, str(RESEARCH / "zones"))
+    try:
+        import bt
+        import genfeat
+    finally:
+        sys.path[:] = saved
+    cfg = genfeat.ZONES["NO2"]
+    return SimpleNamespace(
+        genfeat=genfeat,
+        bt=bt,
+        cfg=cfg,
+        prices=genfeat.load_prices("NO2"),
+        weather=genfeat.load_weather(cfg),
+    )
+
+
+def test_no2_feature_names_match_research(research_no2):
+    r = research_no2
+    names = r.genfeat.feature_names(r.cfg, hydro_extra=True)
+    assert feature_names(NO2) == tuple(n for n in names if n != "doy")
+
+
+# 2024-04-20: an early anchor, whose 90-day window starts before the data (2024-03)
+@pytest.mark.parametrize("anchor", [date(2024, 4, 20), *_FAR_FROM_DST, *_NEAR_DST], ids=str)
+def test_no2_feature_values_match_research(research_no2, anchor):
+    """genfeat ``build_features`` with ``hydro_extra``, the ``doy`` column dropped and bt
+    ``relative`` (bt.py variant "hydrel"), on the real data, to the last bit; the lag columns
+    only away from the DST switches (research lags are UTC)."""
+    r = research_no2
+    names = r.genfeat.feature_names(r.cfg, hydro_extra=True)
+    daily = r.genfeat.daily_stats(r.prices, SimpleNamespace(tz=r.cfg.tz, evening_hours=(18, 21)))
+    rows = r.genfeat.build_features(anchor, r.prices, daily, r.weather, r.cfg, names, True)
+    keep = [i for i, name in enumerate(names) if name != "doy"]
+    names = tuple(names[i] for i in keep)
+    n = len(rows.X)
+    ds = {"X": rows.X[:, keep], "names": names, "mean7": np.full(n, rows.mean7)}
+    expected = r.bt.relative({**ds, "scale": np.full(n, rows.scale)})["X"]
+    fm = build_features(
+        anchor, r.prices, daily_stats(r.prices, NO2), r.weather, {}, NO2,
+        hydro_history=r.weather[1],
+    )  # fmt: skip
+    assert fm.times == rows.times
+    assert (fm.mean7 == rows.mean7).all() and (fm.scale == rows.scale).all()
+    cols = list(range(len(names)))
+    if anchor in _NEAR_DST:
+        cols = [i for i, name in enumerate(names) if name not in ("p_lastday", "p_lastweek")]
+    np.testing.assert_array_equal(fm.X[:, cols], expected[:, cols])
+    assert np.isfinite(fm.X[:, names.index("wind_mean")]).all()
+    assert np.isfinite(fm.X[:, [names.index(c) for c in _HYDRO_EXTRA]]).all()

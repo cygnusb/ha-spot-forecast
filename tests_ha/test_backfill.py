@@ -29,6 +29,8 @@ from custom_components.spot_forecast import backfill as backfill_module
 from custom_components.spot_forecast.const import CONF_BACKFILL_DAYS, DOMAIN
 from custom_components.spot_forecast.coordinator import LEDGER_KEEP_DAYS
 from custom_components.spot_forecast.core.ledger import Ledger, runs_from_backfill_file
+from custom_components.spot_forecast.core.zones import DE_LU
+from custom_components.spot_forecast.sources.open_meteo import _previous_columns
 
 BERLIN = ZoneInfo("Europe/Berlin")
 TODAY = date(2026, 10, 22)
@@ -100,6 +102,29 @@ async def test_backfill_imports_bundled_rows_and_recomputes_after_cutoff(
     assert result.finalized_days == len(
         {d for d, s in coordinator.ledger.finalized if s != "price" and d >= TODAY - timedelta(30)}
     )
+
+
+async def test_de_lu_backfill_requests_are_those_of_its_point_sets_only(
+    hass_with_recorder: HomeAssistant, set_up: SetUp, aioclient_mock: AiohttpClientMocker
+) -> None:
+    """Exactly the requests of before the hydro history (NO2 only): per calendar month the
+    two point sets, all offsets, and no ``past_days`` request."""
+    await set_up({CONF_BACKFILL_DAYS: 30})
+    calls = [dict(u.query) for _, u, _, _ in aioclient_mock.mock_calls
+             if str(u).startswith(PREVIOUS_RUNS_URL)]  # fmt: skip
+    expected = []
+    for first, last in (("2026-09-30", "2026-09-30"), ("2026-10-01", "2026-10-27")):
+        for points, variables in DE_LU.point_sets():
+            expected.append({
+                "latitude": ",".join(str(lat) for lat, _ in points.values()),
+                "longitude": ",".join(str(lon) for _, lon in points.values()),
+                "hourly": _previous_columns(variables),
+                "models": "ecmwf_ifs025",
+                "start_date": first,
+                "end_date": last,
+                "timezone": "GMT",
+            })  # fmt: skip
+    assert calls == expected
 
 
 async def test_backfill_runs_once_and_again_when_window_grows(

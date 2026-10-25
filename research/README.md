@@ -219,6 +219,17 @@ model file. Bundled `dk1-2026-10` / `dk2-2026-10` (cutoff 2026-10-01, issue days
 2.14 / 2.32 for the research predictions on the same rows (2.18 / 2.35 on the research's
 full window to 2026-10-21).
 
+**Adopted: NO2 with hydro features.** Its own model, `bt.py` variant `hydrel`: the `generic`
+layout with NO2's points, the six `hyd_*` features of `genfeat`'s `_hydro_extra` (trailing
+14/30/90-day precipitation and 14/30-day temperature of the six hydro points from the offset-2
+forecasts, and their precipitation forecast over the six target days) and no `doy`; equal to
+`genfeat` bit for bit apart from the two lag columns near a DST change. Bundled
+`no2-2026-10` (cutoff 2026-10-01, issue days 2025-04-01 … 2026-09-30): 1.69 ct over all
+horizons, skill 0.25, bias −0.59, P90 exceedance 12 %. From 2025-10-01 with targets up to
+2026-09-30: 1.77 ct, skill 0.28, against 1.75 / 0.29 for the research predictions on the same
+rows (1.77 / 0.29 on the research's full window to 2026-10-20). Details:
+[`zones/README.md`](zones/README.md#no2-hydro-features-adopted).
+
 ### Low-price chance (P10)
 
 A P10 quantile model (`--quantile 0.1 --target gq`) with the mirrored rolling conformal

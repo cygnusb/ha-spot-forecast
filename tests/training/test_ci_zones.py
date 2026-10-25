@@ -184,7 +184,7 @@ def test_options_reach_every_zone(tmp_path, fake_ci):
 def test_zones_train_in_order_parent_first(tmp_path, fake_ci):
     _, seen = fake_ci
     _go(tmp_path)
-    assert list(seen) == ["DE-LU", "NL", "DK1", "DK2"]
+    assert list(seen) == ["DE-LU", "NL", "DK1", "DK2", "NO2"]
 
 
 @pytest.mark.parametrize("de_lu", ["pass", "fail", "published"])
@@ -239,6 +239,17 @@ def test_de_lu_without_a_candidate_skips_dk_and_keeps_their_entries(
     final = _final(out)  # NL passed: the manifest keeps the DK1 entry and has no DK2 one
     assert final["zones"]["dk1"] == {"version": "dk1-2026-10"} and "dk2" not in final["zones"]
     assert final["zones"]["nl"] == {"version": "nl-2026-11"}
+
+
+@pytest.mark.parametrize("de_lu", ["error", "lag", "fail"])
+def test_no2_trains_whatever_de_lu_does(tmp_path, fake_ci, de_lu):
+    """NO2 has no parent: a DE-LU error, data lag or failed gate never skips it."""
+    outcomes, seen = fake_ci
+    outcomes.update({"DE-LU": de_lu, "NO2": "pass"})
+    _, summary, out = _go(tmp_path)
+    assert "--parent-model" not in seen["NO2"]["argv"]
+    assert summary["zones"]["no2"]["rc"] == 0 and summary["passed"][-1] == "no2-2026-11"
+    assert _final(out)["zones"]["no2"] == {"version": "no2-2026-11"}
 
 
 def test_de_lu_without_its_files_skips_dk(tmp_path, fake_ci, monkeypatch):

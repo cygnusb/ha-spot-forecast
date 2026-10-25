@@ -17,8 +17,9 @@ right after them. The anchor is in the sensor's `anchor_day` attribute.
 
 | What | Source | When |
 |---|---|---|
-| Day-ahead prices of the zone, the last 40 days | [Energy-Charts](https://www.energy-charts.info/) `/price?bzn=DE-LU` (or `NL`, `DK1`, `DK2`; DK1 and DK2 also read DE-LU's) | every run, one request (DK: two, one after the other) |
-| Weather forecast, hourly, 8 days, ECMWF IFS 0.25° | [Open-Meteo](https://open-meteo.com/), one multi-location request per set of points with the same variables (DE-LU: German points, neighbour points; NL: three; DK1, DK2: four) | every run |
+| Day-ahead prices of the zone, the last 40 days | [Energy-Charts](https://www.energy-charts.info/) `/price?bzn=DE-LU` (or `NL`, `DK1`, `DK2`, `NO2`; DK1 and DK2 also read DE-LU's) | every run, one request (DK: two, one after the other) |
+| Weather forecast, hourly, 8 days, ECMWF IFS 0.25° | [Open-Meteo](https://open-meteo.com/), one multi-location request per set of points with the same variables (DE-LU: German points, neighbour points; NL, NO2: three; DK1, DK2: four) | every run |
+| NO2 only: precipitation and temperature of the hydro points, the last 92 days | Open-Meteo previous runs, the forecasts issued two days before each hour | every run, one request |
 | Installed wind and solar capacity (DE-LU) | the model file (last training value) | |
 | Public holidays of the zone's country | computed in the integration | |
 
@@ -92,6 +93,49 @@ fetches the weather of all its own and neighbour points and of every DE-LU
 point (the DE-LU model needs them all). The calendar is the Danish one plus
 Christmas Eve and New Year's Eve, which are days off in practice; Store
 bededag counts up to 2023, when it was abolished.
+
+## NO2: hydro features
+
+Southern Norway's prices follow its hydro reservoirs more than the weather of
+the next days, so NO2 has its own model with the zone-generic layout, its own
+and neighbour points (below) and six **hydro features**, from the research
+variant `hydrel` (`research/zones/README.md`):
+
+| Feature | What |
+|---|---|
+| `hyd_precip_past14`, `_past30`, `_past90` | precipitation summed over the six hydro points in the 14, 30 and 90 days before the end of the anchor day |
+| `hyd_temp_past14`, `_past30` | mean temperature of the six hydro points (snow or melt) in the 14 and 30 days before |
+| `hyd_precip_fc6` | precipitation of the six hydro points in the forecast over all six target days |
+
+The trailing values come from the archived ECMWF forecasts issued two days
+before each hour (Open-Meteo previous runs, `_previous_day2`), the same series
+the model was trained on: near-actual weather without a separate observation
+source. The windows count real hours back from the end of the anchor day
+(2160 for 90 days), whatever the clock changes in between. The hydro features
+stay absolute values. NO2 has no day-of-year feature: next to the hydro
+features it made the backtest worse (2.33 against 2.27 ct/kWh in the quarterly
+research run, `hydro` against `hydnd`).
+
+| Role | Points |
+|---|---|
+| Own | `nb_no_south` (Telemark), `no2_kristiansand`, `no2_stavanger`, `no2_sirdal` |
+| Wind index | `no2_kristiansand`, `no2_stavanger` |
+| Solar estimate | none |
+| Own hydro (precipitation) | `nb_no_south`, `no2_sirdal`, `no2_stavanger` |
+| Neighbours | `nb_dk_west`, `north_sea`, `schleswig`, `nb_nl`, `no5_bergen`, `no5_sogn`, `no1_oslo`, `no1_hallingdal` |
+| Neighbour wind | `nb_dk_west`, `north_sea`, `schleswig`, `nb_nl` |
+| Neighbour hydro (precipitation) | `no5_sogn`, `no1_hallingdal`, `no5_bergen` |
+
+The six hydro points are the own and the neighbour hydro points. Each NO2 run
+makes one more Open-Meteo request than the other zones: the two
+`_previous_day2` columns of the hydro points for the last 92 days and the next
+two (about 0.4 MB). If any hour of the 90 days is missing, the run fails like
+any source error and is tried again; it never forecasts from sums that a hole
+made smaller. The backfill fetches the same history from 91 days before its
+first recomputed anchor, one request per month, and skips an anchor whose 90
+days have a hole. The calendar is the Norwegian one plus Christmas Eve and New
+Year's Eve. Prices and forecasts are in EUR, as Energy-Charts publishes them
+for every zone; there is no conversion to NOK.
 
 ## Three tree models
 

@@ -56,3 +56,17 @@ DE-LU inputs help the own model a lot (0.16 / 0.29 ct) but alone it does not bea
 forecast; blending both is best for both zones. Every own DK model is biased by about −0.9 ct
 whatever its features, while the DE-LU forecast is not. The scale floor (50 EUR/MWh) is not the
 cause: since 2025-10 the 14-day evening median never falls below it in DE-LU, DK1, DK2 or NL.
+
+### NO2: hydro features (adopted)
+
+Variant `hydrel` (`hydnd`: `genfeat` with `hydro_extra=True` and the `doy` column dropped, then
+`rel`) is the bundled NO2 model, `core.features` with `Zone.hydro_extra` and `Zone.doy=False`.
+Production setting, issue days 2025-10-01 … 2026-10-20, 55,080 rows: MAE D+1 … D+6 1.55 1.64
+1.77 1.82 1.89 1.94 ct/kWh, 1.77 over all horizons, skill 0.29, bias −0.47 (`hydro`, with
+`doy` and absolute levels: 2.11; `base`: 2.53). The hydro history is the offset-2 weather
+(`s1`), at run time one previous-runs request with `past_days`; it equals the training series
+on every shared hour (`tests/core/test_ingest.py`). Bundled `no2-2026-10` (cutoff 2026-10-01,
+issue days 2025-04-01 … 2026-09-30): 1.69 ct, skill 0.25, P90 exceedance 12 %. On the rows
+above with targets up to 2026-09-30 (52,056): 1.77 ct, skill 0.28, bias −0.48, against 1.75 /
+0.29 / −0.45 for `pred_NO2_hydrel_600.pkl` on the same rows (wall-clock lags, no early
+stopping).

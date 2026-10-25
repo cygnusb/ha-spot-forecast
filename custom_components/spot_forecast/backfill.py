@@ -19,7 +19,13 @@ from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.util import dt as dt_util
 
 from .const import PRICE_HISTORY_DAYS
-from .core.features import HORIZONS, Hourly, InsufficientHistory
+from .core.features import (
+    HORIZONS,
+    HYDRO_DAYS,
+    Hourly,
+    InsufficientHistory,
+    hydro_history_gaps,
+)
 from .core.forecast import run_forecast
 from .core.ingest import hourly_prices
 from .core.ledger import ISSUE_HOUR, Run, runs_from_backfill_file
@@ -27,7 +33,7 @@ from .core.model import ModelFile
 from .core.zones import Zone
 from .sources.energy_charts import fetch_price_inputs, fetch_prices
 from .sources.http import SourceError
-from .sources.open_meteo import fetch_previous_runs
+from .sources.open_meteo import fetch_hydro_history, fetch_previous_runs
 
 if TYPE_CHECKING:
     from .coordinator import SpotForecastCoordinator
@@ -37,6 +43,7 @@ _LOGGER = logging.getLogger(__name__)
 _HOUR = timedelta(hours=1)
 _DAY = timedelta(days=1)
 _MAX_H = max(HORIZONS)
+_HYDRO_LEAD_DAYS = 91  # the hydro history's 90 days before the end of the first anchor
 
 
 @dataclass(frozen=True)
@@ -62,7 +69,9 @@ async def run_backfill(
     The window's prices are recorded together with the bundled runs, so every row is
     calibrated with all earlier rows of the window; the ledger is pruned only at the end.
     A source error ends the pass with what was added so far (``error`` set); the window is
-    then not marked done, and the coordinator tries again later.
+    then not marked done, and the coordinator tries again later. A zone with ``hydro_extra``
+    also fetches the hydro history of the hydro points from 91 days before the first anchor;
+    an anchor whose 90 days of it have a hole is skipped.
     """
     # the model and its backfill file together, before any await (see ``set_model``)
     model, backfill, zone = coordinator.model, coordinator.backfill, coordinator.zone
@@ -108,12 +117,29 @@ async def run_backfill(
                 anchors[-1] + _MAX_H * _DAY,
                 run_blocking=run_blocking,
             )
+            hydro = None
+            if zone.hydro_extra:
+                hydro = await fetch_hydro_history(
+                    session,
+                    zone,
+                    anchors[0] - _HYDRO_LEAD_DAYS * _DAY,
+                    anchors[-1] + _DAY,
+                    run_blocking=run_blocking,
+                )
         except SourceError as err:
             return _stopped(err, BackfillResult(imported, 0, len(finalized)))
+        if hydro is not None:
+            holes = [a for a in anchors if hydro_history_gaps(hydro, a, zone)]
+            if holes:
+                _LOGGER.warning(
+                    "%s backfill skips %d anchors (%s … %s): the Open-Meteo hydro history "
+                    "misses hours of their %d days",
+                    zone.code, len(holes), holes[0], holes[-1], HYDRO_DAYS,
+                )  # fmt: skip
         runs = []
         for anchor in anchors:  # one job per anchor: a cancelled backfill stops promptly
             run = await hass.async_add_executor_job(
-                _recompute, model, zone, anchor, prices, weather, start, extra_prices
+                _recompute, model, zone, anchor, prices, weather, start, extra_prices, hydro
             )
             if run is not None:
                 runs.append(run)
@@ -141,19 +167,26 @@ def _recompute(
     weather: Mapping[int, Mapping[str, Hourly]],
     first_target: date,
     extra_prices: Mapping[str, Hourly] | None = None,
+    hydro_history: Mapping[str, Hourly] | None = None,
 ) -> Run | None:
     """The backfill run of ``anchor`` with the target days from ``first_target`` on (blocking).
 
     None when the anchor cannot be forecast: too short prices (its own or those of a price
-    input), or a bug in the forecast, which is logged and skips only this anchor (as a live
-    run keeps the last forecast).
+    input), a hole in the hydro history (a zone with ``hydro_extra``), or a bug in the
+    forecast, which is logged and skips only this anchor (as a live run keeps the last
+    forecast).
     """
     tz = ZoneInfo(zone.tz)
     end = _midnight(anchor + _DAY, tz)
     known = _until(prices, end)  # what was published by then
     extra = {code: _until(s, end) for code, s in (extra_prices or {}).items()}
+    if zone.hydro_extra:
+        gaps = hydro_history_gaps(hydro_history or {}, anchor, zone)
+        if gaps:
+            _LOGGER.debug("Backfill skips anchor %s: no hydro history for %s", anchor, gaps)
+            return None
     try:
-        slots = run_forecast(model, anchor, known, weather, zone, None, extra)
+        slots = run_forecast(model, anchor, known, weather, zone, None, extra, hydro_history)
     except InsufficientHistory as err:  # IncompleteAnchorDay included
         _LOGGER.debug("Backfill skips anchor %s: %s", anchor, err)
         return None

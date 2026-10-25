@@ -84,7 +84,31 @@ def dk_holidays(year: int) -> frozenset[date]:
     return frozenset(days)
 
 
-_CALENDARS = {"DE": de_holidays, "NL": nl_holidays, "DK": dk_holidays}
+def no_holidays(year: int) -> frozenset[date]:
+    """Norwegian national holidays of ``year`` (as the ``holidays`` package lists them), plus
+    Christmas Eve and New Year's Eve, de-facto days off (research/zones/genfeat.py ``offdays``)."""
+    easter = _easter(year)
+    return frozenset(
+        {
+            date(year, 1, 1),  # Første nyttårsdag
+            easter - timedelta(days=3),  # Skjærtorsdag
+            easter - timedelta(days=2),  # Langfredag
+            easter,  # Første påskedag
+            easter + timedelta(days=1),  # Andre påskedag
+            date(year, 5, 1),  # Arbeidernes dag
+            date(year, 5, 17),  # Grunnlovsdag
+            easter + timedelta(days=39),  # Kristi himmelfartsdag
+            easter + timedelta(days=49),  # Første pinsedag
+            easter + timedelta(days=50),  # Andre pinsedag
+            date(year, 12, 24),  # Julaften
+            date(year, 12, 25),
+            date(year, 12, 26),
+            date(year, 12, 31),  # Nyttårsaften
+        }
+    )
+
+
+_CALENDARS = {"DE": de_holidays, "NL": nl_holidays, "DK": dk_holidays, "NO": no_holidays}
 
 
 def holidays(country: str, year: int) -> frozenset[date]:

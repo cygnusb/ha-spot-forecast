@@ -9,9 +9,15 @@ from typing import Any
 import aiohttp
 
 from ..const import MAX_WEATHER_BYTES
-from ..core.features import HORIZONS, Hourly
+from ..core.features import (
+    HORIZONS,
+    HYDRO_DAYS,
+    HYDRO_VARS,
+    Hourly,
+    hydro_history_gaps,
+)
 from ..core.ingest import merge_hourly, parse_open_meteo, weather_by_horizon_from_previous_runs
-from ..core.zones import Point, Zone
+from ..core.zones import POINTS, Point, Zone
 from . import http
 from .http import RunBlocking, SourceError, decode_json, get_body
 
@@ -20,6 +26,9 @@ PREVIOUS_RUNS_URL = "https://previous-runs-api.open-meteo.com/v1/forecast"
 WEATHER_MODEL = "ecmwf_ifs025"
 FORECAST_DAYS = 8
 REQUEST_PAUSE = 3.0  # seconds between previous-runs requests
+HYDRO_PAST_DAYS = HYDRO_DAYS + 2  # the live hydro history: from before the 90 days …
+HYDRO_FORECAST_DAYS = 2  # … through tomorrow, the last day an anchor can be
+_HYDRO_SUFFIX = "_previous_day2"  # offset 2, as the training's horizon-1 weather
 
 
 def _locations(points: Mapping[str, Point]) -> dict[str, str]:
@@ -130,3 +139,57 @@ def _add_chunk(
 def _previous_columns(variables: Sequence[str]) -> str:
     """``{var}_previous_day{h + 1}`` for every variable and horizon, variable-major."""
     return ",".join(f"{v}_previous_day{h + 1}" for v in variables for h in HORIZONS)
+
+
+async def fetch_hydro_history(
+    session: aiohttp.ClientSession,
+    zone: Zone,
+    start: date | None = None,
+    end: date | None = None,
+    *,
+    run_blocking: RunBlocking,
+) -> dict[str, Hourly]:
+    """The offset-2 ``HYDRO_VARS`` series of ``zone.hydro_points`` (``hydro_extra``).
+
+    Without ``start``/``end``: one previous-runs request with ``HYDRO_PAST_DAYS`` past days
+    through tomorrow, for a live run. With them: the target days ``start`` through ``end``,
+    one request per calendar month, ``REQUEST_PAUSE`` apart, for the backfill. The series
+    are the ``_previous_day2`` columns, the same values as the training's horizon-1 weather.
+    """
+    points = {p: POINTS[p][0] for p in zone.hydro_points}
+    names = list(points)
+    query = {
+        **_locations(points),
+        "hourly": ",".join(f"{v}{_HYDRO_SUFFIX}" for v in HYDRO_VARS),
+        "models": WEATHER_MODEL,
+        "timezone": "GMT",
+    }
+    if start is None or end is None:
+        ranges = [{"past_days": HYDRO_PAST_DAYS, "forecast_days": HYDRO_FORECAST_DAYS}]
+    else:
+        ranges = [
+            {"start_date": a.isoformat(), "end_date": b.isoformat()}
+            for a, b in _month_chunks(start, end)
+        ]
+    out: dict[str, Hourly] = {}
+    for i, extent in enumerate(ranges):
+        if i:
+            await http.pause(REQUEST_PAUSE)
+        body = await get_body(session, PREVIOUS_RUNS_URL, query | extent, MAX_WEATHER_BYTES)
+        chunk = await run_blocking(
+            _parse, parse_open_meteo, body, PREVIOUS_RUNS_URL, names, HYDRO_VARS, _HYDRO_SUFFIX
+        )
+        out = {k: merge_hourly(out[k], s) if k in out else s for k, s in chunk.items()}
+    return out
+
+
+def check_hydro_history(history: Mapping[str, Hourly], anchor: date, zone: Zone) -> None:
+    """``SourceError`` naming the zone when the hydro history misses an hour of the
+    ``HYDRO_DAYS`` before the end of ``anchor``: the features skip missing hours, so a hole
+    would silently lower the precipitation sums."""
+    gaps = hydro_history_gaps(history, anchor, zone)
+    if gaps:
+        raise SourceError(
+            f"{zone.code}: the Open-Meteo hydro history misses hours of the {HYDRO_DAYS} days "
+            f"before the end of {anchor}: {', '.join(gaps)}"
+        )
