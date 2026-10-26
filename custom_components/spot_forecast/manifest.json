@@ -1,7 +1,6 @@
 {
   "domain": "spot_forecast",
   "name": "Spot Forecast",
-  "categories": ["energy.energy_prices"],
   "codeowners": ["@cygnusb"],
   "config_flow": true,
   "dependencies": ["recorder"],
