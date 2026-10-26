@@ -19,6 +19,7 @@ from .coordinator import BACKFILL_STATES, SpotForecastCoordinator
 from .core.output import current_price, day_summaries, total_price, with_surcharge
 from .entity import SpotEntity
 
+PARALLEL_UPDATES = 0  # the coordinator fetches; the entities only read its data
 UNIT = "EUR/kWh"
 PRECISION = 4  # EUR/kWh to 0.01 ct, as the surcharge option is kept
 WEATHER_ATTRIBUTION = "Open-Meteo (CC BY 4.0)"

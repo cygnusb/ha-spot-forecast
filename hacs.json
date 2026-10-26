@@ -6,6 +6,9 @@
   "filename": "spot_forecast.zip",
   "country": [
     "DE",
-    "LU"
+    "DK",
+    "LU",
+    "NL",
+    "NO"
   ]
 }

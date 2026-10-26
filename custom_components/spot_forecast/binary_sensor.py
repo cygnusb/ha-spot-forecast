@@ -15,6 +15,8 @@ from .coordinator import SpotForecastCoordinator
 from .core.output import flag_window
 from .entity import SpotEntity
 
+PARALLEL_UPDATES = 0  # the coordinator fetches; the entities only read its data
+
 
 async def async_setup_entry(
     hass: HomeAssistant, entry: SpotForecastConfigEntry, async_add_entities: AddEntitiesCallback

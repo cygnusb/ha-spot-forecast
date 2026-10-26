@@ -56,12 +56,15 @@ def test_2024_11_shape_ignores_mean_type_enum_it_does_not_declare() -> None:
     assert build_metadata(STAT_ID, Meta2024_11, MeanType) == {**BASE, "has_mean": True}
 
 
-def test_2025_4_shape_has_mean_and_mean_type_but_no_unit_class() -> None:
+def test_2025_4_shape_mean_type_replaces_the_deprecated_has_mean() -> None:
     assert build_metadata(STAT_ID, Meta2025_4, MeanType) == {
         **BASE,
-        "has_mean": True,
         "mean_type": MeanType.ARITHMETIC,
     }
+
+
+def test_2025_4_shape_without_the_enum_falls_back_to_has_mean() -> None:
+    assert build_metadata(STAT_ID, Meta2025_4, None) == {**BASE, "has_mean": True}
 
 
 def test_future_shape_without_has_mean() -> None:
