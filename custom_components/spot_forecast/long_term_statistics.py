@@ -72,9 +72,11 @@ def build_metadata(
 
     The recorder builds its ``StatisticsMeta`` row with ``StatisticsMeta(**meta)``, so a key
     the running version does not know (``unit_class`` before 2025.11, ``has_mean`` once it
-    is removed) fails every import. ``mean_type`` exists from 2025.4 on.
+    is removed) fails every import. ``mean_type`` exists from 2025.4 on and replaces the
+    deprecated ``has_mean``, which is then left out (``NotRequired`` from 2025.4 on).
     """
     declared = declared_keys(meta_type)
+    uses_mean_type = "mean_type" in declared and mean_type is not None
     meta: dict[str, Any] = {
         "has_sum": False,
         "name": statistic_name(statistic_id),
@@ -82,9 +84,11 @@ def build_metadata(
         "statistic_id": statistic_id,
         "unit_of_measurement": UNIT,
     }
-    if "has_mean" in declared:
+    # not by __required_keys__: under postponed annotations (the recorder module uses them)
+    # NotRequired is not seen and every key counts as required
+    if "has_mean" in declared and not uses_mean_type:
         meta["has_mean"] = True
-    if "mean_type" in declared and mean_type is not None:
+    if uses_mean_type:
         meta["mean_type"] = mean_type.ARITHMETIC
     if "unit_class" in declared:
         meta["unit_class"] = None

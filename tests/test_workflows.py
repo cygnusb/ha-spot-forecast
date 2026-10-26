@@ -371,8 +371,8 @@ def test_hacs_json_values():
         "homeassistant": "2024.11.0",
         "zip_release": True,
         "filename": "spot_forecast.zip",
-        # HACS filters by region: the integration covers the DE-LU bidding zone only
-        "country": ["DE", "LU"],
+        # HACS filters by region: the countries of the zones DE-LU, NL, DK1, DK2 and NO2
+        "country": ["DE", "DK", "LU", "NL", "NO"],
     }
 
 

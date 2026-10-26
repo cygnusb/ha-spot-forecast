@@ -12,6 +12,11 @@ Both cards read only the integration's fixed entity ids, so they work
 unchanged on any instance language. Their labels are German; the comments in
 the YAML are English and point at every label.
 
+The cards are written for the zone DE-LU. For another zone, replace every
+`de_lu` in the YAML with the zone's id: `nl`, `dk1`, `dk2` or `no2` (as in
+`sensor.spot_forecast_nl_price` and `spot_forecast:nl_price`). Prices stay in
+EUR, as the integration reports them for every zone.
+
 ## Forecast card
 
 [`examples/plotly_forecast.yaml`](https://github.com/cygnusb/ha-spot-forecast/blob/main/examples/plotly_forecast.yaml)

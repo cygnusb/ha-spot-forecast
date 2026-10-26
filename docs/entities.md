@@ -23,8 +23,8 @@ other integrations can rely on them: a German instance also gets
 * `stale`: `true` when the last run failed or is more than 7 hours old.
 * `surcharge`: the option [grid fees and taxes](configuration.md#options) in
   EUR/kWh, 0 when unset; the forecast card reads it for its "mit Abgaben" view.
-* `vat`: the option VAT on the market price in percent (19 unless set), for the
-  same view.
+* `vat`: the option VAT on the market price in percent, for the same view. Unless
+  set, the zone's rate: 19 (DE-LU), 21 (NL), 25 (DK1, DK2, NO2).
 * `attribution`: the data sources and their licences.
 
 An entry of `prices`:

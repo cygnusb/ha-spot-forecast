@@ -1,7 +1,9 @@
 """The brand images HA loads from the integration, and their sources, are in place.
 
 Home Assistant (2026.3+) reads custom_components/<domain>/brand/ instead of the brands
-CDN and expects fixed sizes. PNG sizes come from the IHDR chunk, so no imaging library.
+CDN. The sizes follow the home-assistant/brands image specification: icons 256 and 512
+square, logos with a shortest side of 128 to 256 (512 for @2x), both trimmed. PNG sizes
+come from the IHDR chunk, so no imaging library.
 """
 
 from __future__ import annotations
@@ -16,8 +18,8 @@ ASSETS = REPO / "assets"
 BRAND_SIZES = {
     "icon.png": (256, 256),
     "icon@2x.png": (512, 512),
-    "logo.png": (256, 80),
-    "logo@2x.png": (512, 160),
+    "logo.png": (667, 128),
+    "logo@2x.png": (1334, 256),
 }
 
 

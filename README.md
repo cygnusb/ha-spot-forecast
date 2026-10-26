@@ -32,11 +32,8 @@ API key, and is light enough for a Raspberry Pi: the models are trained every
 month on GitHub and only evaluated on your device, with numpy.
 
 <p align="center">
-  <a href="assets/screenshots/forecast_light.png">
-    <picture>
-      <source media="(prefers-color-scheme: dark)" srcset="assets/screenshots/forecast_dark.png">
-      <img src="assets/screenshots/forecast_light.png" width="100%" alt="The forecast card on 14 October 2026: known prices for 13 to 15 October as a black step line, then six forecast days in blue with a hatched red peak-risk band above and a hatched green low-price band below. Above each day its maximum and, on the forecast days, a peak-risk warning such as “bis 37”.">
-    </picture>
+  <a href="https://raw.githubusercontent.com/cygnusb/ha-spot-forecast/main/assets/screenshots/forecast_light.png">
+    <img src="https://raw.githubusercontent.com/cygnusb/ha-spot-forecast/main/assets/screenshots/forecast_light.png" width="100%" alt="The forecast card on 14 October 2026: known prices for 13 to 15 October as a black step line, then six forecast days in blue with a hatched red peak-risk band above and a hatched green low-price band below. Above each day its maximum and, on the forecast days, a peak-risk warning such as “bis 37”.">
   </a>
   <br>
   <em>The forecast card on 14 October 2026, two weeks after the bundled model's training cutoff: an out-of-sample forecast from the shipped model on real data. Card labels are German.</em>
@@ -230,7 +227,7 @@ YAML:
   error over the shown range.
 
 <p align="center">
-  <a href="assets/screenshots/lookback_light.png"><picture><source media="(prefers-color-scheme: dark)" srcset="assets/screenshots/lookback_dark.png"><img src="assets/screenshots/lookback_light.png" width="600" alt="The look-back card: the actual price from 15 September to 14 October 2026 as a dark line and the forecast made two days ahead in orange, the gap between them filled red; buttons for D+1 to D+6 or all, and 7 days to 6 months."></picture></a>
+  <a href="https://raw.githubusercontent.com/cygnusb/ha-spot-forecast/main/assets/screenshots/lookback_light.png"><img src="https://raw.githubusercontent.com/cygnusb/ha-spot-forecast/main/assets/screenshots/lookback_light.png" width="600" alt="The look-back card: the actual price from 15 September to 14 October 2026 as a dark line and the forecast made two days ahead in orange, the gap between them filled red; buttons for D+1 to D+6 or all, and 7 days to 6 months."></a>
 </p>
 
 Both screenshots are real: [`tools/gen_card_screenshots.py`](tools/gen_card_screenshots.py)
