@@ -15,13 +15,16 @@ frame element.
 Usage:
     npm install --prefix /tmp playwright@1.63.0   # its browser revision is in the cache
     .venv/bin/python tools/gen_card_screenshots.py [--theme light|dark|both]
-        [--scenario NAME|all] [--sizes] [--switch-test] [--rebuild]
+        [--lang en|de|both] [--scenario NAME|live|all] [--sizes] [--switch-test] [--rebuild]
 
     SPOT_RESEARCH_DIR   research data (default research/), see research/README.md
     PLAYWRIGHT_DIR      the playwright package (default /tmp/node_modules/playwright)
 
-The default scenario writes the README images assets/screenshots/{card}_{theme}.png.
-Other scenarios, --sizes (360/600/1000 px) and --switch-test (look-back horizon
+The cards follow Home Assistant's language; every shot is rendered in English and German.
+The default scenario ``live``, a snapshot of a real installation in
+tools/scenarios/live.json.gz (made by tools/snapshot_live.py), writes the README and
+website images assets/screenshots/{card}_{theme}.png (English) and {card}_{theme}_de.png.
+The research scenarios, --sizes (360/600/1000 px) and --switch-test (look-back horizon
 buttons, and the forecast card's fees buttons in scenario "fees", across a card
 refresh) write into tools/.cache/shots/ for checking by eye.
 The run fails on a card error message, a page error or an unknown websocket call.
@@ -30,6 +33,9 @@ The run fails on a card error message, a page error or an unknown websocket call
 from __future__ import annotations
 
 import argparse
+from functools import partial
+import gzip
+import itertools
 import json
 import os
 from pathlib import Path
@@ -179,7 +185,7 @@ THEMES = {
 
 HTML_TEMPLATE = textwrap.dedent("""\
 <!DOCTYPE html>
-<html lang="de">
+<html lang="{lang}">
 <head>
 <meta charset="utf-8">
 <title>{title}</title>
@@ -252,8 +258,8 @@ HTML_TEMPLATE = textwrap.dedent("""\
   }}
   window.__makeHass = (states) => ({{
     states,
-    language: "de",
-    locale: {{ language: "de", number_format: "language", time_format: "24", time_zone: "server", first_weekday: "monday" }},
+    language: "{lang}",
+    locale: {{ language: "{lang}", number_format: "language", time_format: "24", time_zone: "server", first_weekday: "monday" }},
     config: {{ time_zone: scenario.time_zone, unit_system: {{}}, location_name: "Home" }},
     themes: {{ darkMode: {dark}, theme: "default", themes: {{}} }},
     user: {{ id: "stub", name: "Stub", is_admin: true }},
@@ -282,7 +288,7 @@ HTML_TEMPLATE = textwrap.dedent("""\
 """)
 
 
-def write_html(path: Path, config: dict, scenario: dict, theme: str, width: int) -> None:
+def write_html(path: Path, config: dict, scenario: dict, theme: str, width: int, lang: str) -> None:
     theme_vars = "\n".join(f"    --{k}: {v};" for k, v in THEMES[theme].items())
     path.write_text(
         HTML_TEMPLATE.format(
@@ -293,6 +299,7 @@ def write_html(path: Path, config: dict, scenario: dict, theme: str, width: int)
             scenario_json=json.dumps(scenario),
             config_json=json.dumps(config),
             dark="true" if theme == "dark" else "false",
+            lang=lang,
         ),
         encoding="utf-8",
     )
@@ -376,7 +383,7 @@ async function clickButton(page, label) {{
   let failed = false;
   for (const job of jobs) {{
     const context = await browser.newContext({{
-      deviceScaleFactor: 2, timezoneId: job.timeZone, locale: 'de-DE',
+      deviceScaleFactor: 2, timezoneId: job.timeZone, locale: job.locale,
       viewport: {{ width: job.width + 2 * {margin} + 40, height: 1400 }},
     }});
     const page = await context.newPage();
@@ -463,19 +470,33 @@ def render(jobs: list[dict]) -> bool:
 
 SCENARIOS = ["default", "dst", "dst_forecast", "stale", "fresh_install", "fees"]
 # scenarios whose look-back is worth a look (the 2025 ones have no stored forecasts)
-LOOKBACK_SCENARIOS = {"default", "fresh_install"}
+LOOKBACK_SCENARIOS = {"default", "fresh_install", "live"}
+# A snapshot of a real installation (tools/snapshot_live.py), not built from research data.
+LIVE = "live"
+LIVE_SNAPSHOT = REPO / "tools" / "scenarios" / "live.json.gz"
+# The scenario of the README and website images (assets/screenshots/).
+PUBLISHED = LIVE
+# Home Assistant language -> file suffix and browser locale. The cards follow
+# hass.locale.language: German for "de", English otherwise.
+LANGS = {"en": ("", "en-US"), "de": ("_de", "de-DE")}
+# Button labels the switch test clicks, as each language draws them (regular expressions).
+LABELS = {
+    "en": {"fees_on": "incl. fees", "fees_off": "Exchange", "horizon": "D\\+4", "all": "all"},
+    "de": {"fees_on": "mit Abgaben", "fees_off": "Börse", "horizon": "D\\+4", "all": "alle"},
+}
 
 
-def _job(card: str, scenario_name: str, scenario: dict, theme: str, width: int, png: Path, **extra):
+def _job(card: str, scenario: dict, theme: str, width: int, png: Path, lang: str, **extra) -> dict:
     config = yaml.safe_load(CARDS[card].read_text(encoding="utf-8"))
     html = WORK / f"{png.stem}.html"
-    write_html(html, config, scenario, theme, width)
+    write_html(html, config, scenario, theme, width, lang)
     return {
         "html": html.name,
         "png": str(png),
         "width": width,
         "now": scenario["now"],
         "timeZone": scenario["time_zone"],
+        "locale": LANGS[lang][1],
         **extra,
     }
 
@@ -483,7 +504,8 @@ def _job(card: str, scenario_name: str, scenario: dict, theme: str, width: int, 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     parser.add_argument("--theme", default="both", choices=["light", "dark", "both"])
-    parser.add_argument("--scenario", default="default", choices=[*SCENARIOS, "all"])
+    parser.add_argument("--lang", default="both", choices=[*LANGS, "both"])
+    parser.add_argument("--scenario", default=PUBLISHED, choices=[*SCENARIOS, LIVE, "all"])
     parser.add_argument("--sizes", action="store_true", help="render at 360/600/1000 px")
     parser.add_argument(
         "--switch-test",
@@ -497,50 +519,53 @@ def main() -> int:
     WORK.mkdir(parents=True, exist_ok=True)
     OUT_DIR.mkdir(parents=True, exist_ok=True)
     themes = ["light", "dark"] if args.theme == "both" else [args.theme]
-    names = SCENARIOS if args.scenario == "all" else [args.scenario]
+    langs = list(LANGS) if args.lang == "both" else [args.lang]
+    names = [*SCENARIOS, LIVE] if args.scenario == "all" else [args.scenario]
 
     jobs = []
     for name in names:
-        data = load_scenario(name, args.rebuild)
+        if name == LIVE:
+            data = json.loads(gzip.decompress(LIVE_SNAPSHOT.read_bytes()))
+        else:
+            data = load_scenario(name, args.rebuild)
         for card in CARDS:
             if card == "lookback" and name not in LOOKBACK_SCENARIOS:
                 continue
-            for theme in themes:
+            for theme, lang in itertools.product(themes, langs):
+                suffix, labels = LANGS[lang][0], LABELS[lang]
+                job = partial(_job, card, data, theme, lang=lang)
                 if args.switch_test and card == "forecast":
                     if name != "fees":
                         continue
                     # the fees buttons: switch, refresh, switch back
-                    stem = WORK / f"switch_{card}_{name}_{theme}"
+                    stem = WORK / f"switch_{card}_{name}_{theme}{suffix}"
                     steps = [
-                        {"click": "mit Abgaben", "shot": f"{stem}_1_clicked.png"},
+                        {"click": labels["fees_on"], "shot": f"{stem}_1_clicked.png"},
                         {"refresh": True, "shot": f"{stem}_2_refreshed.png"},
-                        {"click": "Börse"},
+                        {"click": labels["fees_off"]},
                     ]
-                    png = Path(f"{stem}_3_back.png")
-                    jobs.append(_job(card, name, data, theme, CARD_WIDTH, png, steps=steps))
+                    jobs.append(job(CARD_WIDTH, Path(f"{stem}_3_back.png"), steps=steps))
                 elif args.switch_test:
-                    stem = WORK / f"switch_{name}_{theme}"
+                    stem = WORK / f"switch_{name}_{theme}{suffix}"
                     steps = [
-                        {"click": "D\\+4", "shot": f"{stem}_1_clicked.png"},
+                        {"click": labels["horizon"], "shot": f"{stem}_1_clicked.png"},
                         {"refresh": True, "shot": f"{stem}_2_refreshed.png"},
-                        {"click": "alle", "refresh": True},
+                        {"click": labels["all"], "refresh": True},
                     ]
-                    png = Path(f"{stem}_3_all_refreshed.png")
-                    jobs.append(_job(card, name, data, theme, CARD_WIDTH, png, steps=steps))
+                    jobs.append(job(CARD_WIDTH, Path(f"{stem}_3_all_refreshed.png"), steps=steps))
                 elif args.sizes:
                     for width in SIZE_WIDTHS:
-                        png = WORK / f"{card}_{name}_{width}_{theme}.png"
-                        jobs.append(_job(card, name, data, theme, width, png))
+                        jobs.append(job(width, WORK / f"{card}_{name}_{width}_{theme}{suffix}.png"))
                 else:
-                    out = OUT_DIR if name == "default" else WORK
-                    stem = f"{card}_{theme}" if name == "default" else f"{card}_{name}_{theme}"
-                    jobs.append(_job(card, name, data, theme, CARD_WIDTH, out / f"{stem}.png"))
+                    if name == PUBLISHED:
+                        png = OUT_DIR / f"{card}_{theme}{suffix}.png"
+                    else:
+                        png = WORK / f"{card}_{name}_{theme}{suffix}.png"
+                    jobs.append(job(CARD_WIDTH, png))
                     if card == "lookback" and name == "fresh_install":
                         # the longest range, where the window before the backfill shows
-                        png = WORK / f"{card}_{name}_6m_{theme}.png"
-                        jobs.append(
-                            _job(card, name, data, theme, CARD_WIDTH, png, steps=[{"range": "6 M"}])
-                        )
+                        png = WORK / f"{card}_{name}_6m_{theme}{suffix}.png"
+                        jobs.append(job(CARD_WIDTH, png, steps=[{"range": "6 M"}]))
     return 0 if render(jobs) else 1
 
 

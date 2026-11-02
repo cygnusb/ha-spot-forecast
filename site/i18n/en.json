@@ -26,8 +26,8 @@
       "pi": "Light enough for a Raspberry Pi",
       "home_assistant": "Home Assistant 2024.11+"
     },
-    "shot_alt": "The Spot Forecast card in Home Assistant: known prices for 13 to 15 October 2026 as a black step line, then six forecast days as a blue line with a hatched red peak-risk band above it and a hatched green low-price band below. Labels above each day give the maximum and, on every forecast day, a warning such as “bis 37” for the peak risk.",
-    "shot_caption": "The forecast card on 14 October 2026, two weeks after the bundled model’s training cutoff, so this forecast is out of sample, drawn from the shipped model and real prices. The ink line is known, blue is the forecast, hatched red reaches up to the peak risk (P90), hatched green down to the low-price value (P10). ▲ and ▼ mark each day’s four dearest and cheapest hours. Card labels are German."
+    "shot_alt": "The Spot Forecast card in Home Assistant: known prices for 1 to 3 November 2026 as a black step line, then six forecast days to 9 November as a blue line with a hatched red peak-risk band above it and a hatched green low-price band below. Labels above each day give the maximum and, on every forecast day, the peak risk such as “⚠ 69”.",
+    "shot_caption": "The forecast card on a live installation on 2 November 2026, a month after the model’s training cutoff, so this forecast is out of sample. The ink line is known, blue is the forecast, hatched red reaches up to the peak risk (P90), hatched green down to the low-price value (P10). ▲ and ▼ mark each day’s four dearest and cheapest hours. The cards follow Home Assistant’s language."
   },
   "ruler": {
     "label": "What the price sensor holds",
@@ -137,7 +137,7 @@
   "cards": {
     "title": "Two cards for your dashboard",
     "lede": "Both are YAML for the <a href=\"https://github.com/dbuezas/lovelace-plotly-graph-card\">Plotly Graph Card</a>, written for v4.0.2: paste one into a manual card. The forecast card is at the top of this page.",
-    "lookback_alt": "The look-back card in Home Assistant: the actual price as a dark line from 15 September to 14 October 2026 and the forecast made two days ahead in orange, with the gap between them filled red. Buttons above choose D+1 to D+6 or all, and 7 days to 6 months.",
+    "lookback_alt": "The look-back card in Home Assistant: the actual price as a dark line from 4 October to 2 November 2026 and the forecast made two days ahead in orange, with the gap between them filled red. Buttons above choose D+1 to D+6 or all, and 7 days to 6 months.",
     "lookback_caption": "The look-back card: the forecast made two days ahead against the actual price, with the mean error over the shown range. It reads the long-term statistics, which the integration fills from the first day, backfill included.",
     "entities_title": "What you get in Home Assistant",
     "entities": {

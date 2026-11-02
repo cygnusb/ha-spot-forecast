@@ -49,6 +49,12 @@ LANGUAGES = [
 ]
 
 
+def shot_suffix(lang: str) -> str:
+    """The card screenshots' file suffix: none for English, '_de' for German
+    (tools/gen_card_screenshots.py renders the cards in each language)."""
+    return "" if lang == DEFAULT else f"_{lang}"
+
+
 def page_path(lang: str) -> str:
     """The page's path below the site root: '' for English, 'de/' for German."""
     return "" if lang == DEFAULT else f"{lang}/"
@@ -200,7 +206,8 @@ def build(out: Path) -> None:
             default_url=BASE_URL,
             repo_url=REPO_URL,
             root=root,
-            og_image=BASE_URL + "assets/screenshots/forecast_light.png",
+            shot=shot_suffix(lang["code"]),
+            og_image=BASE_URL + f"assets/screenshots/forecast_light{shot_suffix(lang['code'])}.png",
             json_ld=_json_ld(t, lang),
             m=figures,
             zone_map=zone_map,
@@ -259,7 +266,7 @@ def _json_ld(t, lang) -> Markup:
         "isAccessibleForFree": True,
         "offers": {"@type": "Offer", "price": "0", "priceCurrency": "EUR"},
         "codeRepository": REPO_URL,
-        "screenshot": BASE_URL + "assets/screenshots/forecast_light.png",
+        "screenshot": f"{BASE_URL}assets/screenshots/forecast_light{shot_suffix(lang['code'])}.png",
     }
     # </ cannot end the script element early.
     return Markup(json.dumps(data, ensure_ascii=False).replace("</", "<\\/"))
