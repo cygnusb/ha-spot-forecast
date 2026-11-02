@@ -2,11 +2,10 @@
 
 ## Installation
 
-Spot Forecast is a HACS custom repository for now.
+Spot Forecast is in the HACS default store.
 
-1. In HACS: ⋮ → *Custom repositories*, URL
-   `https://github.com/cygnusb/ha-spot-forecast`, type *Integration*. Or use
-   [this link](https://my.home-assistant.io/redirect/hacs_repository/?owner=cygnusb&repository=ha-spot-forecast&category=integration).
+1. In HACS, search for **Spot Forecast**, or
+   [open it in HACS directly](https://my.home-assistant.io/redirect/hacs_repository/?owner=cygnusb&repository=ha-spot-forecast&category=integration).
 2. Download **Spot Forecast** and restart Home Assistant.
 3. Settings → Devices & services → *Add integration* → **Spot Forecast**, or
    [start the setup directly](https://my.home-assistant.io/redirect/config_flow_start/?domain=spot_forecast).

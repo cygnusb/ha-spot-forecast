@@ -6,7 +6,7 @@
 
 [![GitHub Release][release-badge]][release-url]
 [![GitHub Downloads (spot_forecast.zip, all releases)][downloads-badge]][release-url]
-[![HACS Custom][hacs-badge]][hacs-url]
+[![HACS Default][hacs-badge]][hacs-url]
 [![HA Version][ha-badge]][ha-url]
 [![License][license-badge]][license-url]
 [![GitHub commit activity][commits-badge]][commits-url]
@@ -150,14 +150,14 @@ and forecasts are in EUR, as for every zone.
 
 ## Installation (HACS)
 
-Spot Forecast is a HACS **custom repository** for now:
+Spot Forecast is in the HACS default store:
 
-[![Open your Home Assistant instance and open this repository in HACS.][my-hacs-badge]][my-hacs-url]
+1. In HACS, search for **Spot Forecast**, download it and restart Home Assistant. Or open
+   it in HACS directly:
 
-1. Use the button above, or in HACS: ⋮ → *Custom repositories*, URL
-   `https://github.com/cygnusb/ha-spot-forecast`, type *Integration*.
-2. Download **Spot Forecast** in HACS and restart Home Assistant.
-3. Add the integration:
+   [![Open your Home Assistant instance and open this repository in HACS.][my-hacs-badge]][my-hacs-url]
+
+2. Add the integration:
 
    [![Open your Home Assistant instance and start setting up Spot Forecast.][my-flow-badge]][my-flow-url]
 
@@ -267,8 +267,8 @@ MIT
 [release-badge]: https://img.shields.io/github/v/release/cygnusb/ha-spot-forecast?include_prereleases
 [release-url]: https://github.com/cygnusb/ha-spot-forecast/releases
 [downloads-badge]: https://img.shields.io/github/downloads/cygnusb/ha-spot-forecast/spot_forecast.zip
-[hacs-badge]: https://img.shields.io/badge/HACS-Custom-orange.svg
-[hacs-url]: https://hacs.xyz/docs/faq/custom_repositories/
+[hacs-badge]: https://img.shields.io/badge/HACS-Default-41BDF5.svg
+[hacs-url]: https://hacs.xyz/
 [my-hacs-badge]: https://my.home-assistant.io/badges/hacs_repository.svg
 [my-hacs-url]: https://my.home-assistant.io/redirect/hacs_repository/?owner=cygnusb&repository=ha-spot-forecast&category=integration
 [my-flow-badge]: https://my.home-assistant.io/badges/config_flow_start.svg
