@@ -9,8 +9,10 @@ from __future__ import annotations
 import asyncio
 from datetime import UTC, date, datetime, timedelta
 import logging
+import threading
 from typing import Any
 from unittest.mock import patch
+import zoneinfo
 from zoneinfo import ZoneInfo
 
 from conftest import T10, SetUp, Sources, advance, stat_rows
@@ -34,6 +36,7 @@ from pytest_homeassistant_custom_component.test_util.aiohttp import AiohttpClien
 from custom_components.spot_forecast import coordinator as coordinator_module
 from custom_components.spot_forecast import sensor, store
 from custom_components.spot_forecast.const import (
+    CONF_BACKFILL_DAYS,
     CONF_PEAK_THRESHOLD,
     CONF_SURCHARGE,
     CONF_VAT,
@@ -1023,3 +1026,42 @@ async def test_fall_back_day_end_to_end(
     assert shown[first_two] == 0.011
     assert shown[second_two] == 0.022
     assert hass.states.get(PEAK).state in (STATE_ON, STATE_OFF)
+
+
+async def test_the_time_zone_is_never_loaded_on_the_event_loop(
+    hass_with_recorder: HomeAssistant,
+    set_up: SetUp,
+    freezer: FrozenDateTimeFactory,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A first ``ZoneInfo(key)`` reads the tz database from disk: blocking I/O.
+
+    Setup loads the zone's time zone in the executor; setup, the backfill, the quarter-hour
+    tick, a scheduled run and the entities only use that object.
+    """
+    hass = hass_with_recorder
+    monkeypatch.setattr(sensor.DaySensor, "_attr_entity_registry_enabled_default", True)
+    loop_thread = threading.get_ident()
+    on_loop: list[str] = []
+    load_data = zoneinfo._common.load_data  # what ZoneInfo calls to parse a tz file
+
+    def spy(fobj: Any) -> Any:
+        if threading.get_ident() == loop_thread:
+            on_loop.append(getattr(fobj, "name", repr(fobj)))
+        return load_data(fobj)
+
+    # Emptied before each step: a zone the executor loaded earlier would hide a load on the
+    # loop, as ZoneInfo caches it.
+    with patch.object(zoneinfo._common, "load_data", spy):
+        zoneinfo.ZoneInfo.clear_cache()
+        entry = await set_up({CONF_BACKFILL_DAYS: 30})
+        zoneinfo.ZoneInfo.clear_cache()
+        await advance(hass, freezer, T10 + timedelta(minutes=15))  # the tick
+        zoneinfo.ZoneInfo.clear_cache()
+        await advance(hass, freezer, T14)  # a scheduled run
+        zoneinfo.ZoneInfo.clear_cache()
+        assert hass.states.get("sensor.spot_forecast_de_lu_day_1").state != STATE_UNKNOWN
+
+    coordinator = entry.runtime_data.coordinator
+    assert coordinator.backfill_result is not None and coordinator.backfill_error is None
+    assert on_loop == []

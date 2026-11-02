@@ -9,10 +9,9 @@ from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, replace
-from datetime import UTC, date, datetime, time, timedelta
+from datetime import UTC, date, datetime, time, timedelta, tzinfo
 import logging
 from typing import TYPE_CHECKING
-from zoneinfo import ZoneInfo
 
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
@@ -75,7 +74,7 @@ async def run_backfill(
     """
     # the model and its backfill file together, before any await (see ``set_model``)
     model, backfill, zone = coordinator.model, coordinator.backfill, coordinator.zone
-    tz = ZoneInfo(zone.tz)
+    tz = coordinator.tz
     today = dt_util.utcnow().astimezone(tz).date()
     first = today - timedelta(days=days)
     start = max(model.train_cutoff, first)  # first recomputed target day
@@ -139,7 +138,7 @@ async def run_backfill(
         runs = []
         for anchor in anchors:  # one job per anchor: a cancelled backfill stops promptly
             run = await hass.async_add_executor_job(
-                _recompute, model, zone, anchor, prices, weather, start, extra_prices, hydro
+                _recompute, model, zone, tz, anchor, prices, weather, start, extra_prices, hydro
             )
             if run is not None:
                 runs.append(run)
@@ -162,6 +161,7 @@ def _stopped(err: SourceError, result: BackfillResult) -> BackfillResult:
 def _recompute(
     model: ModelFile,
     zone: Zone,
+    tz: tzinfo,
     anchor: date,
     prices: Hourly,
     weather: Mapping[int, Mapping[str, Hourly]],
@@ -176,7 +176,6 @@ def _recompute(
     forecast, which is logged and skips only this anchor (as a live run keeps the last
     forecast).
     """
-    tz = ZoneInfo(zone.tz)
     end = _midnight(anchor + _DAY, tz)
     known = _until(prices, end)  # what was published by then
     extra = {code: _until(s, end) for code, s in (extra_prices or {}).items()}
@@ -234,7 +233,7 @@ def _merged(stored: Mapping[date, Run], runs: Sequence[Run]) -> list[Run]:
     return out
 
 
-def _midnight(day: date, tz: ZoneInfo) -> datetime:
+def _midnight(day: date, tz: tzinfo) -> datetime:
     return datetime.combine(day, time(), tz).astimezone(UTC)
 
 

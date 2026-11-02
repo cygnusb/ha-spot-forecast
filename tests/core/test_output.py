@@ -14,8 +14,7 @@ from core.output import (
     with_surcharge,
 )
 
-TZ = "Europe/Berlin"
-BERLIN = ZoneInfo(TZ)
+BERLIN = ZoneInfo("Europe/Berlin")
 P90 = dict.fromkeys(range(1, 8), 10.0)
 P10 = dict.fromkeys(range(1, 8), -10.0)
 
@@ -56,7 +55,7 @@ def test_prices_attribute_market_then_forecast_no_gap_no_overlap():
     market = _market(m0, 48)  # 12 h
     forecast = _forecast(m0 + timedelta(hours=6), 24)  # first 6 overlap
     start = _local_midnight(2026, 3, 10)
-    out = prices_attribute(market, forecast, P90, P10, TZ, start)
+    out = prices_attribute(market, forecast, P90, P10, BERLIN, start)
     assert [e["source"] for e in out] == ["market"] * 48 + ["forecast"] * 18
     inst = _instants(out)
     assert inst == sorted(set(inst))
@@ -69,7 +68,7 @@ def test_prices_attribute_market_then_forecast_no_gap_no_overlap():
 
 def test_prices_attribute_drops_market_before_start():
     m0 = datetime(2026, 3, 9, 22, tzinfo=UTC)
-    out = prices_attribute(_market(m0, 8), [], P90, P10, TZ, _local_midnight(2026, 3, 10))
+    out = prices_attribute(_market(m0, 8), [], P90, P10, BERLIN, _local_midnight(2026, 3, 10))
     assert len(out) == 4
     assert out[0]["time"] == "2026-03-10T00:00:00+01:00"
 
@@ -78,7 +77,7 @@ def test_prices_attribute_skips_invalid_forecast_slots():
     m0 = datetime(2026, 3, 9, 23, tzinfo=UTC)
     f = _forecast(m0, 3)
     f[1] = Slot(f[1].time, f[1].h, 1.0, 2.0, 0.0, False)
-    out = prices_attribute([], f, P90, P10, TZ, _local_midnight(2026, 3, 10))
+    out = prices_attribute([], f, P90, P10, BERLIN, _local_midnight(2026, 3, 10))
     assert len(out) == 2
     assert _instants(out) == [f[0].time, f[2].time]
 
@@ -89,14 +88,14 @@ def test_prices_attribute_prices_rounded_to_5_decimals():
             datetime(2026, 3, 9, 23, tzinfo=UTC), datetime(2026, 3, 10, tzinfo=UTC), 33.3333333
         )
     ]
-    out = prices_attribute(m, [], P90, P10, TZ, _local_midnight(2026, 3, 10))
+    out = prices_attribute(m, [], P90, P10, BERLIN, _local_midnight(2026, 3, 10))
     assert out[0]["price"] == 0.03333
 
 
 def test_prices_attribute_dst_fall_back_market():
     m0 = datetime(2026, 10, 24, 22, tzinfo=UTC)  # local midnight, CEST
     market = _market(m0, 100)
-    out = prices_attribute(market, [], P90, P10, TZ, _local_midnight(2026, 10, 25))
+    out = prices_attribute(market, [], P90, P10, BERLIN, _local_midnight(2026, 10, 25))
     assert len(out) == 100
     times = [e["time"] for e in out]
     assert len(set(times)) == 100
@@ -107,7 +106,7 @@ def test_prices_attribute_dst_fall_back_market():
 def test_prices_attribute_dst_fall_back_forecast():
     market = _market(datetime(2026, 10, 23, 22, tzinfo=UTC), 96)  # all of 2026-10-24
     forecast = _forecast(datetime(2026, 10, 24, 22, tzinfo=UTC), 25)
-    out = prices_attribute(market, forecast, P90, P10, TZ, _local_midnight(2026, 10, 24))
+    out = prices_attribute(market, forecast, P90, P10, BERLIN, _local_midnight(2026, 10, 24))
     fc = [e for e in out if e["source"] == "forecast"]
     assert len(fc) == 25
     assert len({e["time"] for e in fc}) == 25
@@ -118,7 +117,7 @@ def test_prices_attribute_is_parsed_by_sbp_entsoe_adapter():
     m0 = datetime(2026, 3, 9, 23, tzinfo=UTC)
     market = _market(m0, 8)  # 2 h quarter-hourly
     forecast = _forecast(m0 + timedelta(hours=2), 5)
-    out = prices_attribute(market, forecast, P90, P10, TZ, _local_midnight(2026, 3, 10))
+    out = prices_attribute(market, forecast, P90, P10, BERLIN, _local_midnight(2026, 3, 10))
     attrs = {"prices": out, "unit": "EUR/kWh"}
     assert not nordpool_matches(attrs)
     assert not epex_matches(attrs)
@@ -142,7 +141,9 @@ def test_total_price_adds_vat_on_the_spot_part_then_the_surcharge():
 
 def test_with_surcharge_shifts_prices_and_bands_only():
     m0 = datetime(2026, 3, 9, 23, tzinfo=UTC)
-    out = prices_attribute(_market(m0, 4), _forecast(m0 + timedelta(hours=1), 2), P90, P10, TZ, m0)
+    out = prices_attribute(
+        _market(m0, 4), _forecast(m0 + timedelta(hours=1), 2), P90, P10, BERLIN, m0
+    )
     total = with_surcharge(out, 0.187, 19.0)
     assert total is not out and out[0]["price"] == 0.05  # the input is left alone
     assert [e["price"] for e in total] == [round(e["price"] * 1.19 + 0.187, 5) for e in out]
@@ -245,7 +246,7 @@ def test_day_summaries_seven_days():
         _e("2026-03-11T23:00:00+01:00", 0.20, "forecast", p90=0.4, p10=-0.1),
     ]
     entries += [_e("2026-03-12T10:00:00+01:00", 0.20, "forecast", p90=0.5, p10=0.0)]
-    out = day_summaries(entries, TZ, today)
+    out = day_summaries(entries, BERLIN, today)
     assert [d["date"] for d in out] == [f"2026-03-{d}" for d in range(10, 17)]
     assert out[0] == {
         "date": "2026-03-10",
@@ -278,5 +279,5 @@ def test_day_summaries_weights_by_slot_length():
     ]
     entries.append(_e("2026-03-10T01:00:00+01:00", 0.4, "market"))
     entries.append(_e("2026-03-10T02:00:00+01:00", 0.4, "market"))
-    out = day_summaries(entries, TZ, date(2026, 3, 10), days=1)
+    out = day_summaries(entries, BERLIN, date(2026, 3, 10), days=1)
     assert out[0]["mean"] == 0.26667

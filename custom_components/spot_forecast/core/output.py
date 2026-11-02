@@ -9,8 +9,7 @@ Prices leave this module in EUR/kWh; the core works in EUR/MWh.
 from __future__ import annotations
 
 from collections.abc import Sequence
-from datetime import UTC, date, datetime, timedelta
-from zoneinfo import ZoneInfo
+from datetime import UTC, date, datetime, timedelta, tzinfo
 
 from .forecast import Slot, low_price, peak_risk
 from .ingest import MarketSlot
@@ -28,7 +27,7 @@ def prices_attribute(
     forecast: Sequence[Slot],
     p90_off: dict[int, float],
     p10_off: dict[int, float],
-    tz: str,
+    zone: tzinfo,
     start: datetime,
 ) -> list[dict]:
     """Market slots from ``start`` at native resolution, then valid forecast hours after them.
@@ -36,7 +35,6 @@ def prices_attribute(
     ``time`` is ISO in market-local time with offset, so the two 02:00 of a
     fall-back day differ by offset. Uniqueness is by instant.
     """
-    zone = ZoneInfo(tz)
     by_instant: dict[datetime, dict] = {}
     market_end = None
     for m in sorted(market, key=lambda s: s.start):
@@ -132,14 +130,13 @@ def flag_window(
     return flagged, any(e["source"] == "market" for e in flagged)
 
 
-def day_summaries(entries: list[dict], tz: str, today: date, days: int = 7) -> list[dict]:
+def day_summaries(entries: list[dict], zone: tzinfo, today: date, days: int = 7) -> list[dict]:
     """Per local day from ``today``: mean/min/max of ``price``, p90_max/p10_min, source.
 
     ``mean`` is weighted by slot length (entry length = next start minus start, capped at 1 h),
     so mixed 15-min/60-min days are not biased. ``p90_max``/``p10_min`` use
     forecast entries only. Days without entries get None values.
     """
-    zone = ZoneInfo(tz)
     per_day: dict[date, list[tuple[dict, float]]] = {}
     for entry, (start, length) in zip(entries, _lengths(entries), strict=True):
         per_day.setdefault(start.astimezone(zone).date(), []).append(
