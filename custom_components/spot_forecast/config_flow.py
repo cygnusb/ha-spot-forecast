@@ -84,11 +84,15 @@ class SpotForecastConfigFlow(ConfigFlow, domain=DOMAIN):
     @callback
     def async_get_options_flow(config_entry: ConfigEntry) -> SpotForecastOptionsFlow:
         """Options flow for an existing entry."""
-        return SpotForecastOptionsFlow()
+        return SpotForecastOptionsFlow(config_entry)
 
 
 class SpotForecastOptionsFlow(OptionsFlow):
     """Surcharge and VAT, peak threshold, backfill window and automatic model updates."""
+
+    def __init__(self, entry: ConfigEntry) -> None:
+        # Own reference: OptionsFlow.config_entry is read-only from HA 2024.12 on.
+        self._entry = entry
 
     async def async_step_init(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
         """Show and save the options."""
@@ -107,7 +111,7 @@ class SpotForecastOptionsFlow(OptionsFlow):
                 options[CONF_PEAK_THRESHOLD] = threshold
             return self.async_create_entry(data=options)
 
-        options = self.config_entry.options
+        options = self._entry.options
         return self.async_show_form(
             step_id="init",
             data_schema=vol.Schema(
@@ -166,12 +170,12 @@ class SpotForecastOptionsFlow(OptionsFlow):
 
     def _zone_vat(self) -> float:
         """The VAT default of the entry's zone (19 % for DE-LU, 21 % for NL)."""
-        zone = ZONES.get(self.config_entry.data.get(CONF_ZONE, ""))
+        zone = ZONES.get(self._entry.data.get(CONF_ZONE, ""))
         return zone.default_vat if zone is not None else 0.0
 
     def _model_peak_threshold(self) -> float:
         """The active model's threshold in ct/kWh; never reads the model file itself."""
-        runtime_data = getattr(self.config_entry, "runtime_data", None)
+        runtime_data = getattr(self._entry, "runtime_data", None)
         if runtime_data is None:
             return DEFAULT_PEAK_THRESHOLD
         return round(runtime_data.model.peak_threshold / 10, 1)  # EUR/MWh -> ct/kWh

@@ -263,8 +263,7 @@ async def test_setup_and_unload_entry(
 
 
 def test_options_flow_does_not_set_config_entry_attribute() -> None:
-    """HA sets OptionsFlow.config_entry itself from 2024.11 (the floor) on; assigning it is
-    deprecated there and an error from 2025.12."""
+    """OptionsFlow.config_entry is read-only from HA 2024.12 on; keep our own reference."""
     tree = ast.parse(CONFIG_FLOW.read_text())
     options_flows = [
         node
@@ -288,4 +287,5 @@ def test_options_flow_does_not_set_config_entry_attribute() -> None:
         and isinstance(target.value, ast.Name)
         and target.value.id == "self"
     }
+    assert "_entry" in assigned
     assert "config_entry" not in assigned
