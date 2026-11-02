@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from datetime import datetime
 from typing import Any
-from zoneinfo import ZoneInfo
 
 from homeassistant.components.sensor import SensorDeviceClass, SensorEntity, SensorStateClass
 from homeassistant.const import EntityCategory
@@ -230,8 +229,8 @@ class DaySensor(_SpotSensor):
         self._offset = offset
 
     def _summary(self) -> dict[str, Any]:
-        tz = self.coordinator.zone.tz
-        today = dt_util.utcnow().astimezone(ZoneInfo(tz)).date()
+        tz = self.coordinator.tz
+        today = dt_util.utcnow().astimezone(tz).date()
         return day_summaries(self.coordinator.data.entries, tz, today, DAYS)[self._offset]
 
     @property

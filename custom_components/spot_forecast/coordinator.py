@@ -5,11 +5,10 @@ from __future__ import annotations
 import asyncio
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
-from datetime import date, datetime, time, timedelta
+from datetime import date, datetime, time, timedelta, tzinfo
 import logging
 import math
 from typing import Any
-from zoneinfo import ZoneInfo
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import EVENT_HOMEASSISTANT_STOP
@@ -116,8 +115,12 @@ class SpotForecastCoordinator(DataUpdateCoordinator[SpotData]):
         model: ModelFile,
         backfill: bytes,
         model_source: str,
+        tz: tzinfo,
     ) -> None:
         self.zone: Zone = ZONES[entry.data[CONF_ZONE]]
+        # the zone's time zone, loaded at setup: a first ZoneInfo(key) reads the tz database
+        # from disk, which must not happen on the event loop
+        self.tz = tz
         super().__init__(
             hass,
             _LOGGER,
@@ -265,7 +268,7 @@ class SpotForecastCoordinator(DataUpdateCoordinator[SpotData]):
         except Exception as err:  # noqa: BLE001 - the statistics stay as they are
             _LOGGER.warning("Cannot read the last price statistic: %s: %s", type(err).__name__, err)
             return ledger
-        last_day = None if last is None else last.astimezone(ZoneInfo(self.zone.tz)).date()
+        last_day = None if last is None else last.astimezone(self.tz).date()
         if last_day is not None and last_day >= max(written):
             return ledger
         _LOGGER.info(
@@ -465,7 +468,7 @@ class SpotForecastCoordinator(DataUpdateCoordinator[SpotData]):
         hydro = None
         if self.zone.hydro_extra:
             hydro = await fetch_hydro_history(session, self.zone, run_blocking=run_blocking)
-            check_hydro_history(hydro, anchor, self.zone)
+            await run_blocking(check_hydro_history, hydro, anchor, self.zone)
         try:
             slots = await run_blocking(
                 run_forecast,
@@ -498,7 +501,7 @@ class SpotForecastCoordinator(DataUpdateCoordinator[SpotData]):
         ledger.record_actual(prices)
         keep_from = self._midnight(self._today(now) - timedelta(days=MARKET_KEEP_DAYS))
         kept = [m for m in market if m.start >= keep_from]
-        return prices, kept, choose_anchor(now, market, self.zone.tz)
+        return prices, kept, choose_anchor(now, market, self.tz)
 
     def _build(self, now: datetime) -> SpotData:
         """``SpotData`` for ``now`` from what is held in memory; no network."""
@@ -506,7 +509,7 @@ class SpotForecastCoordinator(DataUpdateCoordinator[SpotData]):
         expired = is_expired(self._last_success, now)
         forecast = [] if expired or run is None else list(run.slots)
         if run is None:
-            anchor, issued_at = choose_anchor(now, self._market, self.zone.tz), None
+            anchor, issued_at = choose_anchor(now, self._market, self.tz), None
         else:
             anchor, issued_at = run.anchor, run.issued_at
         return SpotData(
@@ -525,7 +528,7 @@ class SpotForecastCoordinator(DataUpdateCoordinator[SpotData]):
                 forecast,
                 self._p90_off,
                 self._p10_off,
-                self.zone.tz,
+                self.tz,
                 self._midnight(self._today(now)),
             ),
             accuracy=self._accuracy,
@@ -535,10 +538,10 @@ class SpotForecastCoordinator(DataUpdateCoordinator[SpotData]):
         return _latest_live_run(self._ledger)
 
     def _today(self, now: datetime) -> date:
-        return now.astimezone(ZoneInfo(self.zone.tz)).date()
+        return now.astimezone(self.tz).date()
 
     def _midnight(self, day: date) -> datetime:
-        return datetime.combine(day, time(), ZoneInfo(self.zone.tz)).astimezone(dt_util.UTC)
+        return datetime.combine(day, time(), self.tz).astimezone(dt_util.UTC)
 
     # --- scheduling ---------------------------------------------------------
 
@@ -603,7 +606,7 @@ class SpotForecastCoordinator(DataUpdateCoordinator[SpotData]):
             self._unsub_run()
         run = self._latest_run()
         anchor_is_tomorrow = run is not None and run.anchor > self._today(now)
-        when = next_run(now, anchor_is_tomorrow, self.zone.tz, failures=self._failures)
+        when = next_run(now, anchor_is_tomorrow, self.tz, failures=self._failures)
         self._unsub_run = async_track_point_in_utc_time(
             self.hass,
             HassJob(self._on_run_due, f"{self.name} run", cancel_on_shutdown=True),

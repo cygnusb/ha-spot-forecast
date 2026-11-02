@@ -10,6 +10,7 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import Platform
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import ConfigEntryError
+from homeassistant.util import dt as dt_util
 
 from .const import (
     CONF_PEAK_THRESHOLD,
@@ -63,7 +64,11 @@ async def async_setup_entry(hass: HomeAssistant, entry: SpotForecastConfigEntry)
         )
     except (OSError, ModelMismatch) as e:
         raise ConfigEntryError(f"bundled model for {zone} cannot be loaded: {e}") from e
-    coordinator = SpotForecastCoordinator(hass, entry, model, backfill, source)
+    # loaded in the executor: a first ZoneInfo(key) reads the tz database from disk
+    tz = await dt_util.async_get_time_zone(ZONES[zone].tz)
+    if tz is None:
+        raise ConfigEntryError(f"time zone {ZONES[zone].tz} of {zone} is unknown")
+    coordinator = SpotForecastCoordinator(hass, entry, model, backfill, source, tz)
     await coordinator.async_config_entry_first_refresh()
     updater = ModelUpdater(hass, entry, coordinator)
     entry.runtime_data = SpotForecastRuntimeData(coordinator=coordinator, updater=updater)

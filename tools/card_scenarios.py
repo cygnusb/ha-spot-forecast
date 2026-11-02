@@ -251,7 +251,7 @@ def build(spec: Spec, zone: Zone = DE_LU) -> dict:
     # What the price source has published by now: through tomorrow after ~13:00.
     published_until = _midnight(today + 2 * _DAY if spec.now.hour >= 13 else today + _DAY, zone)
     market = [m for m in _market(zone.code) if m.start < published_until]
-    anchor = choose_anchor(now, market, zone.tz)
+    anchor = choose_anchor(now, market, ZoneInfo(zone.tz))
     if (anchor - today).days not in (0, 1):
         raise ValueError(f"research prices do not cover {today}")
     hourly = hourly_prices(market)
@@ -284,7 +284,9 @@ def build(spec: Spec, zone: Zone = DE_LU) -> dict:
         default_p90=model.p90_offsets,
         default_p10=model.p10_offsets,
     )
-    entries = prices_attribute(market, slots, p90_off, p10_off, zone.tz, _midnight(today, zone))
+    entries = prices_attribute(
+        market, slots, p90_off, p10_off, ZoneInfo(zone.tz), _midnight(today, zone)
+    )
     if sum(s.valid for s in slots) != len(slots):
         raise ValueError(f"weather archive incomplete for anchor {anchor}")
 

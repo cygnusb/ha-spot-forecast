@@ -3,8 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
-from datetime import UTC, date, datetime, time, timedelta
-from zoneinfo import ZoneInfo
+from datetime import UTC, date, datetime, time, timedelta, tzinfo
 
 from .ingest import MarketSlot
 
@@ -22,13 +21,12 @@ RETRY_AFTER = timedelta(minutes=20)  # after one failed run: tried again this so
 RETRY_MAX = timedelta(hours=3)  # the retry delay doubles per failure in a row, up to this
 
 
-def _local_midnight(day: date, zone: ZoneInfo) -> datetime:
+def _local_midnight(day: date, zone: tzinfo) -> datetime:
     return datetime.combine(day, time(0), zone).astimezone(UTC)
 
 
-def choose_anchor(now: datetime, market: Sequence[MarketSlot], tz: str) -> date:
+def choose_anchor(now: datetime, market: Sequence[MarketSlot], zone: tzinfo) -> date:
     """Tomorrow (local) if the market slots cover all of it without gaps, else today."""
-    zone = ZoneInfo(tz)
     today = now.astimezone(zone).date()
     tomorrow = today + timedelta(days=1)
     cursor = _local_midnight(tomorrow, zone)
@@ -52,13 +50,12 @@ def retry_delay(failures: int) -> timedelta:
     return min(RETRY_AFTER * 2 ** (failures - 1), RETRY_MAX)
 
 
-def next_run(now: datetime, anchor_is_tomorrow: bool, tz: str, failures: int = 0) -> datetime:
+def next_run(now: datetime, anchor_is_tomorrow: bool, zone: tzinfo, failures: int = 0) -> datetime:
     """Earliest of day-ahead poll, weather refresh and midnight rollover after ``now`` (UTC).
 
     After ``failures`` failed runs in a row (the last one at ``now``) no later than
     ``retry_delay(failures)`` from ``now``.
     """
-    zone = ZoneInfo(tz)
     now = now.astimezone(UTC)
     local = now.astimezone(zone)
     candidates: list[datetime] = [now + retry_delay(failures)] if failures else []

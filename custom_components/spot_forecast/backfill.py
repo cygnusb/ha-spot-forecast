@@ -9,10 +9,9 @@ from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, replace
-from datetime import UTC, date, datetime, time, timedelta
+from datetime import UTC, date, datetime, time, timedelta, tzinfo
 import logging
 from typing import TYPE_CHECKING
-from zoneinfo import ZoneInfo
 
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
@@ -75,7 +74,7 @@ async def run_backfill(
     """
     # the model and its backfill file together, before any await (see ``set_model``)
     model, backfill, zone = coordinator.model, coordinator.backfill, coordinator.zone
-    tz = ZoneInfo(zone.tz)
+    tz = coordinator.tz
     today = dt_util.utcnow().astimezone(tz).date()
     first = today - timedelta(days=days)
     start = max(model.train_cutoff, first)  # first recomputed target day
@@ -99,9 +98,11 @@ async def run_backfill(
     except SourceError as err:
         return _stopped(err, BackfillResult(0, 0, 0))
     prices = await run_blocking(hourly_prices, market)
-    in_window = [r for r in (_targets_in(run, first, model.train_cutoff) for run in bundled) if r]
+    in_window = await run_blocking(
+        _bundled_in_window, coordinator.ledger.runs, bundled, first, model.train_cutoff
+    )
     imported, finalized = await coordinator.async_add_history(
-        _merged(coordinator.ledger.runs, in_window), actual=_since(prices, _midnight(first, tz))
+        in_window, actual=_since(prices, _midnight(first, tz))
     )
 
     # through today: _recompute skips today while its prices are incomplete
@@ -129,7 +130,7 @@ async def run_backfill(
         except SourceError as err:
             return _stopped(err, BackfillResult(imported, 0, len(finalized)))
         if hydro is not None:
-            holes = [a for a in anchors if hydro_history_gaps(hydro, a, zone)]
+            holes = await run_blocking(_hydro_holes, hydro, anchors, zone)
             if holes:
                 _LOGGER.warning(
                     "%s backfill skips %d anchors (%s … %s): the Open-Meteo hydro history "
@@ -139,7 +140,7 @@ async def run_backfill(
         runs = []
         for anchor in anchors:  # one job per anchor: a cancelled backfill stops promptly
             run = await hass.async_add_executor_job(
-                _recompute, model, zone, anchor, prices, weather, start, extra_prices, hydro
+                _recompute, model, zone, tz, anchor, prices, weather, start, extra_prices, hydro
             )
             if run is not None:
                 runs.append(run)
@@ -162,6 +163,7 @@ def _stopped(err: SourceError, result: BackfillResult) -> BackfillResult:
 def _recompute(
     model: ModelFile,
     zone: Zone,
+    tz: tzinfo,
     anchor: date,
     prices: Hourly,
     weather: Mapping[int, Mapping[str, Hourly]],
@@ -176,7 +178,6 @@ def _recompute(
     forecast, which is logged and skips only this anchor (as a live run keeps the last
     forecast).
     """
-    tz = ZoneInfo(zone.tz)
     end = _midnight(anchor + _DAY, tz)
     known = _until(prices, end)  # what was published by then
     extra = {code: _until(s, end) for code, s in (extra_prices or {}).items()}
@@ -196,6 +197,20 @@ def _recompute(
     issued = datetime.combine(anchor, time(ISSUE_HOUR), tz).astimezone(UTC)
     kept = tuple(s for s in slots if anchor + timedelta(days=s.h) >= first_target)
     return Run(anchor, issued, model.version, kept, True)
+
+
+def _bundled_in_window(
+    stored: Mapping[date, Run], bundled: Sequence[Run], first: date, end: date
+) -> list[Run]:
+    """The bundled runs cut to the target days in [first, end), merged with ``stored``
+    (blocking)."""
+    in_window = [r for r in (_targets_in(run, first, end) for run in bundled) if r]
+    return _merged(stored, in_window)
+
+
+def _hydro_holes(history: Mapping[str, Hourly], anchors: Sequence[date], zone: Zone) -> list[date]:
+    """The anchors whose ``HYDRO_DAYS`` of hydro history have a hole (blocking)."""
+    return [a for a in anchors if hydro_history_gaps(history, a, zone)]
 
 
 def _targets_in(run: Run, first: date, end: date) -> Run | None:
@@ -234,7 +249,7 @@ def _merged(stored: Mapping[date, Run], runs: Sequence[Run]) -> list[Run]:
     return out
 
 
-def _midnight(day: date, tz: ZoneInfo) -> datetime:
+def _midnight(day: date, tz: tzinfo) -> datetime:
     return datetime.combine(day, time(), tz).astimezone(UTC)
 
 
