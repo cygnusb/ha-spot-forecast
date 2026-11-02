@@ -98,9 +98,11 @@ async def run_backfill(
     except SourceError as err:
         return _stopped(err, BackfillResult(0, 0, 0))
     prices = await run_blocking(hourly_prices, market)
-    in_window = [r for r in (_targets_in(run, first, model.train_cutoff) for run in bundled) if r]
+    in_window = await run_blocking(
+        _bundled_in_window, coordinator.ledger.runs, bundled, first, model.train_cutoff
+    )
     imported, finalized = await coordinator.async_add_history(
-        _merged(coordinator.ledger.runs, in_window), actual=_since(prices, _midnight(first, tz))
+        in_window, actual=_since(prices, _midnight(first, tz))
     )
 
     # through today: _recompute skips today while its prices are incomplete
@@ -128,7 +130,7 @@ async def run_backfill(
         except SourceError as err:
             return _stopped(err, BackfillResult(imported, 0, len(finalized)))
         if hydro is not None:
-            holes = [a for a in anchors if hydro_history_gaps(hydro, a, zone)]
+            holes = await run_blocking(_hydro_holes, hydro, anchors, zone)
             if holes:
                 _LOGGER.warning(
                     "%s backfill skips %d anchors (%s … %s): the Open-Meteo hydro history "
@@ -195,6 +197,20 @@ def _recompute(
     issued = datetime.combine(anchor, time(ISSUE_HOUR), tz).astimezone(UTC)
     kept = tuple(s for s in slots if anchor + timedelta(days=s.h) >= first_target)
     return Run(anchor, issued, model.version, kept, True)
+
+
+def _bundled_in_window(
+    stored: Mapping[date, Run], bundled: Sequence[Run], first: date, end: date
+) -> list[Run]:
+    """The bundled runs cut to the target days in [first, end), merged with ``stored``
+    (blocking)."""
+    in_window = [r for r in (_targets_in(run, first, end) for run in bundled) if r]
+    return _merged(stored, in_window)
+
+
+def _hydro_holes(history: Mapping[str, Hourly], anchors: Sequence[date], zone: Zone) -> list[date]:
+    """The anchors whose ``HYDRO_DAYS`` of hydro history have a hole (blocking)."""
+    return [a for a in anchors if hydro_history_gaps(history, a, zone)]
 
 
 def _targets_in(run: Run, first: date, end: date) -> Run | None:

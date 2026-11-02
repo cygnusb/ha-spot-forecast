@@ -1028,11 +1028,13 @@ async def test_fall_back_day_end_to_end(
     assert hass.states.get(PEAK).state in (STATE_ON, STATE_OFF)
 
 
+@pytest.mark.parametrize("zone", ["DE-LU", "NO2"])  # NO2 also checks its hydro history
 async def test_the_time_zone_is_never_loaded_on_the_event_loop(
     hass_with_recorder: HomeAssistant,
     set_up: SetUp,
     freezer: FrozenDateTimeFactory,
     monkeypatch: pytest.MonkeyPatch,
+    zone: str,
 ) -> None:
     """A first ``ZoneInfo(key)`` reads the tz database from disk: blocking I/O.
 
@@ -1054,13 +1056,14 @@ async def test_the_time_zone_is_never_loaded_on_the_event_loop(
     # loop, as ZoneInfo caches it.
     with patch.object(zoneinfo._common, "load_data", spy):
         zoneinfo.ZoneInfo.clear_cache()
-        entry = await set_up({CONF_BACKFILL_DAYS: 30})
+        entry = await set_up({CONF_BACKFILL_DAYS: 30}, zone=zone)
         zoneinfo.ZoneInfo.clear_cache()
         await advance(hass, freezer, T10 + timedelta(minutes=15))  # the tick
         zoneinfo.ZoneInfo.clear_cache()
         await advance(hass, freezer, T14)  # a scheduled run
         zoneinfo.ZoneInfo.clear_cache()
-        assert hass.states.get("sensor.spot_forecast_de_lu_day_1").state != STATE_UNKNOWN
+        day_1 = f"sensor.spot_forecast_{zone.lower().replace('-', '_')}_day_1"
+        assert hass.states.get(day_1).state != STATE_UNKNOWN
 
     coordinator = entry.runtime_data.coordinator
     assert coordinator.backfill_result is not None and coordinator.backfill_error is None

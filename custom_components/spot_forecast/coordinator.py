@@ -468,7 +468,7 @@ class SpotForecastCoordinator(DataUpdateCoordinator[SpotData]):
         hydro = None
         if self.zone.hydro_extra:
             hydro = await fetch_hydro_history(session, self.zone, run_blocking=run_blocking)
-            check_hydro_history(hydro, anchor, self.zone)
+            await run_blocking(check_hydro_history, hydro, anchor, self.zone)
         try:
             slots = await run_blocking(
                 run_forecast,
