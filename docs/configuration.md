@@ -45,7 +45,7 @@ right after setup and without access to GitHub.
 
 | Option | Default | Range | What it does |
 |---|---|---|---|
-| Grid fees and taxes | 0 | 0–1 EUR/kWh, to 0.0001 | Gross amount per kWh, VAT included, added for the [total-price sensor](entities.md#total-price) and the "mit Abgaben" view of the [forecast card](cards.md#forecast-card). 0 means no total-price sensor. |
+| Grid fees and taxes | 0 | 0–1 EUR/kWh, to 0.0001 | Gross amount per kWh, VAT included, added for the [total-price sensor](entities.md#total-price) and the "incl. fees" view of the [forecast card](cards.md#forecast-card). 0 means no total-price sensor. |
 | VAT on the market price | the zone's (19 % DE-LU, 21 % NL, 25 % DK1, DK2 and NO2) | 0–30 %, in steps of 0.1 | Value-added tax charged on the exchange price for the total price. |
 | Peak price threshold | the model's, 21.2 ct/kWh | 0–100 ct/kWh | Wholesale price at or above which an hour counts as a price peak, for the [peak-risk sensor](entities.md#peak-risk). |
 | Backfill window (days) | 60 | 0–180 | How many past days of forecasts are reconstructed on first start, so the look-back card and the calibration have history. 0 turns the backfill off. |
