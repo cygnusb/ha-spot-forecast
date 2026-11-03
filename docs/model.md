@@ -199,8 +199,13 @@ market shifts, as with the gas price rise in 2026, it falls to the naive
 baseline within about two quarters. So the models are retrained every month,
 and they reach your install **separately from integration releases**:
 
-* A GitHub Actions workflow trains every zone, one after the other, on all
-  data through the end of the last month on the 3rd of each month. DE-LU
+* On the 3rd of each month a host of the project fetches the new prices and
+  weather forecasts and publishes them as the
+  [`training-data` release](https://github.com/cygnusb/ha-spot-forecast/releases/tag/training-data).
+  GitHub Actions runners are too often throttled by the weather API, so they
+  no longer fetch anything.
+* A GitHub Actions workflow then trains every zone, one after the other, on
+  that data through the end of the last month. DE-LU
   comes first: DK1 and DK2 embed the DE-LU model of the same run (also when
   DE-LU's own gate fails) and are skipped that month if DE-LU's training
   errors.

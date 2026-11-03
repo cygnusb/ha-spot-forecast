@@ -3,8 +3,9 @@
 python tools/check_model_age.py [--manifest-url URL] [--release-api-url URL] [--max-age-days N]
 
 Run daily by the Validate workflow. Training runs monthly, so a zone whose ``train_cutoff`` is
-more than N days (default 45) old means it stopped: the schedule was switched off, or data-lag
-or gate-failure issues went unanswered. Exits 1 then, which turns the run red. A cutoff more
+more than N days (default 45) old means it stopped: the monthly refresh on the data host
+(training/refresh_data.sh) did not run, or data-lag, refresh or gate-failure issues went
+unanswered. Exits 1 then, which turns the run red. A cutoff more
 than ``FUTURE_DAYS`` in the future fails as well (the integration does not use such a model),
 and so does a manifest in another format.
 
