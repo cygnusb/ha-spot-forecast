@@ -30,12 +30,15 @@ from .constants import OFFSETS, WEATHER_MODEL
 START = dt.date(2024, 3, 1)
 
 
-def _get(url: str, params: dict, retries: int = 5) -> dict:
+def _get(url: str, params: dict, retries: int = 8) -> dict:
+    """GET JSON, with retries. A server error waits as long as a timeout: an overloaded
+    server answers both (Open-Meteo on 2026-11-03), 30 s growing to 3.5 min, 14 min in all."""
     for attempt in range(retries):
+        last = attempt == retries - 1
         try:
             r = requests.get(url, params=params, timeout=120)
         except (requests.Timeout, requests.ConnectionError) as err:
-            if attempt == retries - 1:
+            if last:
                 raise
             wait = 30 * (attempt + 1)
             print(f"  {type(err).__name__} - retry in {wait}s", file=sys.stderr)
@@ -43,7 +46,14 @@ def _get(url: str, params: dict, retries: int = 5) -> dict:
             continue
         if r.status_code == 200:
             return r.json()
-        wait = 60 if r.status_code == 429 else 5 * (attempt + 1)
+        if last:
+            break
+        if r.status_code == 429:
+            wait = 60
+        elif r.status_code >= 500:
+            wait = 30 * (attempt + 1)
+        else:
+            wait = 5 * (attempt + 1)
         print(f"  HTTP {r.status_code} {r.text[:200]} - retry in {wait}s", file=sys.stderr)
         time.sleep(wait)
     r.raise_for_status()
