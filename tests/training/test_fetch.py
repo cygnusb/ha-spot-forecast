@@ -138,6 +138,36 @@ def test_get_gives_up_after_the_last_timeout(monkeypatch: pytest.MonkeyPatch) ->
         fetch._get("https://example.org", {}, retries=3)
 
 
+class _Overloaded:
+    status_code = 503
+    text = '{"error":true,"reason":"The service is overloaded"}'
+
+    def raise_for_status(self) -> None:
+        raise fetch.requests.HTTPError("503 Server Error")
+
+
+def test_get_waits_for_an_overloaded_server_as_for_a_timeout(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    replies = [_Overloaded(), _Overloaded(), _Ok()]
+    waits: list[float] = []
+    monkeypatch.setattr(fetch.requests, "get", lambda *_a, **_k: replies.pop(0))
+    monkeypatch.setattr(fetch.time, "sleep", waits.append)
+    assert fetch._get("https://example.org", {}) == {"ok": True}
+    assert waits == [30, 60]
+
+
+def test_get_gives_up_after_the_last_server_error_without_waiting(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    waits: list[float] = []
+    monkeypatch.setattr(fetch.requests, "get", lambda *_a, **_k: _Overloaded())
+    monkeypatch.setattr(fetch.time, "sleep", waits.append)
+    with pytest.raises(fetch.requests.HTTPError):
+        fetch._get("https://example.org", {}, retries=3)
+    assert waits == [30, 60]
+
+
 def test_weather_sets_fetch_every_point_once():
     """DE-LU's two requests as before, then only the five NL points it does not share."""
     sets = fetch.weather_sets([DE_LU, NL])
