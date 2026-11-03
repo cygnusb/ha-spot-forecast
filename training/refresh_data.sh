@@ -99,7 +99,8 @@ if [ ! -d "$DATA/raw" ]; then
 fi
 
 step="fetching the new raw data"
-(cd "$REPO" && "$VENV/bin/python" -m training.fetch --raw "$DATA/raw") > "$log" 2>&1
+(cd "$REPO" && PYTHONUNBUFFERED=1 "$VENV/bin/python" -m training.fetch --raw "$DATA/raw") \
+  > "$log" 2>&1
 tail -n 3 "$log"
 
 step="archiving the raw data"
