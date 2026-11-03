@@ -26,8 +26,8 @@
       "pi": "Leicht genug für einen Raspberry Pi",
       "home_assistant": "Home Assistant 2024.11+"
     },
-    "shot_alt": "Die Spot-Forecast-Karte in Home Assistant: bekannte Preise vom 13. bis 15. Oktober 2026 als schwarze Stufenlinie, danach sechs Prognosetage als blaue Linie mit schraffiertem rotem Spitzenrisiko darüber und schraffierter grüner Tiefpreis-Chance darunter. Über jedem Tag steht das Maximum und an jedem Prognosetag eine Warnung wie „bis 37“ für das Spitzenrisiko.",
-    "shot_caption": "Die Prognose-Karte am 14. Oktober 2026, zwei Wochen nach dem Trainingsstichtag des mitgelieferten Modells, also außerhalb der Trainingsdaten, gezeichnet aus dem mitgelieferten Modell und echten Preisen. Die Linie in Textfarbe ist bekannt, blau die Prognose, rot schraffiert reicht bis zum Spitzenrisiko (P90), grün schraffiert bis zum Tiefpreis (P10). ▲ und ▼ markieren die vier teuersten und günstigsten Stunden jedes Tages."
+    "shot_alt": "Die Spot-Forecast-Karte in Home Assistant: bekannte Preise vom 1. bis 3. November 2026 als schwarze Stufenlinie, danach sechs Prognosetage bis zum 9. November als blaue Linie mit schraffiertem rotem Spitzenrisiko darüber und schraffierter grüner Tiefpreis-Chance darunter. Über jedem Tag steht das Maximum und an jedem Prognosetag das Spitzenrisiko wie „⚠ 69“.",
+    "shot_caption": "Die Prognose-Karte einer laufenden Installation am 2. November 2026, einen Monat nach dem Trainingsstichtag des Modells, also außerhalb der Trainingsdaten. Die Linie in Textfarbe ist bekannt, blau die Prognose, rot schraffiert reicht bis zum Spitzenrisiko (P90), grün schraffiert bis zum Tiefpreis (P10). ▲ und ▼ markieren die vier teuersten und günstigsten Stunden jedes Tages."
   },
   "ruler": {
     "label": "Was der Preissensor enthält",
@@ -137,7 +137,7 @@
   "cards": {
     "title": "Zwei Karten fürs Dashboard",
     "lede": "Beide sind YAML für die <a href=\"https://github.com/dbuezas/lovelace-plotly-graph-card\">Plotly Graph Card</a>, geschrieben für v4.0.2: in eine manuelle Karte einfügen. Die Prognose-Karte steht oben auf dieser Seite.",
-    "lookback_alt": "Die Rückblick-Karte in Home Assistant: der Börsenpreis als dunkle Linie vom 15. September bis 14. Oktober 2026 und die Prognose von zwei Tagen vorher in Orange, die Lücke dazwischen rot gefüllt. Knöpfe darüber wählen D+1 bis D+6 oder alle und 7 Tage bis 6 Monate.",
+    "lookback_alt": "Die Rückblick-Karte in Home Assistant: der Börsenpreis als dunkle Linie vom 4. Oktober bis 2. November 2026 und die Prognose von zwei Tagen vorher in Orange, die Lücke dazwischen rot gefüllt. Knöpfe darüber wählen D+1 bis D+6 oder alle und 7 Tage bis 6 Monate.",
     "lookback_caption": "Die Rückblick-Karte: die Prognose von zwei Tagen vorher gegen den Börsenpreis, mit der mittleren Abweichung im gezeigten Zeitraum. Sie liest die Langzeitstatistiken, die die Integration vom ersten Tag an füllt, Backfill eingeschlossen.",
     "entities_title": "Was du in Home Assistant bekommst",
     "entities": {

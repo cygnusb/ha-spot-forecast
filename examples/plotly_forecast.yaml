@@ -10,14 +10,18 @@
 # forecast days (blue median), the peak risk (hatched red up to P90) and the low-price
 # chance (hatched green down to P10), the 4 dearest (▲) and cheapest (▼) hours of each
 # day, nights from sun.sun and a dotted "now" line. Above each day: weekday, date, the
-# maximum and "⚠ bis NN" when the peak risk crosses the threshold of the peak-risk
+# maximum and "⚠ up to NN" when the peak risk crosses the threshold of the peak-risk
 # sensor (the option "peak threshold" of the integration). Narrow cards get a
-# shorter header ("Mo 26." / "27 ct" / "⚠ 25", below 480 px only the weekday).
+# shorter header ("Mon 26" / "27 ct" / "⚠ 25", below 480 px only the weekday).
+#
+# Language: labels, numbers and dates follow Home Assistant's language, German when
+# it starts with "de", English otherwise. Every label is in the table `T` in the first
+# filter below; the other templates read the chosen language as vars.sf.t.
 #
 # With the integration's option "grid fees and taxes" set (attribute `surcharge` of the
-# price sensor), two buttons top right switch between the market price ("Börse") and
-# the total price ("mit Abgaben": the market price with VAT, attribute `vat`, plus the
-# surcharge, as the total-price sensor); the peak-risk warning keeps comparing the
+# price sensor), two buttons top right switch between the market price ("Exchange")
+# and the total price ("incl. fees": the market price with VAT, attribute `vat`, plus
+# the surcharge, as the total-price sensor); the peak-risk warning keeps comparing the
 # market price with its threshold. As in the look-back card, the choice is
 # kept in `window.spotForecastPrices`, as the card redraws itself from this YAML after a
 # click: it holds until the page is reloaded and is shared by all forecast cards on it.
@@ -58,7 +62,47 @@ entities:
             const PRICE = "sensor.spot_forecast_de_lu_price";
             const PEAK = "binary_sensor.spot_forecast_de_lu_peak_risk";
             const H = 3600000;
-            const WD = ["So", "Mo", "Di", "Mi", "Do", "Fr", "Sa"];
+            // Labels per language: German for "de", English otherwise.
+            const T = {
+              en: {
+                locale: "en-US", separators: ".,",
+                wd: ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"],
+                mon: ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"],
+                // day header date: full ("26 Oct"), dense ("26")
+                date: (d, m, dense) => (dense ? `${+d}` : `${+d} ${T.en.mon[m - 1]}`),
+                tick: "%-d %b", tickNarrow: "%-d", hover: "%a %-d %b %H:%M",
+                title: "Electricity price DE-LU",
+                unitFees: (ct) => `ct/kWh gross incl. ${ct} ct fees`, unit: "ct/kWh excl. fees",
+                price: "Price", exchangePrice: "Exchange price", priceFees: "Price incl. fees",
+                andForecast: "and forecast", hoverExchange: "Exchange",
+                btnExchange: "Exchange", btnFees: "incl. fees", btnFeesNarrow: "+ fees",
+                low: "as low as %{y:.1f} ct", high: "up to %{y:.1f} ct",
+                forecast: "Forecast", lowChance: "Low-price chance (P10)", peakRisk: "Peak risk (P90)",
+                dear: "4 dearest hours", cheap: "4 cheapest hours",
+                max: "max", upTo: "up to ", now: "now ", fcFrom: " forecast from here",
+                fcFromNarrow: " forecast", fcNone: "Forecast currently unavailable",
+                denseWidth: 70,
+              },
+              de: {
+                locale: "de-DE", separators: ",.",
+                wd: ["So", "Mo", "Di", "Mi", "Do", "Fr", "Sa"],
+                // day header date: full ("26.10."), dense ("26.")
+                date: (d, m, dense) => (dense ? `${+d}.` : `${+d}.${String(m).padStart(2, "0")}.`),
+                tick: "%d.%m.", tickNarrow: "%d.", hover: "%a %d.%m. %H:%M",
+                title: "Strompreis DE-LU",
+                unitFees: (ct) => `ct/kWh brutto mit ${ct} ct Abgaben`, unit: "ct/kWh ohne Abgaben",
+                price: "Preis", exchangePrice: "Börsenpreis", priceFees: "Preis mit Abgaben",
+                andForecast: "und Prognose", hoverExchange: "Börse",
+                btnExchange: "Börse", btnFees: "mit Abgaben", btnFeesNarrow: "+ Abgaben",
+                low: "ab %{y:.1f} ct möglich", high: "bis %{y:.1f} ct möglich",
+                forecast: "Prognose", lowChance: "Tiefpreis-Chance (P10)", peakRisk: "Spitzenrisiko (P90)",
+                dear: "4 teuerste Stunden", cheap: "4 günstigste Stunden",
+                max: "max", upTo: "bis ", now: "jetzt ", fcFrom: " ab hier Prognose",
+                fcFromNarrow: " Prognose", fcNone: "Prognose zurzeit nicht verfügbar",
+                denseWidth: 62,
+              },
+            };
+            const t = String(hass.locale?.language ?? hass.language ?? "en").toLowerCase().startsWith("de") ? T.de : T.en;
             // Wall clock in the time zone the card draws in ("server" or the browser's).
             const zone = hass.locale?.time_zone === "server" ? hass.config?.time_zone : undefined;
             const fmt = new Intl.DateTimeFormat("en-CA", {
@@ -167,9 +211,10 @@ entities:
             const width = get("layout.width") || 600;
             const shown = dayList.filter((d) => d >= first);
             vars.sf = {
-              C, rgba, dark, wall, addDays, now: wall(now), width, narrow: width < 480,
-              // Under ~62 px per day the full day header ("Mo 26.10." / "max 27 ct") runs together.
-              dense: (width - 60) / Math.max(shown.length, 1) < 62,
+              t, C, rgba, dark, wall, addDays, now: wall(now), width, narrow: width < 480,
+              // Under ~62 px per day (70 in English) the full day header ("Mo 26.10.",
+              // "Mon 26 Oct" / "max 27 ct") runs together.
+              dense: (width - 60) / Math.max(shown.length, 1) < t.denseWidth,
               threshold, fcStart, hasForecast: forecast.length > 0,
               fees: { available: surcharge > 0, on: withFees, ct: surcharge },
               range: [first + " 00:00", addDays(last, 1) + " 00:00"],
@@ -184,12 +229,12 @@ entities:
             return { xs: knownLine.map((p) => p.w), ys: knownLine.map((p) => p.v) };
           }
     # after the filters: they set vars.sf
-    name: '$ex vars.sf.fees.on ? "Preis mit Abgaben" : "Börsenpreis"'
+    name: '$ex vars.sf.fees.on ? vars.sf.t.priceFees : vars.sf.t.exchangePrice'
     line:
       color: $ex css_vars['primary-text-color']
       width: 2.4
       shape: hv
-    hovertemplate: '$ex (vars.sf.fees.on ? "Preis" : "Börse") + " %{y:.1f} ct<extra></extra>"'
+    hovertemplate: '$ex (vars.sf.fees.on ? vars.sf.t.price : vars.sf.t.hoverExchange) + " %{y:.1f} ct<extra></extra>"'
   # Low-price chance: hatched in the cheap colour from P10 up to the median.
   - entity: ""
     name: P10
@@ -201,9 +246,9 @@ entities:
       color: $ex vars.sf.rgba(vars.sf.C.cheap, 0.5)
       width: 0.8
       shape: hv
-    hovertemplate: "ab %{y:.1f} ct möglich<extra></extra>"
+    hovertemplate: $ex vars.sf.t.low + "<extra></extra>"
   - entity: ""
-    name: Tiefpreis-Chance (P10)
+    name: $ex vars.sf.t.lowChance
     legendrank: 4
     x: $ex vars.sf.fc.x
     y: $ex vars.sf.fc.y
@@ -233,7 +278,7 @@ entities:
       shape: hv
     hoverinfo: skip
   - entity: ""
-    name: Spitzenrisiko (P90)
+    name: $ex vars.sf.t.peakRisk
     legendrank: 3
     x: $ex vars.sf.fc.x
     y: $ex vars.sf.fc.p90
@@ -251,9 +296,9 @@ entities:
       color: $ex vars.sf.rgba(vars.sf.C.risk, 0.55)
       width: 1
       shape: hv
-    hovertemplate: "bis %{y:.1f} ct möglich<extra></extra>"
+    hovertemplate: $ex vars.sf.t.high + "<extra></extra>"
   - entity: ""
-    name: Prognose
+    name: $ex vars.sf.t.forecast
     legendrank: 2
     x: $ex vars.sf.fc.x
     y: $ex vars.sf.fc.y
@@ -263,9 +308,9 @@ entities:
       color: $ex vars.sf.C.blue
       width: 2.4
       shape: hv
-    hovertemplate: "Prognose %{y:.1f} ct<extra></extra>"
+    hovertemplate: $ex vars.sf.t.forecast + " %{y:.1f} ct<extra></extra>"
   - entity: ""
-    name: 4 teuerste Stunden
+    name: $ex vars.sf.t.dear
     legendrank: 5
     mode: markers
     x: $ex vars.sf.dear.x
@@ -279,7 +324,7 @@ entities:
         color: $ex css_vars['card-background-color']
     hoverinfo: skip
   - entity: ""
-    name: 4 günstigste Stunden
+    name: $ex vars.sf.t.cheap
     legendrank: 6
     mode: markers
     x: $ex vars.sf.cheap.x
@@ -294,20 +339,20 @@ entities:
     hoverinfo: skip
 layout:
   height: 470
-  separators: ",."
+  separators: $ex vars.sf.t.separators
   hovermode: x unified
   dragmode: false
   title:
     text: |
       $fn ({ vars, css_vars }) => {
-        const fees = vars.sf.fees;
-        const f1 = (v) => v.toLocaleString("de-DE", { minimumFractionDigits: 1, maximumFractionDigits: 1 });
-        const unit = fees.on ? `ct/kWh brutto mit ${f1(fees.ct)} ct Abgaben` : "ct/kWh ohne Abgaben";
+        const { fees, t } = vars.sf;
+        const f1 = (v) => v.toLocaleString(t.locale, { minimumFractionDigits: 1, maximumFractionDigits: 1 });
+        const unit = fees.on ? t.unitFees(f1(fees.ct)) : t.unit;
         // under ~560 px the full line would run under the buttons
         const sub = fees.available && vars.sf.width < 560
           ? unit
-          : `${fees.on ? "Preis" : "Börsenpreis"} und Prognose, ${unit}`;
-        return `<b>Strompreis DE-LU</b><br><span style="font-size:12px;color:${css_vars["secondary-text-color"]}">${sub}</span>`;
+          : `${fees.on ? t.price : t.exchangePrice} ${t.andForecast}, ${unit}`;
+        return `<b>${t.title}</b><br><span style="font-size:12px;color:${css_vars["secondary-text-color"]}">${sub}</span>`;
       }
     x: 0
     xref: paper
@@ -345,8 +390,9 @@ layout:
     type: date
     range: $ex vars.sf.range
     dtick: 86400000
-    tickformat: '$ex vars.sf.narrow ? "%d." : "%d.%m."'
-    hoverformat: "%a %d.%m. %H:%M"
+    # %a / %b: Plotly names weekdays and months in config.locale (set at the end)
+    tickformat: '$ex vars.sf.narrow ? vars.sf.t.tickNarrow : vars.sf.t.tick'
+    hoverformat: $ex vars.sf.t.hover
     showgrid: true
     gridcolor: rgba(127, 127, 127, 0.16)
     fixedrange: true
@@ -358,7 +404,7 @@ layout:
     zerolinecolor: rgba(127, 127, 127, 0.45)
     gridcolor: rgba(127, 127, 127, 0.16)
     fixedrange: true
-  # "Börse" / "mit Abgaben", only with a surcharge set; see the header comment.
+  # "Exchange" / "incl. fees", only with a surcharge set; see the header comment.
   updatemenus: |
     $fn ({ vars, css_vars }) => {
       const sf = vars.sf;
@@ -377,21 +423,21 @@ layout:
         pad: { l: 0, r: 0, t: 0, b: 0 },
         bgcolor: css_vars["card-background-color"], bordercolor: "rgba(127, 127, 127, 0.4)", borderwidth: 1,
         font: { size: sf.narrow ? 11 : 12, color: css_vars["primary-text-color"] },
-        buttons: [button("Börse", false), button(sf.narrow ? "+ Abgaben" : "mit Abgaben", true)],
+        buttons: [button(sf.t.btnExchange, false), button(sf.narrow ? sf.t.btnFeesNarrow : sf.t.btnFees, true)],
       }];
     }
   annotations: |
     $fn ({ vars, css_vars }) => {
       const sf = vars.sf;
-      const WD = ["So", "Mo", "Di", "Mi", "Do", "Fr", "Sa"];
-      const f0 = (v) => Math.round(v).toLocaleString("de-DE");
+      const t = sf.t;
+      const f0 = (v) => Math.round(v).toLocaleString(t.locale);
       const out = sf.days.map((day) => {
-        const wd = WD[new Date(day.d + "T12:00:00Z").getUTCDay()];
-        const date = `${day.d.slice(8, 10)}.${day.d.slice(5, 7)}.`;
+        const wd = t.wd[new Date(day.d + "T12:00:00Z").getUTCDay()];
+        const date = t.date(day.d.slice(8, 10), +day.d.slice(5, 7), sf.dense);
         const risk = day.fc && sf.threshold != null && day.p90 > sf.threshold;
-        const warn = risk ? `<span style="color:${sf.C.risk}">⚠ ${sf.narrow || sf.dense ? "" : "bis "}${f0(day.p90)}</span>` : " ";
-        const head = sf.narrow ? `<b>${wd}</b>` : sf.dense ? `<b>${wd} ${date.slice(0, 3)}</b>` : `<b>${wd} ${date}</b>`;
-        const max = sf.narrow ? f0(day.max) : sf.dense ? `${f0(day.max)} ct` : `max ${f0(day.max)} ct`;
+        const warn = risk ? `<span style="color:${sf.C.risk}">⚠ ${sf.narrow || sf.dense ? "" : t.upTo}${f0(day.p90)}</span>` : " ";
+        const head = sf.narrow ? `<b>${wd}</b>` : `<b>${wd} ${date}</b>`;
+        const max = sf.narrow ? f0(day.max) : sf.dense ? `${f0(day.max)} ct` : `${t.max} ${f0(day.max)} ct`;
         return {
           x: day.d + " 12:00", xref: "x", y: 1, yref: "paper", yanchor: "bottom",
           showarrow: false, align: "center",
@@ -401,20 +447,20 @@ layout:
       });
       out.push({
         x: sf.now, xref: "x", y: 0, yref: "paper", xanchor: "right", yanchor: "bottom",
-        showarrow: false, font: { size: 10, color: css_vars["secondary-text-color"] }, text: "jetzt ",
+        showarrow: false, font: { size: 10, color: css_vars["secondary-text-color"] }, text: t.now,
       });
       if (sf.fcStart) {
         out.push({
           x: sf.fcStart, xref: "x", y: 0, yref: "paper", xanchor: "left", yanchor: "bottom",
           showarrow: false, font: { size: 10, color: css_vars["secondary-text-color"] },
-          text: sf.narrow ? " Prognose" : " ab hier Prognose",
+          text: sf.narrow ? t.fcFromNarrow : t.fcFrom,
         });
       } else {
         // the forecast was dropped (no successful run for 36 h): say so instead of leaving a gap
         out.push({
           x: 1, xref: "paper", y: 0, yref: "paper", xanchor: "right", yanchor: "bottom",
           showarrow: false, font: { size: 10, color: css_vars["secondary-text-color"] },
-          text: "Prognose zurzeit nicht verfügbar",
+          text: t.fcNone,
         });
       }
       return out;
@@ -445,6 +491,9 @@ layout:
       return shapes;
     }
 config:
+  # Plotly's own weekday and month names (%a, %b) in the card's language; the card
+  # would pass any HA language, but the labels here are German or English
+  locale: '$ex String(hass.locale?.language ?? hass.language ?? "en").toLowerCase().startsWith("de") ? "de" : "en"'
   displayModeBar: false
   scrollZoom: false
   doubleClick: false

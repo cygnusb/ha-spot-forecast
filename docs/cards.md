@@ -9,8 +9,10 @@ the [Plotly Graph Card](https://github.com/dbuezas/lovelace-plotly-graph-card)
 2. On a dashboard: *Add card* → *Manual*, and paste one of the YAML files.
 
 Both cards read only the integration's fixed entity ids, so they work
-unchanged on any instance language. Their labels are German; the comments in
-the YAML are English and point at every label.
+unchanged on any instance language. Their labels, numbers and dates follow the
+Home Assistant language: German when it starts with `de`, English otherwise.
+Every label sits in the table `T` at the top of each card's first filter.
+Below, labels are given in English with the German one in parentheses.
 
 The cards are written for the zone DE-LU. For another zone, replace every
 `de_lu` in the YAML with the zone's id: `nl`, `dk1`, `dk2` or `no2` (as in
@@ -32,21 +34,23 @@ One time axis from yesterday to the end of the forecast:
 * the **low-price chance** hatched green from P10 up to the expected price,
   so likely negative hours reach below the zero line;
 * per day the **4 dearest (▲) and 4 cheapest (▼) hours**;
-* above each day its weekday, date and maximum, and "⚠ bis NN" in red when
-  the peak risk crosses the threshold of the
+* above each day its weekday, date and maximum, and "⚠ up to NN" ("⚠ bis NN")
+  in red when the peak risk crosses the threshold of the
   [peak-risk sensor](entities.md#peak-risk); on a narrow card the header
-  shortens step by step to "Mo 26." / "27 ct" / "⚠ 25" and then to the weekday
-  alone;
-* nights shaded from `sun.sun`, and a dotted "jetzt" line where the forecast
-  begins;
+  shortens step by step to "Mon 26" / "27 ct" / "⚠ 25" ("Mo 26." / …) and then
+  to the weekday alone;
+* nights shaded from `sun.sun`, and a dotted "now" ("jetzt") line where the
+  forecast begins;
 * with the option [grid fees and taxes](configuration.md#options) set, two
-  buttons top right: "Börse" (the default) and "mit Abgaben", which shows every
+  buttons top right: "Exchange" ("Börse", the default) and "incl. fees" ("mit
+  Abgaben"), which shows every
   price, band and day maximum as the [total price](entities.md#total-price):
   VAT on the exchange price plus the surcharge. The "⚠" warning still
   compares the exchange price with the threshold. The choice holds until the
   page is reloaded.
 
-Prices are shown in ct/kWh (EUR/kWh × 100) with German number formatting.
+Prices are shown in ct/kWh (EUR/kWh × 100), with English or German number
+formatting ("3.2 ct" / "3,2 ct").
 
 ## Look-back card
 
@@ -58,10 +62,11 @@ How good were past forecasts on your install? The card draws the actual price
 against the forecast made *h* days before, from the
 [long-term statistics](entities.md#long-term-statistics):
 
-* the buttons on the left choose the horizon, **D+1 … D+6**, or **alle** (all
-  six lines, no fill); with one horizon, the gap to the actual price is filled
-  red;
-* the buttons on the right choose the range: **7 T, 30 T, 3 M, 6 M**;
+* the buttons on the left choose the horizon, **D+1 … D+6**, or **all**
+  (**alle**: all six lines, no fill); with one horizon, the gap to the actual
+  price is filled red;
+* the buttons on the right choose the range: **7 d, 30 d, 3 m, 6 m** (**7 T,
+  30 T, 3 M, 6 M**);
 * above the plot: the mean absolute error of the shown horizon over the shown
   range, and the error in the hours above the peak threshold.
 
@@ -74,9 +79,14 @@ page.
 
 The images in the README, on the website and on this page are rendered by
 [`tools/gen_card_screenshots.py`](https://github.com/cygnusb/ha-spot-forecast/blob/main/tools/gen_card_screenshots.py):
-it mounts the shipped YAML in the released Plotly Graph Card bundle, against
-states and statistics that the integration's own code computes from the
+it mounts the shipped YAML in the released Plotly Graph Card bundle, in English
+and in German, against the states and long-term statistics of a real
+installation: a snapshot taken on 2 November 2026 with
+[`tools/snapshot_live.py`](https://github.com/cygnusb/ha-spot-forecast/blob/main/tools/snapshot_live.py).
+That moment lies a month after the model's training cutoff, so the forecast in it
+is out of sample. Before publishing, the snapshot drops personal values: the
+surcharge is set to 0 and the sun times are those of the middle of Germany.
+The edge cases (clock changes, a stale forecast, a fresh install, the fees view)
+are rendered from scenarios that the integration's own code computes from the
 bundled model and research data
 ([`tools/card_scenarios.py`](https://github.com/cygnusb/ha-spot-forecast/blob/main/tools/card_scenarios.py)).
-The moment shown, 14 October 2026, lies after the model's training cutoff, so
-the forecast in it is out of sample, as it would be on a real install.

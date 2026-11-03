@@ -33,10 +33,10 @@ month on GitHub and only evaluated on your device, with numpy.
 
 <p align="center">
   <a href="https://raw.githubusercontent.com/cygnusb/ha-spot-forecast/main/assets/screenshots/forecast_light.png">
-    <img src="https://raw.githubusercontent.com/cygnusb/ha-spot-forecast/main/assets/screenshots/forecast_light.png" width="100%" alt="The forecast card on 14 October 2026: known prices for 13 to 15 October as a black step line, then six forecast days in blue with a hatched red peak-risk band above and a hatched green low-price band below. Above each day its maximum and, on the forecast days, a peak-risk warning such as “bis 37”.">
+    <img src="https://raw.githubusercontent.com/cygnusb/ha-spot-forecast/main/assets/screenshots/forecast_light.png" width="100%" alt="The forecast card on 2 November 2026: known prices for 1 to 3 November as a black step line, then six forecast days to 9 November in blue with a hatched red peak-risk band above and a hatched green low-price band below. Above each day its maximum and, on the forecast days, the peak risk such as “⚠ 69”.">
   </a>
   <br>
-  <em>The forecast card on 14 October 2026, two weeks after the bundled model's training cutoff: an out-of-sample forecast from the shipped model on real data. Card labels are German.</em>
+  <em>The forecast card on a live installation on 2 November 2026, a month after the model's training cutoff: an out-of-sample forecast on real data. The cards follow Home Assistant's language (English or German).</em>
 </p>
 
 ## How it works
@@ -173,7 +173,7 @@ several can run side by side). The options (*Configure* on the integration):
 
 | Option | Default | What it does |
 |---|---|---|
-| Grid fees and taxes | 0 | Gross per-kWh surcharge (EUR/kWh, VAT included) for a total-price sensor and the forecast card's "mit Abgaben" view; 0 = none. |
+| Grid fees and taxes | 0 | Gross per-kWh surcharge (EUR/kWh, VAT included) for a total-price sensor and the forecast card's "incl. fees" view; 0 = none. |
 | VAT on the market price | 19 % (DE-LU), 21 % (NL), 25 % (DK1, DK2, NO2) | VAT charged on the exchange price for the total price: price × (1 + VAT/100) + surcharge. Set your own rate, e.g. in Luxembourg. |
 | Peak price threshold | from the model, 21.2 ct/kWh | Wholesale price at or above which an hour counts as a peak, for the peak-risk sensor. |
 | Backfill window (days) | 60 | Past days of forecasts reconstructed on first start, so the look-back and the calibration have history (0–180, 0 = off). |
@@ -227,7 +227,7 @@ YAML:
   error over the shown range.
 
 <p align="center">
-  <a href="https://raw.githubusercontent.com/cygnusb/ha-spot-forecast/main/assets/screenshots/lookback_light.png"><img src="https://raw.githubusercontent.com/cygnusb/ha-spot-forecast/main/assets/screenshots/lookback_light.png" width="600" alt="The look-back card: the actual price from 15 September to 14 October 2026 as a dark line and the forecast made two days ahead in orange, the gap between them filled red; buttons for D+1 to D+6 or all, and 7 days to 6 months."></a>
+  <a href="https://raw.githubusercontent.com/cygnusb/ha-spot-forecast/main/assets/screenshots/lookback_light.png"><img src="https://raw.githubusercontent.com/cygnusb/ha-spot-forecast/main/assets/screenshots/lookback_light.png" width="600" alt="The look-back card: the actual price from 4 October to 2 November 2026 as a dark line and the forecast made two days ahead in orange, the gap between them filled red; buttons for D+1 to D+6 or all, and 7 days to 6 months."></a>
 </p>
 
 Both screenshots are real: [`tools/gen_card_screenshots.py`](tools/gen_card_screenshots.py)
