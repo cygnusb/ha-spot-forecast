@@ -12,6 +12,7 @@ yaml = pytest.importorskip("yaml")
 
 REPO = Path(__file__).resolve().parents[1]
 WORKFLOWS = REPO / ".github" / "workflows"
+REFRESH = REPO / "training" / "refresh_data.sh"
 
 
 def _load(name: str) -> dict:
@@ -51,8 +52,8 @@ def _commands(run: str, program: str) -> list[list[str]]:
 def test_train_workflow_triggers_and_permissions():
     wf = _load("train.yml")
     on = _on(wf)
-    assert on["schedule"] == [{"cron": "0 2 3 * *"}]
-    assert "workflow_dispatch" in on
+    # started by training/refresh_data.sh (or by hand), never on a schedule of its own
+    assert set(on) == {"workflow_dispatch"}
     assert wf["permissions"] == {"contents": "read"}
     assert wf["concurrency"]["group"] == "train"
     assert wf["env"]["FORCE_JAVASCRIPT_ACTIONS_TO_NODE24"] is True
@@ -102,7 +103,6 @@ def test_every_job_has_a_timeout(workflow):
 @pytest.mark.parametrize(
     ("workflow", "needs"),
     [
-        ("train.yml", ["train", "publish"]),
         (
             "validate.yml",
             [
@@ -134,17 +134,22 @@ def test_workflows_keep_their_schedule_enabled(workflow, needs):
 
 def test_train_workflow_keeps_data_releases_out_of_hacs():
     steps = _steps(_load("train.yml"), "publish")
-    for tag in ("models", "training-data"):
+    sources = {
+        "models": [s.get("run", "") for s in steps],
+        "training-data": [REFRESH.read_text()],
+    }
+    for tag, runs in sources.items():
         create = [
             c
-            for s in steps
-            for c in _commands(s.get("run", ""), "gh")
+            for run in runs
+            for c in _commands(run, "gh")
             if c[:4] == ["gh", "release", "create", tag]
         ]
         assert len(create) == 1 and {"--prerelease", "--latest=false"} <= set(create[0])
         # every run, also for a release created by hand
-        edit = _step(steps, f"gh release edit {tag} --prerelease --latest=false")
-        assert "if" not in edit
+        assert any(f"gh release edit {tag} --prerelease --latest=false" in run for run in runs)
+    edit = _step(steps, "gh release edit models --prerelease --latest=false")
+    assert "if" not in edit
 
 
 def test_train_workflow_publishes_only_on_pass():
@@ -209,15 +214,13 @@ def test_train_workflow_hands_its_files_to_publish():
     wf = _load("train.yml")
     train, publish = _steps(wf, "train"), _steps(wf, "publish")
     uploads = {s["with"]["name"]: s for s in train if "upload-artifact" in s.get("uses", "")}
+    assert set(uploads) == {"out"}
     assert uploads["out"]["with"]["path"] == "out/"
     assert uploads["out"]["if"] == "steps.gate.outputs.read == 'true'"
-    assert uploads["raw-data"]["with"]["path"] == "raw.tar.gz"
-    assert train.index(uploads["raw-data"]) < _index(train, "python -m training.ci_zones")
     downloads = {s["with"]["name"]: s for s in publish if "download-artifact" in s.get("uses", "")}
-    assert set(downloads) == {"out", "raw-data"}
-    assert downloads["out"]["if"] == "needs.train.outputs.read == 'true'"
-    # the archive goes up also when the training fails after it was made
-    assert wf["jobs"]["publish"]["if"] == "always() && needs.train.outputs.archived == 'true'"
+    assert set(downloads) == {"out"}
+    # the zones that passed go up also when another zone's training errored
+    assert wf["jobs"]["publish"]["if"] == "always() && needs.train.outputs.read == 'true'"
 
 
 def test_train_workflow_compares_with_up_to_three_published_models():
@@ -283,22 +286,39 @@ def test_train_workflow_opens_data_lag_issue():
     assert "--cutoff" in ci["run"]
 
 
-def test_train_workflow_archives_only_open_data():
+def test_train_workflow_trains_on_the_published_archive_only():
     wf = _load("train.yml")
     steps = _steps(wf, "train")
-    archive = _step(steps, "tar -czf raw.tar.gz")
-    (tar,) = _commands(archive["run"], "tar")
-    assert tar[:4] == ["tar", "-czf", "raw.tar.gz", "-C"]
-    assert tar[4] == "training/data"
+    restore = _step(steps, "releases/tags/training-data")
+    # no archive is an error now: the workflow never fetches from scratch
+    assert restore["run"].count("exit 1") == 3 and "exit 0" not in restore["run"]
+    assert "gh release download training-data -p raw.tar.gz" in restore["run"]
+    assert _index(steps, "releases/tags/training-data") < _index(
+        steps, "python -m training.ci_zones"
+    )
+    text = (WORKFLOWS / "train.yml").read_text()
+    assert "training.fetch" not in text and "training-data raw.tar.gz" not in text
+    assert "keepalive" not in wf["jobs"]
+
+
+def test_refresh_script_archives_only_open_data_then_starts_the_training():
+    script = REFRESH.read_text()
+    assert script.startswith("#!/usr/bin/env bash\n") and "set -euo pipefail" in script
+    assert REFRESH.stat().st_mode & 0o111
+    (tar,) = [c for c in _commands(script, "tar") if c[1] == "-czf"]
+    assert tar[:5] == ["tar", "-czf", "$BASE/raw.tar.gz", "-C", "$DATA"]
     assert [p.rstrip("/") for p in tar[5:]] == [
         "raw/prices",
         "raw/weather",
         "raw/installed_power.json",
     ]
-    fetch = _step(steps, "python -m training.fetch --raw training/data/raw")
-    assert steps.index(fetch) < steps.index(archive)
-    upload = _step(_steps(wf, "publish"), "gh release upload training-data")
-    assert "gh release upload training-data raw.tar.gz --clobber" in upload["run"]
+    fetch = script.index("-m training.fetch --raw")
+    upload = script.index('gh release upload training-data "$BASE/raw.tar.gz" --clobber')
+    start = script.index("gh workflow run train.yml --ref main")
+    assert fetch < script.index("tar -czf") < upload < start
+    # a failure opens one issue and stops before the upload
+    assert "trap " in script and "gh issue create" in script
+    assert "--accept-incomparable" not in script and "accept_incomparable" not in script
 
 
 def test_validate_workflow_has_matrix_floor_and_latest():

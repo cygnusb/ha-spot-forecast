@@ -1,7 +1,7 @@
 name: Train
 
-# Monthly model training. Refreshes the raw-data archive, trains every zone (training/zones.py)
-# with the cutoff at the first of the month and publishes a zone's model to the rolling `models`
+# Monthly model training. Trains every zone (training/zones.py) on the raw-data archive of the
+# training-data release with the cutoff at the first of the month and publishes a zone's model to the rolling `models`
 # release only if it passes the quality gate (training/gate.py). A failed gate or input data that
 # is not published yet opens an issue and publishes nothing for that zone; any other error fails
 # the run, which notifies the owner. One zone's failure never holds back another: the zones run
@@ -13,11 +13,12 @@ name: Train
 # hash-locked training dependencies and runs the training with a read-only token; `publish`
 # installs nothing and checks nothing out, it only takes train's files (workflow artifacts)
 # to the releases and the issues.
+#
+# No schedule and no fetch: GitHub-hosted runners time out at Open-Meteo (2026-11-03), so
+# training/refresh_data.sh fetches on a host of ours from cron, uploads the archive and starts
+# this workflow. A run by hand trains on the archive as it is.
 
 on:
-  schedule:
-    # The 3rd: the month before is complete in every source by then.
-    - cron: "0 2 3 * *"
   workflow_dispatch:
     inputs:
       accept_incomparable:
@@ -42,12 +43,11 @@ jobs:
   train:
     runs-on: ubuntu-latest
     # five zones, estimated 2.5 hours of training (7 monthly refits and the final fit, 3
-    # quantiles each, 600 iterations) plus the fetch; the most a GitHub-hosted job may run
+    # quantiles each, 600 iterations); the most a GitHub-hosted job may run
     timeout-minutes: 360
     permissions:
       contents: read
     outputs:
-      archived: ${{ steps.archive.outputs.archived }}
       read: ${{ steps.gate.outputs.read }}
       # space-separated: the versions to publish, the versions whose gate failed, the zones
       # waiting for data
@@ -69,8 +69,8 @@ jobs:
       - run: pip install --require-hashes -r training/requirements.lock
 
       - name: Restore the raw-data archive
-        # Only a missing release (HTTP 404) or a release without the archive means a first
-        # run, which fetches everything from scratch. Anything else fails the job.
+        # The only input: training/refresh_data.sh uploads it. Without it there is nothing to
+        # train on, and this job fetches nothing itself.
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -80,36 +80,18 @@ jobs:
             "$GITHUB_API_URL/repos/$GITHUB_REPOSITORY/releases/tags/training-data")
           case "$code" in
             200) ;;
-            404) echo "::notice::No training-data release yet: fetching from scratch"; exit 0 ;;
+            404) echo "::error::No training-data release: run training/refresh_data.sh first"; exit 1 ;;
             *) echo "::error::GitHub answered HTTP $code for the training-data release"; exit 1 ;;
           esac
           if ! jq -e '.assets | any(.name == "raw.tar.gz")' "$RUNNER_TEMP/training-data.json" >/dev/null; then
-            echo "::notice::The training-data release has no raw.tar.gz: fetching from scratch"
-            exit 0
+            echo "::error::The training-data release has no raw.tar.gz: run training/refresh_data.sh first"
+            exit 1
           fi
           gh release download training-data -p raw.tar.gz -D "$RUNNER_TEMP"
           tar -xzf "$RUNNER_TEMP/raw.tar.gz" -C training/data
 
-      - name: Fetch the new raw data
-        # Incremental, up to yesterday, for every zone (the weather points are shared).
-        run: python -m training.fetch --raw training/data/raw
-
-      - name: Archive the raw data
-        id: archive
-        # A whitelist: the public archive holds only the openly licensed (CC BY) inputs from
-        # Energy-Charts and Open-Meteo, never research-only files that may not be shared.
-        # The publish job uploads it, also when the training below fails.
-        run: |
-          tar -czf raw.tar.gz -C training/data raw/prices/ raw/weather/ raw/installed_power.json
-          echo "archived=true" >> "$GITHUB_OUTPUT"
-      - uses: actions/upload-artifact@v4
-        with:
-          name: raw-data
-          path: raw.tar.gz
-          retention-days: 1
-
       - name: Download the published manifest and models
-        # Same rule as the archive: only a missing release or manifest means a first run. A
+        # Only a missing release (HTTP 404) or manifest means a first run. A
         # manifest that cannot be read must never be replaced by one without the other zones.
         # Per zone, into previous/<zone>/: besides the manifest's model (checked against its
         # SHA-256), up to two older ones that are not revoked: the gate compares with the best
@@ -163,7 +145,7 @@ jobs:
         # fails the job. A data lag (an input not published yet) is reported as an issue by the
         # publish job.
         env:
-          # Never on the schedule: only a run started by hand can set the override.
+          # Only by hand: training/refresh_data.sh starts the workflow without the input.
           ACCEPT_INCOMPARABLE: ${{ github.event_name == 'workflow_dispatch' && inputs.accept_incomparable == true }}
         run: |
           mkdir -p out
@@ -230,7 +212,7 @@ jobs:
     needs: train
     # always(): the train job fails in its last step when a zone errored, and its outputs,
     # set by the steps before, still hold the zones that passed.
-    if: always() && needs.train.outputs.archived == 'true'
+    if: always() && needs.train.outputs.read == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 30
     permissions:
@@ -242,21 +224,8 @@ jobs:
     steps:
       - uses: actions/download-artifact@v4
         with:
-          name: raw-data
-      - uses: actions/download-artifact@v4
-        if: needs.train.outputs.read == 'true'
-        with:
           name: out
           path: out
-
-      - name: Upload the raw-data archive
-        run: |
-          if ! gh release view training-data >/dev/null 2>&1; then
-            gh release create training-data --title "Training data" --latest=false --prerelease --notes "Raw inputs of the monthly model training, refreshed by the Train workflow: day-ahead prices and installed capacity from Energy-Charts (price data: Bundesnetzagentur | SMARD.de, CC BY 4.0) and weather forecasts from Open-Meteo (CC BY 4.0)."
-          fi
-          # Also a release created by hand (the bootstrap): HACS must never offer it.
-          gh release edit training-data --prerelease --latest=false
-          gh release upload training-data raw.tar.gz --clobber
 
       - name: Keep the models release out of HACS
         # Also a release created by hand (the bootstrap): HACS must never offer it.
@@ -324,7 +293,7 @@ jobs:
           {
             echo "The monthly training of $LAGGED stopped before training: an input is not"
             echo "published yet. Nothing was published for it and its current model stays"
-            echo "active. Rerun the Train workflow once the data is there."
+            echo "active. Rerun training/refresh_data.sh on the data host once the data is there."
             echo
             echo '```'
             tail -n 100 out/ci-stderr.txt
@@ -340,19 +309,3 @@ jobs:
             exit 0
           fi
           gh issue create --title "$title" --body-file "$RUNNER_TEMP/data-lag.md"
-
-  keepalive:
-    # GitHub switches scheduled workflows off after 60 days without repository activity.
-    # Re-enabling this workflow at the end of every run keeps the monthly schedule alive; the
-    # daily model-age check in validate.yml turns red if it stops anyway.
-    needs: [train, publish]
-    if: always()
-    runs-on: ubuntu-latest
-    timeout-minutes: 30
-    permissions:
-      actions: write
-    steps:
-      - name: Keep the schedule enabled
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: gh api -X PUT "repos/$GITHUB_REPOSITORY/actions/workflows/train.yml/enable"

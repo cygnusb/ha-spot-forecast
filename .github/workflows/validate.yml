@@ -208,8 +208,8 @@ jobs:
 
   model-age:
     # The weekly liveness check of the model channel: red once a published model is more than
-    # 45 days old, whatever stopped the monthly training (its schedule switched off, data-lag
-    # or gate-failure issues left unanswered). Quiet until the `models` release exists.
+    # 45 days old, whatever stopped the monthly training (the refresh on the data host not run,
+    # data-lag, refresh or gate-failure issues left unanswered). Quiet until the `models` release exists.
     # Only on the weekly schedule and by hand: a push or pull request must not turn red over it.
     if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
