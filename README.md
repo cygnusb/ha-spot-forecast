@@ -6,7 +6,7 @@
 
 [![GitHub Release][release-badge]][release-url]
 [![GitHub Downloads (spot_forecast.zip, all releases)][downloads-badge]][release-url]
-[![HACS Default][hacs-badge]][hacs-url]
+[![Marketplace (HACS default)][hacs-badge]][hacs-url]
 [![HA Version][ha-badge]][ha-url]
 [![License][license-badge]][license-url]
 [![GitHub commit activity][commits-badge]][commits-url]
@@ -148,16 +148,19 @@ forecasts of those days, and the rain forecast for the six days ahead
 MAE of 1.69 ct is a skill of 25 % ([accuracy](docs/accuracy.md#southern-norway-no2)). Prices
 and forecasts are in EUR, as for every zone.
 
-## Installation (HACS)
+## Installation (Marketplace)
 
-Spot Forecast is in the HACS default store:
+Spot Forecast is in the catalog of the Home Assistant Marketplace (Settings → Marketplace).
+Before Home Assistant 2026.11 the same catalog is in HACS, and the button below opens HACS.
 
-1. In HACS, search for **Spot Forecast**, download it and restart Home Assistant. Or open
-   it in HACS directly:
+1. In the Marketplace, search for **Spot Forecast** and install it. Or open it
+   directly:
 
-   [![Open your Home Assistant instance and open this repository in HACS.][my-hacs-badge]][my-hacs-url]
+   [![Open your Home Assistant instance and open this repository in the Marketplace.][my-hacs-badge]][my-hacs-url]
 
-2. Add the integration:
+   Restart Home Assistant if the Marketplace asks for it (with HACS, always restart).
+
+2. Add the integration, if its setup did not open by itself:
 
    [![Open your Home Assistant instance and start setting up Spot Forecast.][my-flow-badge]][my-flow-url]
 
@@ -215,7 +218,7 @@ before), plus `_peak_risk_h1…6` and `_low_h1…6`. All entities and attributes
 ## Dashboard cards
 
 Two cards for the [Plotly Graph Card](https://github.com/dbuezas/lovelace-plotly-graph-card),
-written for v4.0.2. Install it from HACS, add a *Manual* card and paste the
+written for v4.0.2. Install it from the Marketplace, add a *Manual* card and paste the
 YAML:
 
 * [`examples/plotly_forecast.yaml`](examples/plotly_forecast.yaml): known
@@ -267,9 +270,9 @@ MIT
 [release-badge]: https://img.shields.io/github/v/release/cygnusb/ha-spot-forecast?include_prereleases
 [release-url]: https://github.com/cygnusb/ha-spot-forecast/releases
 [downloads-badge]: https://img.shields.io/github/downloads/cygnusb/ha-spot-forecast/spot_forecast.zip
-[hacs-badge]: https://img.shields.io/badge/HACS-Default-41BDF5.svg
-[hacs-url]: https://hacs.xyz/
-[my-hacs-badge]: https://my.home-assistant.io/badges/hacs_repository.svg
+[hacs-badge]: https://img.shields.io/badge/Marketplace-HACS%20default-41BDF5.svg
+[hacs-url]: https://www.home-assistant.io/integrations/marketplace/
+[my-hacs-badge]: https://my.home-assistant.io/badges/marketplace_repository.svg
 [my-hacs-url]: https://my.home-assistant.io/redirect/hacs_repository/?owner=cygnusb&repository=ha-spot-forecast&category=integration
 [my-flow-badge]: https://my.home-assistant.io/badges/config_flow_start.svg
 [my-flow-url]: https://my.home-assistant.io/redirect/config_flow_start/?domain=spot_forecast

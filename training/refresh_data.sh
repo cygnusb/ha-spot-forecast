@@ -113,7 +113,7 @@ if ! gh release view training-data > /dev/null 2>&1; then
   gh release create training-data --title "Training data" --latest=false --prerelease \
     --notes "Raw inputs of the monthly model training, refreshed every month: day-ahead prices and installed capacity from Energy-Charts (price data: Bundesnetzagentur | SMARD.de, CC BY 4.0) and weather forecasts from Open-Meteo (CC BY 4.0)."
 fi
-# Also a release created by hand: HACS must never offer it.
+# Also a release created by hand: the Marketplace (and HACS) must never offer it.
 gh release edit training-data --prerelease --latest=false > /dev/null
 gh release upload training-data "$BASE/raw.tar.gz" --clobber
 echo "$(date -Is) uploaded raw.tar.gz ($(du -h "$BASE/raw.tar.gz" | cut -f1))"

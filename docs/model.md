@@ -223,8 +223,8 @@ and they reach your install **separately from integration releases**:
   manifest. It downloads a newer model only if the feature schema matches its own, the
   SHA-256 matches, and the file loads and predicts on a built-in sample. The
   file is data only; the integration never runs downloaded code.
-* Downloaded models live in `<config>/.storage/spot_forecast/`, so a HACS
-  update does not remove them. The integration uses the newest model by
+* Downloaded models live in `<config>/.storage/spot_forecast/`, so an
+  integration update does not remove them. The integration uses the newest model by
   training data among the bundled one and the valid downloaded ones; a
   download counts only if it is newer than the bundled model.
   `sensor.spot_forecast_de_lu_model_version` shows which one runs (`source`:

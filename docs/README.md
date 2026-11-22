@@ -8,7 +8,7 @@ Energy-Charts and Open-Meteo, without an account or API key.
 
 | Page | What it covers |
 |---|---|
-| [Configuration](configuration.md) | Installing through HACS, the setup step, the options and what happens on first start. |
+| [Configuration](configuration.md) | Installing through the Marketplace, the setup step, the options and what happens on first start. |
 | [Entities](entities.md) | Every sensor, its attributes, the `prices` format and the long-term statistics. |
 | [Dashboard cards](cards.md) | The forecast and look-back cards for the Plotly Graph Card. |
 | [How the model works](model.md) | Data, features, the three tree models, calibration, the schedule and the monthly model updates. |

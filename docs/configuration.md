@@ -2,12 +2,16 @@
 
 ## Installation
 
-Spot Forecast is in the HACS default store.
+Spot Forecast is in the catalog of the Home Assistant Marketplace (Settings →
+Marketplace). Before Home Assistant 2026.11 the same catalog is in HACS; the
+steps are the same, and the link below opens HACS there.
 
-1. In HACS, search for **Spot Forecast**, or
-   [open it in HACS directly](https://my.home-assistant.io/redirect/hacs_repository/?owner=cygnusb&repository=ha-spot-forecast&category=integration).
-2. Download **Spot Forecast** and restart Home Assistant.
-3. Settings → Devices & services → *Add integration* → **Spot Forecast**, or
+1. In the Marketplace, search for **Spot Forecast**, or
+   [open it directly](https://my.home-assistant.io/redirect/hacs_repository/?owner=cygnusb&repository=ha-spot-forecast&category=integration).
+2. Install **Spot Forecast**. Restart Home Assistant if the Marketplace asks for
+   it (with HACS, always restart).
+3. If the setup did not open by itself: Settings → Devices & services →
+   *Add integration* → **Spot Forecast**, or
    [start the setup directly](https://my.home-assistant.io/redirect/config_flow_start/?domain=spot_forecast).
 
 Requirements: Home Assistant 2024.11 or newer, and the `recorder`

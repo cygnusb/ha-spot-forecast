@@ -64,7 +64,7 @@ def _changelog(releases):
         "# Changelog\n\n"
         "Every release of Spot Forecast, newest first. The same notes are on "
         f"[GitHub]({RELEASES_URL}), and Home Assistant shows them in the update "
-        "dialog when HACS offers a new version. New forecast models are published "
+        "dialog when a new version is available. New forecast models are published "
         "separately every month and reach an install without a release; see "
         "[model updates](model.md#model-updates).\n\n"
     )

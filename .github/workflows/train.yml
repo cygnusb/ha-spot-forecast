@@ -227,8 +227,8 @@ jobs:
           name: out
           path: out
 
-      - name: Keep the models release out of HACS
-        # Also a release created by hand (the bootstrap): HACS must never offer it.
+      - name: Keep the models release out of the Marketplace and HACS
+        # Also a release created by hand (the bootstrap): the Marketplace (and HACS) must never offer it.
         run: |
           if gh release view models >/dev/null 2>&1; then
             gh release edit models --prerelease --latest=false

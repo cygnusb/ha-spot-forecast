@@ -4,8 +4,7 @@ Spot Forecast ships no Lovelace card of its own. It ships two dashboards for
 the [Plotly Graph Card](https://github.com/dbuezas/lovelace-plotly-graph-card)
 (`custom:plotly-graph`), written for and tested on **v4.0.2**.
 
-1. Install *Plotly Graph Card* from HACS (category *Dashboard*) and reload
-   the browser.
+1. Install *Plotly Graph Card* from the Marketplace and reload the browser.
 2. On a dashboard: *Add card* → *Manual*, and paste one of the YAML files.
 
 Both cards read only the integration's fixed entity ids, so they work

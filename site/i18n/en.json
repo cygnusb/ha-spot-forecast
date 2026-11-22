@@ -18,7 +18,7 @@
   "hero": {
     "title": "Electricity prices, six days ahead.",
     "lede": "The day-ahead auction only covers today and tomorrow. Spot Forecast adds the six days after that, hour by hour, for the DE-LU, NL, DK1, DK2 or NO2 zone, with a peak-risk band that says how high a price could go. It runs inside Home Assistant on open data.",
-    "cta_install": "Install from HACS",
+    "cta_install": "Install from the Marketplace",
     "cta_accuracy": "See how accurate it is",
     "facts": {
       "free": "Free, MIT licence",
@@ -165,16 +165,16 @@
   },
   "install": {
     "title": "Install",
-    "lede": "Spot Forecast is in the HACS default store. It works right after setup with the bundled model and needs no account.",
-    "open_hacs": "Open in HACS",
+    "lede": "Spot Forecast is in the Home Assistant Marketplace (in HACS before Home Assistant 2026.11). It works right after setup with the bundled model and needs no account.",
+    "open_marketplace": "Open in the Marketplace",
     "add_integration": "Add the integration",
-    "repo": "Find Spot Forecast in HACS",
-    "repo_detail": "Use the button, or search for Spot Forecast in HACS.",
-    "download": "Download Spot Forecast and restart Home Assistant.",
+    "repo": "Find Spot Forecast in the Marketplace",
+    "repo_detail": "Use the button, or search for Spot Forecast in the Marketplace.",
+    "download": "Install Spot Forecast, and restart Home Assistant if asked to.",
     "setup": "Settings → Devices &amp; services → Add integration → Spot Forecast.",
     "setup_detail": "Choose the bidding zone. The first forecast is made right away, and the look-back starts with 60 days of backfill.",
     "cards": "Add the cards",
-    "cards_detail": "Install the Plotly Graph Card from HACS and paste the YAML from <a href=\"https://github.com/cygnusb/ha-spot-forecast/tree/main/examples\">examples/</a>."
+    "cards_detail": "Install the Plotly Graph Card from the Marketplace and paste the YAML from <a href=\"https://github.com/cygnusb/ha-spot-forecast/tree/main/examples\">examples/</a>."
   },
   "sources": {
     "title": "Open data, credited",
