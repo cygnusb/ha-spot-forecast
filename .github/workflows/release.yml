@@ -1,6 +1,6 @@
 name: Release
 
-# Attaches the integration as a ZIP to every published release. HACS installs
+# Attaches the integration as a ZIP to every published release. The Marketplace (HACS) installs
 # this asset (zip_release in hacs.json) and its download counter counts it.
 # The ZIP bundles the newest published model that this commit can load, so a
 # release never ships an older model than the one users would download anyway.
@@ -35,7 +35,7 @@ jobs:
           persist-credentials: false
 
       - name: Check the tag against the manifest version
-        # HACS shows the tag, Home Assistant the manifest's version: they must agree.
+        # The Marketplace shows the tag, Home Assistant the manifest's version: they must agree.
         env:
           TAG: ${{ github.event.release.tag_name }}
         run: |
